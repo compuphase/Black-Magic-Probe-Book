@@ -1,0 +1,160 @@
+# -------------------------------------------------------------
+#
+#       Makefile for BlackMagic utilities
+#
+#       For release version, use NDEBUG=
+#       Do "make depend" to update dependencies in this makefile
+#
+# -------------------------------------------------------------
+
+include makefile.cfg
+
+
+# -------------------------------------------------------------
+#               Autosearch paths macro's
+# -------------------------------------------------------------
+
+OBJDIR    := ./obj
+.path %.o $(OBJDIR)
+.path %.map $(OBJDIR)
+
+#.path % ../bin
+
+
+# -------------------------------------------------------------
+#               Compilers and their options
+# -------------------------------------------------------------
+
+####### C compiler
+CL        = gcc
+CC        = gcc -c
+CFLAGS    = -Wall
+INCLUDE   = -I../glfw-3.3/include
+
+####### Linker
+LNK       = gcc
+LFLAGS    = -L../glfw-3.3/lib
+
+
+ifdef NDEBUG
+    # retail version
+    CFLAGS += -DNDEBUG
+    LFLAGS += -strip
+else
+    # development version
+    CFLAGS += -g
+    LFLAGS += -g
+endif
+
+# -------------------------------------------------------------
+#               Inference rules
+# -------------------------------------------------------------
+
+%.o : %.c
+	$(CC) $(INCLUDE) $(CFLAGS) -o$(.TARGET) $(.SOURCE)
+
+
+# -------------------------------------------------------------
+#               Project
+# -------------------------------------------------------------
+
+OBJLIST_BMDEBUG = bmdebug.o bmscan.o bmp-script.o elf-postlink.o \
+                  guidriver.o minIni.o rs232.o \
+                  specialfolder.o \
+                  decodectf.o parsetsdl.o swotrace.o \
+                  nuklear.o nuklear_glfw_gl2.o noc_file_dialog.o \
+                  findfont.o lodepng.o
+
+OBJLIST_BMFLASH = bmflash.o bmscan.o bmp-script.o bmp-support.o crc32.o \
+                  elf-postlink.o gdb-rsp.o guidriver.o minIni.o rs232.o \
+		  specialfolder.o xmltractor.o \
+                  nuklear.o nuklear_glfw_gl2.o noc_file_dialog.o \
+                  findfont.o lodepng.o
+
+OBJLIST_BMTRACE = bmtrace.o bmscan.o bmp-script.o bmp-support.o crc32.o \
+                  elf-postlink.o gdb-rsp.o guidriver.o minIni.o rs232.o \
+                  specialfolder.o xmltractor.o \
+                  decodectf.o parsetsdl.o swotrace.o \
+                  nuklear.o nuklear_glfw_gl2.o noc_file_dialog.o \
+                  findfont.o lodepng.o
+
+project: bmdebug bmflash bmtrace bmscan elf-postlink tracegen
+
+depend :
+	makedepend -b -fmakefile.dep $(OBJLIST_BMDEBUG:.o=.c) $(OBJLIST_BMFLASH:.o=.c) $(OBJLIST_BMTRACE:.o=.c)
+
+
+##### C files #####
+
+bmdebug.o : bmdebug.c
+
+bmflash.o : bmflash.c
+
+bmscan.o : bmscan.c
+
+bmtrace.o : bmtrace.c
+
+bmp-script.o : bmp-script.c
+
+bmp-support.o : bmp-support.c
+
+crc32.o : crc32.c
+
+elf-postlink.o : elf-postlink.c
+
+findfont.o : findfont.c
+
+gdb-rsp.o : gdb-rsp.c
+
+guidriver.o : guidriver.c
+
+lodepng.o : lodepng.c
+
+minIni.o : minIni.c
+
+rs232.o : rs232.c
+
+specialfolder.o : specialfolder.c
+
+swotrace.o : swotrace.c
+
+xmltractor.o : xmltractor.c
+
+decodectf.o : decodectf.c
+
+parsetsdl.o : parsetsdl.c
+
+noc_file_dialog.o : CFLAGS += -DNOC_FILE_DIALOG_GTK
+noc_file_dialog.o : INCLUDE += `pkg-config --cflags gtk+-3.0`
+noc_file_dialog.o : noc_file_dialog.c
+
+nuklear.o : nuklear.c
+
+nuklear_glfw_gl2.o : nuklear_glfw_gl2.c
+
+
+##### Executables #####
+
+bmdebug : $(OBJLIST_BMDEBUG)
+	$(LNK) $(LFLAGS) -o$(.TARGET) $^ -lfontconfig -lglfw3 -lGL -lm -lbsd -ldl -lpthread -lX11 -lxcb -lXau -lXdmcp `pkg-config --libs gtk+-3.0` -lusb-1.0
+
+bmflash : $(OBJLIST_BMFLASH)
+	$(LNK) $(LFLAGS) -o$(.TARGET) $^ -lfontconfig -lglfw3 -lGL -lm -lbsd -ldl -lpthread -lX11 -lxcb -lXau -lXdmcp `pkg-config --libs gtk+-3.0`
+
+bmtrace : $(OBJLIST_BMTRACE)
+	$(LNK) $(LFLAGS) -o$(.TARGET) $^ -lfontconfig -lglfw3 -lGL -lm -lbsd -ldl -lpthread -lX11 -lxcb -lXau -lXdmcp `pkg-config --libs gtk+-3.0` -lusb-1.0
+
+bmscan : bmscan.c
+	$(CL) $(INCLUDE) $(CFLAGS) -DSTANDALONE -o$(.TARGET) $(.SOURCES)
+
+elf-postlink : elf-postlink.c
+	$(CL) $(INCLUDE) $(CFLAGS) -DSTANDALONE -o$(.TARGET) $(.SOURCES)
+
+tracegen : tracegen.c parsetsdl.c
+	$(CL) $(INCLUDE) $(CFLAGS) -o$(.TARGET) $(.SOURCES) -lbsd
+
+
+# put generated dependencies at the end, otherwise it does not blend well with
+# inference rules, if an item also has an explicit rule.
+-include makefile.dep
+

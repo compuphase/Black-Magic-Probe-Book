@@ -1,0 +1,73 @@
+/*
+ * Trace viewer utility for visualizing output on the TRACESWO pin via the
+ * Black Magic Probe. The name stands for "Black Magic Serial Wire Viewer".
+ * This utility is built with Nuklear for a cross-platform GUI.
+ *
+ * Copyright 2019 CompuPhase
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+#include <windows.h>
+#include <winver.h>
+
+AppIcon ICON "res/icon_trace.ico"
+
+/*  Version information
+ *
+ *  All strings MUST have an explicit \0. See the Windows SDK documentation
+ *  for details on version information and the VERSIONINFO structure.
+ */
+#define VERSION              1
+#define REVISION             0
+#define BUILD                0
+#define VERSIONSTR           "1.0.0\0"
+#define VERSIONNAME          "bmtrace.exe\0"
+#define VERSIONDESCRIPTION   "Serial Wire Trace Viewer\0"
+#define VERSIONCOMPANYNAME   "CompuPhase\0"
+#define VERSIONPRODUCTNAME   "bmtrace\0"
+#define VERSIONCOPYRIGHT     "Copyright \251 ITB CompuPhase 2019\0"
+
+VS_VERSION_INFO VERSIONINFO
+FILEVERSION    VERSION, REVISION, BUILD, 0
+PRODUCTVERSION VERSION, REVISION, BUILD, 0
+FILEFLAGSMASK  0x0000003FL
+FILEFLAGS      0
+#if defined(WIN32)
+  FILEOS       VOS__WINDOWS32
+#else
+  FILEOS       VOS__WINDOWS16
+#endif
+FILETYPE       VFT_APP
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904E4"
+        BEGIN
+            VALUE "CompanyName",      VERSIONCOMPANYNAME
+            VALUE "FileDescription",  VERSIONDESCRIPTION
+            VALUE "FileVersion",      VERSIONSTR
+            VALUE "InternalName",     VERSIONNAME
+            VALUE "LegalCopyright",   VERSIONCOPYRIGHT
+            VALUE "OriginalFilename", VERSIONNAME
+            VALUE "ProductName",      VERSIONPRODUCTNAME
+            VALUE "ProductVersion",   VERSIONSTR
+        END
+    END
+
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x409, 1252
+    END
+END
+

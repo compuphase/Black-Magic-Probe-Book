@@ -1,0 +1,10 @@
+# Allow access to the Black Magic Probe for any user.
+
+# Standard mode
+ACTION=="add", SUBSYSTEM=="usb_device", SYSFS{idVendor}=="1d50", SYSFS{idProduct}=="6018", MODE="0666"
+ACTION=="add", SUBSYSTEM=="usb", ATTR{idVendor}=="1d50", ATTR{idProduct}=="6018", MODE="0666"
+
+# DFU mode
+ACTION=="add", SUBSYSTEM=="usb_device", SYSFS{idVendor}=="1d50", SYSFS{idProduct}=="6017", MODE="0666"
+ACTION=="add", SUBSYSTEM=="usb", ATTR{idVendor}=="1d50", ATTR{idProduct}=="6017", MODE="0666"
+
