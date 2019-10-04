@@ -1358,6 +1358,8 @@ typedef struct tagTASK {
   int pStdErr[2];
 } TASK;
 
+int task_isrunning(TASK *task);
+
 int task_launch(const char *program, const char *options, TASK *task)
 {
   assert(task != NULL);
@@ -1383,7 +1385,7 @@ int task_launch(const char *program, const char *options, TASK *task)
     close(task->pStdErr[1]);
 
     execvp(program, (char**)argv);
-    return 0; /* if execv() returns, there was an error */
+    exit(0);  /* if execv() returns, there was an error */
   } else {
     /* parent: close the pipe handles not required (by the parent) */
     assert(task->pid != 0);
@@ -1392,7 +1394,8 @@ int task_launch(const char *program, const char *options, TASK *task)
     close(task->pStdErr[1]);
   }
 
-  return 1;
+  usleep(200*1000); /* give GDB a moment to start */
+  return task_isrunning(task);
 }
 
 int task_isrunning(TASK *task)
@@ -2386,7 +2389,7 @@ int main(int argc, char *argv[])
           #if defined _WIN32
             const char *filter = "Executables\0*.exe\0All files\0*.*\0";
           #else
-            const char *filter = "Executables\0*.\0All files\0*.*\0";
+            const char *filter = "Executables\0*\0All files\0*\0";
           #endif
           const char *s = noc_file_dialog_open(NOC_FILE_DIALOG_OPEN, filter,
                                                NULL, txtGDBpath, "Select GDB Executable",

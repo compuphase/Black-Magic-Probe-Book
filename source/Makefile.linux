@@ -11,14 +11,13 @@ include makefile.cfg
 
 
 # -------------------------------------------------------------
-#               Autosearch paths macro's
+#               Autosearch paths macro's (only for GNU Make+)
 # -------------------------------------------------------------
 
-OBJDIR    := ./obj
-.path %.o $(OBJDIR)
-.path %.map $(OBJDIR)
-
-#.path % ../bin
+#OBJDIR    := ./obj
+#.path %.o $(OBJDIR)
+#.path %.map $(OBJDIR)
+#.path %. ../bin
 
 
 # -------------------------------------------------------------
@@ -39,7 +38,7 @@ LFLAGS    = -L../glfw-3.3/lib
 ifdef NDEBUG
     # retail version
     CFLAGS += -DNDEBUG
-    LFLAGS += -strip
+    LFLAGS += -s
 else
     # development version
     CFLAGS += -g
@@ -51,7 +50,7 @@ endif
 # -------------------------------------------------------------
 
 %.o : %.c
-	$(CC) $(INCLUDE) $(CFLAGS) -o$(.TARGET) $(.SOURCE)
+	$(CC) $(INCLUDE) $(CFLAGS) -o$@ $<
 
 
 # -------------------------------------------------------------
@@ -136,22 +135,22 @@ nuklear_glfw_gl2.o : nuklear_glfw_gl2.c
 ##### Executables #####
 
 bmdebug : $(OBJLIST_BMDEBUG)
-	$(LNK) $(LFLAGS) -o$(.TARGET) $^ -lfontconfig -lglfw3 -lGL -lm -lbsd -ldl -lpthread -lX11 -lxcb -lXau -lXdmcp `pkg-config --libs gtk+-3.0` -lusb-1.0
+	$(LNK) $(LFLAGS) -o$@ $^ -lfontconfig -lglfw3 -lGL -lm -lbsd -ldl -lpthread -lX11 -lxcb -lXau -lXdmcp `pkg-config --libs gtk+-3.0` -lusb-1.0
 
 bmflash : $(OBJLIST_BMFLASH)
-	$(LNK) $(LFLAGS) -o$(.TARGET) $^ -lfontconfig -lglfw3 -lGL -lm -lbsd -ldl -lpthread -lX11 -lxcb -lXau -lXdmcp `pkg-config --libs gtk+-3.0`
+	$(LNK) $(LFLAGS) -o$@ $^ -lfontconfig -lglfw3 -lGL -lm -lbsd -ldl -lpthread -lX11 -lxcb -lXau -lXdmcp `pkg-config --libs gtk+-3.0`
 
 bmtrace : $(OBJLIST_BMTRACE)
-	$(LNK) $(LFLAGS) -o$(.TARGET) $^ -lfontconfig -lglfw3 -lGL -lm -lbsd -ldl -lpthread -lX11 -lxcb -lXau -lXdmcp `pkg-config --libs gtk+-3.0` -lusb-1.0
+	$(LNK) $(LFLAGS) -o$@ $^ -lfontconfig -lglfw3 -lGL -lm -lbsd -ldl -lpthread -lX11 -lxcb -lXau -lXdmcp `pkg-config --libs gtk+-3.0` -lusb-1.0
 
 bmscan : bmscan.c
-	$(CL) $(INCLUDE) $(CFLAGS) -DSTANDALONE -o$(.TARGET) $(.SOURCES)
+	$(CL) $(INCLUDE) $(CFLAGS) -DSTANDALONE -o$@ $^
 
 elf-postlink : elf-postlink.c
-	$(CL) $(INCLUDE) $(CFLAGS) -DSTANDALONE -o$(.TARGET) $(.SOURCES)
+	$(CL) $(INCLUDE) $(CFLAGS) -DSTANDALONE -o$@ $^
 
 tracegen : tracegen.c parsetsdl.c
-	$(CL) $(INCLUDE) $(CFLAGS) -o$(.TARGET) $(.SOURCES) -lbsd
+	$(CL) $(INCLUDE) $(CFLAGS) -o$@ $^ -lbsd
 
 
 # put generated dependencies at the end, otherwise it does not blend well with
