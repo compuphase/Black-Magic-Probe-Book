@@ -27,23 +27,27 @@
 #include <string.h>
 
 #if defined WIN32 || defined _WIN32
-#  define STRICT
-#  define WIN32_LEAN_AND_MEAN
-#  include <windows.h>
-#  include <tchar.h>
+  #define STRICT
+  #define WIN32_LEAN_AND_MEAN
+  #include <windows.h>
+  #include <tchar.h>
+  #if defined __MINGW32__ || defined __MINGW64__
+    #include <winreg.h>
+    #define LSTATUS LONG
+  #endif
 #else
-#  include <dirent.h>
-#  include <unistd.h>
+  #include <dirent.h>
+  #include <unistd.h>
 #endif
 
 #include "bmscan.h"
 
 
 #if !defined sizearray
-#  define sizearray(e)    (sizeof(e) / sizeof((e)[0]))
+  #define sizearray(e)    (sizeof(e) / sizeof((e)[0]))
 #endif
 #if !defined MAX_PATH
-#  define MAX_PATH    300
+  #define MAX_PATH    300
 #endif
 
 

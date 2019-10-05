@@ -24,6 +24,10 @@
   #include <direct.h>
   #include <io.h>
   #include <malloc.h>
+  #if defined __MINGW32__ || defined __MINGW64__
+    #include <sys/stat.h>
+    #include "strlcpy.h"
+  #endif
 #elif defined __linux__
   #include <alloca.h>
   #include <poll.h>

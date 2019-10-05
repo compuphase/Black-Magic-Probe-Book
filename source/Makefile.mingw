@@ -1,0 +1,163 @@
+# -------------------------------------------------------------
+#
+#       Makefile for Black Magic Probe utilities
+#       o  uses MingW
+#
+#       For release version, use NDEBUG=
+#       Do "make depend" to update dependencies in this makefile
+#
+# -------------------------------------------------------------
+
+include makefile.cfg
+
+
+# -------------------------------------------------------------
+#               Autosearch paths macro's (only for GNU Make+)
+# -------------------------------------------------------------
+
+#OBJDIR    := .\\obj
+#.path %.o $(OBJDIR)
+#.path %.map $(OBJDIR)
+#.path %. ..\\bin
+
+
+# -------------------------------------------------------------
+#               Compilers and their options
+# -------------------------------------------------------------
+
+####### C compiler
+CL        = $(CDIR)\\bin\\gcc
+CC        = $(CDIR)\\bin\\gcc -c
+CFLAGS    = -Wall
+INCLUDE   = -I.\\winusb
+
+####### Linker
+LNK       = $(CDIR)\\bin\\gcc
+LFLAGS    = -L$(WINUSB)
+
+
+ifdef NDEBUG
+    # retail version
+    CFLAGS += -DNDEBUG
+    LFLAGS += -s
+else
+    # development version
+    CFLAGS += -g
+    LFLAGS += -g
+endif
+
+# -------------------------------------------------------------
+#               Inference rules
+# -------------------------------------------------------------
+
+%.o : %.c
+	$(CC) $(INCLUDE) $(CFLAGS) -o$@ $<
+
+
+# -------------------------------------------------------------
+#               Project
+# -------------------------------------------------------------
+
+OBJLIST_BMDEBUG = bmdebug.o bmscan.o bmp-script.o elf-postlink.o \
+                  guidriver.o minIni.o rs232.o \
+                  specialfolder.o strlcpy.o \
+                  decodectf.o parsetsdl.o swotrace.o \
+                  nuklear.o nuklear_gdip.o noc_file_dialog.o
+
+OBJLIST_BMFLASH = bmflash.o bmscan.o bmp-script.o bmp-support.o crc32.o \
+                  elf-postlink.o gdb-rsp.o guidriver.o minIni.o rs232.o \
+                  specialfolder.o xmltractor.o strlcpy.o \
+                  nuklear.o nuklear_gdip.o noc_file_dialog.o
+
+OBJLIST_BMTRACE = bmtrace.o bmscan.o bmp-script.o bmp-support.o crc32.o \
+                  elf-postlink.o gdb-rsp.o guidriver.o minIni.o rs232.o \
+                  specialfolder.o xmltractor.o strlcpy.o \
+                  decodectf.o parsetsdl.o swotrace.o \
+                  nuklear.o nuklear_gdip.o noc_file_dialog.o
+
+project : bmdebug.exe bmflash.exe bmtrace.exe bmscan.exe elf-postlink.exe tracegen.exe
+
+depend :
+	makedepend -b -fmakefile.dep $(OBJLIST_BMDEBUG:.o=.c) $(OBJLIST_BMFLASH:.o=.c) $(OBJLIST_BMTRACE:.o=.c)
+
+
+##### C files #####
+
+bmdebug.o : bmdebug.c
+
+bmflash.o : bmflash.c
+
+bmscan.o : bmscan.c
+
+bmtrace.o : bmtrace.c
+
+bmp-script.o : bmp-script.c
+
+bmp-support.o : bmp-support.c
+
+crc32.o : crc32.c
+
+elf-postlink.o : elf-postlink.c
+
+gdb-rsp.o : gdb-rsp.c
+
+guidriver.o : guidriver.c
+
+minIni.o : minIni.c
+
+rs232.o : rs232.c
+
+specialfolder.o : specialfolder.c
+
+strlcpy.o : strlcpy.c
+
+swotrace.o : swotrace.c
+
+xmltractor.o : xmltractor.c
+
+decodectf.o : decodectf.c
+
+parsetsdl.o : parsetsdl.c
+
+noc_file_dialog.o : CFLAGS += -DNOC_FILE_DIALOG_WIN32
+noc_file_dialog.o : noc_file_dialog.c
+
+nuklear.o : nuklear.c
+
+nuklear_gdip.o : nuklear_gdip.c
+
+
+##### Resource files #####
+
+bmdebug.res : bmdebug.rc
+
+bmflash.res : bmflash.rc
+
+bmtrace.res : bmtrace.rc
+
+
+##### Executables #####
+
+bmdebug.exe : $(OBJLIST_BMDEBUG)
+	$(LNK) $(LFLAGS) -o$@ $^ -lm -lgdiplus -lwinusb
+
+bmflash.exe : $(OBJLIST_BMFLASH)
+	$(LNK) $(LFLAGS) -o$@ $^ -lm -lgdiplus
+
+bmtrace.exe : $(OBJLIST_BMTRACE)
+	$(LNK) $(LFLAGS) -o$@ $^ -lm -lgdiplus -lwinusb
+
+bmscan.exe : bmscan.c
+	$(CL) $(INCLUDE) $(CFLAGS) -DSTANDALONE -o$@ $^
+
+elf-postlink.exe : elf-postlink.c
+	$(CL) $(INCLUDE) $(CFLAGS) -DSTANDALONE -o$@ $^
+
+tracegen.exe : tracegen.c parsetsdl.c
+	$(CL) $(INCLUDE) $(CFLAGS) -o$@ $^
+
+
+# put generated dependencies at the end, otherwise it does not blend well with
+# inference rules, if an item also has an explicit rule.
+-include makefile.dep
+
