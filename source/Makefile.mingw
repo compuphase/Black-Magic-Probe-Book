@@ -8,7 +8,12 @@
 #
 # -------------------------------------------------------------
 
-include makefile.cfg
+# Options to set in makefile.cfg
+#  o  WINUSB_INC    the path where the include files for WINUSB can be found,
+#                   including the -I option; for exampe: -Ic:/ddk/inc
+#  o  WINUSB_LIB    the path where the WINUSB DLL or import library can be
+#                   found (for the linker)
+-include makefile.cfg
 
 
 # -------------------------------------------------------------
@@ -29,11 +34,11 @@ include makefile.cfg
 CL        = $(CDIR)\\bin\\gcc
 CC        = $(CDIR)\\bin\\gcc -c
 CFLAGS    = -Wall
-INCLUDE   = -I.\\winusb
+INCLUDE   = $(WINUSB_INC)
 
 ####### Linker
 LNK       = $(CDIR)\\bin\\gcc
-LFLAGS    = -L$(WINUSB)
+LFLAGS    = -L$(WINUSB_LIB)
 
 
 ifdef NDEBUG
