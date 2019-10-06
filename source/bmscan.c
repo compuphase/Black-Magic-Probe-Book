@@ -60,10 +60,11 @@
  */
 int find_bmp(int interface, TCHAR *name, size_t namelen)
 {
-  HKEY hkeySection;
+  HKEY hkeySection, hkeyInnerSection ;
   TCHAR regpath[128], subkey[128], portname[128], basename[128], *ptr;
   DWORD maxlen;
-  int idx;
+  int idx, idx_outer ;
+  BOOLEAN  fNameFound = FALSE ;
 
   assert(name != NULL);
   assert(namelen > 0);
@@ -74,86 +75,95 @@ int find_bmp(int interface, TCHAR *name, size_t namelen)
             BMP_VID, BMP_PID, interface);
   if (RegOpenKeyEx(HKEY_LOCAL_MACHINE, regpath, 0, KEY_READ, &hkeySection) != ERROR_SUCCESS)
     return 0;
+  /*
+    Now we need to enumerate all the keys below the device path because more than
+    a single BMP may have been connected to this computer.
 
-  /* find the first sub-key */
-  maxlen = sizearray(subkey);
-  if (RegEnumKeyEx(hkeySection, 0, subkey, &maxlen, NULL, NULL, NULL, NULL) != ERROR_SUCCESS) {
-    RegCloseKey(hkeySection);
-    return 0;
-  }
-  /* add the fixed portion */
-  _tcscat(subkey, "\\Device Parameters");
+    As we enumerate each sub-key we also check if it is the one currently connected
 
-  if (interface == BMP_IF_GDB || interface == BMP_IF_UART) {
-    /* read the port name setting */
-    maxlen = sizearray(portname);
-    if (RegGetValue(hkeySection, subkey, _T("PortName"), RRF_RT_REG_EXPAND_SZ | RRF_RT_REG_SZ,
-                    NULL, portname, &maxlen) != ERROR_SUCCESS)
-    {
+  */
+  idx_outer = 0 ;
+  while(fNameFound == FALSE) {
+    /* find the sub-key */
+    maxlen = sizearray(subkey);
+    if (RegEnumKeyEx(hkeySection, idx_outer, subkey, &maxlen, NULL, NULL, NULL, NULL) != ERROR_SUCCESS) {
       RegCloseKey(hkeySection);
       return 0;
     }
-  } else {
-    /* read GUID */
-    LSTATUS stat;
-    maxlen = sizearray(portname);
-    stat = RegGetValue(hkeySection, subkey, _T("DeviceInterfaceGUIDs"),
-                       RRF_RT_REG_MULTI_SZ | RRF_RT_REG_SZ, NULL, portname, &maxlen);
-    /* ERROR_MORE_DATA is returned because there may technically be more GUIDs
-       assigned to the device; we only care about the first one */
-    if (stat != ERROR_SUCCESS && stat != ERROR_MORE_DATA)
-    {
-      RegCloseKey(hkeySection);
-      return 0;
-    }
-  }
+    /* add the fixed portion */
+    _tcscat(subkey, "\\Device Parameters");
 
-  RegCloseKey(hkeySection);
-
-  if (interface == BMP_IF_GDB || interface == BMP_IF_UART) {
-    /* skip all characters until we find a digit */
-    if ((ptr = _tcsrchr(portname, _T('\\'))) != NULL)
-      _tcscpy(basename, ptr + 1); /* skip '\\.\', if present */
-    else
-      _tcscpy(basename, portname);
-    for (idx = 0; basename[idx] != '\0' && (basename[idx] < '0' || basename[idx] > '9'); idx++)
-      /* empty */;
-    if (basename[idx] == '\0')
-      return 0;
-
-    /* check that the COM port exists (if it doesn't, we just read the "preferred"
-       COM port for the Black Magic Probe) */
-    if (RegOpenKeyEx(HKEY_LOCAL_MACHINE, _T("HARDWARE\\DEVICEMAP\\SERIALCOMM"), 0,
-                     KEY_READ, &hkeySection) != ERROR_SUCCESS)
-      return 0;
-
-    idx = 0;
-    for ( ;; ) {
-      TCHAR value[128], *ptr;
-      DWORD valsize;
+    if (interface == BMP_IF_GDB || interface == BMP_IF_UART) {
+      /* read the port name setting */
       maxlen = sizearray(portname);
-      valsize = sizearray(value);
-      if (RegEnumValue(hkeySection, idx, portname, &maxlen, NULL, NULL, value, &valsize) != ERROR_SUCCESS)
-        break;
-      if ((ptr = _tcsrchr(value, _T('\\'))) != NULL)
-        ptr += 1;   /* skip '\\.\', if present */
-      else
-        ptr = value;
-      if (_tcsicmp(ptr, basename) == 0) {
-        _tcsncpy(name, basename, namelen);
-        name[namelen - 1] = '\0';
-        break;
+      if (RegGetValue(hkeySection, subkey, _T("PortName"), RRF_RT_REG_EXPAND_SZ | RRF_RT_REG_SZ,
+                      NULL, portname, &maxlen) != ERROR_SUCCESS)
+      {
+        RegCloseKey(hkeySection);
+        return 0;
       }
-      idx++;
+    } else {
+      /* read GUID */
+      LSTATUS stat;
+      maxlen = sizearray(portname);
+      stat = RegGetValue(hkeySection, subkey, _T("DeviceInterfaceGUIDs"),
+                        RRF_RT_REG_MULTI_SZ | RRF_RT_REG_SZ, NULL, portname, &maxlen);
+      /* ERROR_MORE_DATA is returned because there may technically be more GUIDs
+        assigned to the device; we only care about the first one */
+      if (stat != ERROR_SUCCESS && stat != ERROR_MORE_DATA)
+      {
+        RegCloseKey(hkeySection);
+        return 0;
+      }
     }
 
-    RegCloseKey(hkeySection);
-  } else {
-    /* just return the GUID, whether or not the device is connected, must be
-       handled by the caller */
-    _tcsncpy(name, portname, namelen);
-    name[namelen - 1] = '\0';
+    if (interface == BMP_IF_GDB || interface == BMP_IF_UART) {
+      /* skip all characters until we find a digit */
+      if ((ptr = _tcsrchr(portname, _T('\\'))) != NULL)
+        _tcscpy(basename, ptr + 1); /* skip '\\.\', if present */
+      else
+        _tcscpy(basename, portname);
+      for (idx = 0; basename[idx] != '\0' && (basename[idx] < '0' || basename[idx] > '9'); idx++)
+        /* empty */;
+      if (basename[idx] == '\0')
+        return 0;
+
+      /* check that the COM port exists (if it doesn't, we just read the "preferred"
+        COM port for the Black Magic Probe) */
+      if (RegOpenKeyEx(HKEY_LOCAL_MACHINE, _T("HARDWARE\\DEVICEMAP\\SERIALCOMM"), 0,
+                      KEY_READ, &hkeyInnerSection) != ERROR_SUCCESS)
+        return 0;
+
+      idx = 0;
+      for ( ;; ) {
+        TCHAR value[128], *ptr;
+        DWORD valsize;
+        maxlen = sizearray(portname);
+        valsize = sizearray(value);
+        if (RegEnumValue(hkeyInnerSection, idx, portname, &maxlen, NULL, NULL, value, &valsize) != ERROR_SUCCESS)
+          break;
+        if ((ptr = _tcsrchr(value, _T('\\'))) != NULL)
+          ptr += 1;   /* skip '\\.\', if present */
+        else
+          ptr = value;
+        if (_tcsicmp(ptr, basename) == 0) {
+          _tcsncpy(name, basename, namelen);
+          name[namelen - 1] = '\0';
+          fNameFound = TRUE ;
+          break;
+        }
+        idx++;
+      }
+      RegCloseKey(hkeyInnerSection);
+    } else {
+      /* just return the GUID, whether or not the device is connected, must be
+        handled by the caller */
+      _tcsncpy(name, portname, namelen);
+      name[namelen - 1] = '\0';
+    }
+    idx_outer++ ;
   }
+  RegCloseKey(hkeySection);
 
   return _tcslen(name) > 0;
 }
