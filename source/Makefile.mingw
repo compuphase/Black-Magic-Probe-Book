@@ -150,13 +150,13 @@ bmtrace.res : bmtrace.rc
 ##### Executables #####
 
 bmdebug.exe : $(OBJLIST_BMDEBUG)
-	$(LNK) $(LFLAGS) -o$@ $^ -lm -lgdiplus -lwinusb
+	$(LNK) $(LFLAGS) -o$@ $^ -lm -lgdiplus -lwinusb -lcomdlg32 -lshlwapi -lsetupapi -lgdi32
 
 bmflash.exe : $(OBJLIST_BMFLASH)
-	$(LNK) $(LFLAGS) -o$@ $^ -lm -lgdiplus
+	$(LNK) $(LFLAGS) -o$@ $^ -lm -lcomdlg32 -lshlwapi -lgdiplus -lgdi32
 
 bmtrace.exe : $(OBJLIST_BMTRACE)
-	$(LNK) $(LFLAGS) -o$@ $^ -lm -lgdiplus -lwinusb
+	$(LNK) $(LFLAGS) -o$@ $^ -lm -lgdiplus -lwinusb -lcomdlg32 -lshlwapi -lsetupapi -lgdi32
 
 bmscan.exe : bmscan.c
 	$(CL) $(INCLUDE) $(CFLAGS) -DSTANDALONE -o$@ $^
@@ -164,7 +164,7 @@ bmscan.exe : bmscan.c
 elf-postlink.exe : elf-postlink.c
 	$(CL) $(INCLUDE) $(CFLAGS) -DSTANDALONE -o$@ $^
 
-tracegen.exe : tracegen.c parsetsdl.c
+tracegen.exe : tracegen.c parsetsdl.c strlcpy.c
 	$(CL) $(INCLUDE) $(CFLAGS) -o$@ $^
 
 
