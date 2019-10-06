@@ -91,6 +91,8 @@ project : bmdebug.exe bmflash.exe bmtrace.exe bmscan.exe elf-postlink.exe traceg
 depend :
 	makedepend -b -fmakefile.dep $(OBJLIST_BMDEBUG:.o=.c) $(OBJLIST_BMFLASH:.o=.c) $(OBJLIST_BMTRACE:.o=.c)
 
+clean : 
+    $(Q)$(shell rm *.o, *.exe)
 
 ##### C files #####
 
