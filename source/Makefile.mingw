@@ -9,6 +9,8 @@
 # -------------------------------------------------------------
 
 # Options to set in makefile.cfg
+#  o  CDIR          the root path to where the MingW GCC compiler is installed
+#                   (may be left empty if it is in the PATH)
 #  o  WINUSB_INC    the path where the include files for WINUSB can be found,
 #                   including the -I option; for exampe: -Ic:/ddk/inc
 #  o  WINUSB_LIB    the path where the WINUSB DLL or import library can be
@@ -20,25 +22,29 @@
 #               Autosearch paths macro's (only for GNU Make+)
 # -------------------------------------------------------------
 
-#OBJDIR    := .\\obj
+#OBJDIR    := ./obj
 #.path %.o $(OBJDIR)
 #.path %.map $(OBJDIR)
-#.path %. ..\\bin
+#.path %. ../bin
 
 
 # -------------------------------------------------------------
 #               Compilers and their options
 # -------------------------------------------------------------
 
+ifdef CDIR
+    CDIR_BIN := $(CDIR)/bin/
+endif
+
 ####### C compiler
-CL        = $(CDIR)\\bin\\gcc
-CC        = $(CDIR)\\bin\\gcc -c
-CFLAGS    = -Wall
-INCLUDE   = $(WINUSB_INC)
+CL        := $(CDIR_BIN)gcc
+CC        := $(CDIR_BIN)gcc -c
+CFLAGS    := -Wall
+INCLUDE   := $(WINUSB_INC)
 
 ####### Linker
-LNK       = $(CDIR)\\bin\\gcc
-LFLAGS    = -L$(WINUSB_LIB)
+LNK       := $(CDIR_BIN)gcc
+LFLAGS    := -L$(WINUSB_LIB)
 
 
 ifdef NDEBUG
