@@ -106,42 +106,44 @@ struct nk_context* guidriver_init(const char *caption, int width, int height,
   len = strlen(caption);
   for (i = j = 0; i < len; ) {
     char leader = caption[i];
-    int wc;
+    int tch;
     if ((leader & 0x80) == 0) {
-      wc = caption[i];
+      tch = caption[i];
       i += 1;
     } else if ((leader & 0xE0) == 0xC0) {
-      wc = (caption[i] & 0x1F) << 6;
-      wc |= (caption[i+1] & 0x3F);
+      tch = (caption[i] & 0x1F) << 6;
+      tch |= (caption[i+1] & 0x3F);
       i += 2;
     } else if ((leader & 0xF0) == 0xE0) {
-      wc = (caption[i] & 0xF) << 12;
-      wc |= (caption[i+1] & 0x3F) << 6;
-      wc |= (caption[i+2] & 0x3F);
+      tch = (caption[i] & 0xF) << 12;
+      tch |= (caption[i+1] & 0x3F) << 6;
+      tch |= (caption[i+2] & 0x3F);
       i += 3;
     } else if ((leader & 0xF8) == 0xF0) {
-      wc = (caption[i] & 0x7) << 18;
-      wc |= (caption[i+1] & 0x3F) << 12;
-      wc |= (caption[i+2] & 0x3F) << 6;
-      wc |= (caption[i+3] & 0x3F);
+      tch = (caption[i] & 0x7) << 18;
+      tch |= (caption[i+1] & 0x3F) << 12;
+      tch |= (caption[i+2] & 0x3F) << 6;
+      tch |= (caption[i+3] & 0x3F);
       i += 4;
     } else if ((leader & 0xFC) == 0xF8) {
-      wc = (caption[i] & 0x3) << 24;
-      wc |= (caption[i] & 0x3F) << 18;
-      wc |= (caption[i] & 0x3F) << 12;
-      wc |= (caption[i] & 0x3F) << 6;
-      wc |= (caption[i] & 0x3F);
+      tch = (caption[i] & 0x3) << 24;
+      tch |= (caption[i] & 0x3F) << 18;
+      tch |= (caption[i] & 0x3F) << 12;
+      tch |= (caption[i] & 0x3F) << 6;
+      tch |= (caption[i] & 0x3F);
       i += 5;
     } else if ((leader & 0xFE) == 0xFC) {
-      wc = (caption[i] & 0x1) << 30;
-      wc |= (caption[i] & 0x3F) << 24;
-      wc |= (caption[i] & 0x3F) << 18;
-      wc |= (caption[i] & 0x3F) << 12;
-      wc |= (caption[i] & 0x3F) << 6;
-      wc |= (caption[i] & 0x3F);
+      tch = (caption[i] & 0x1) << 30;
+      tch |= (caption[i] & 0x3F) << 24;
+      tch |= (caption[i] & 0x3F) << 18;
+      tch |= (caption[i] & 0x3F) << 12;
+      tch |= (caption[i] & 0x3F) << 6;
+      tch |= (caption[i] & 0x3F);
       i += 6;
+    } else {
+      assert(0);
     }
-    wcapt[j++] = wc;
+    wcapt[j++] = tch;
   }
   wcapt[j] = 0;
 

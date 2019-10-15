@@ -22,6 +22,7 @@
  * limitations under the License.
  */
 #include <assert.h>
+#include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -38,6 +39,7 @@
 #else
   #include <dirent.h>
   #include <unistd.h>
+  #include <bsd/string.h>
 #endif
 
 #include "bmscan.h"
@@ -57,14 +59,19 @@
  *  interface. For a serial interface, it returns the COM port and for the
  *  trace or DFU interfaces, it returns the GUID (needed to open a WinUSB
  *  handle on it).
+ *  \param seqnr    The sequence number, must be 0 to find the first connected
+ *                  device, 1 to find the second connected device, and so forth.
+ *  \param iface    The interface number, e,g, BMP_IF_GDB for the GDB server.
+ *  \param name     The COM-port name (or interface GUID) will be copied in
+ *                  this parameter.
+ *  \param namelen  The size of the "name" parameter (in characters).
  */
-int find_bmp(int interface, TCHAR *name, size_t namelen)
+int find_bmp(int seqnr, int iface, TCHAR *name, size_t namelen)
 {
-  HKEY hkeySection, hkeyInnerSection ;
-  TCHAR regpath[128], subkey[128], portname[128], basename[128], *ptr;
+  HKEY hkeySection;
+  TCHAR regpath[128];
   DWORD maxlen;
-  int idx, idx_outer ;
-  BOOLEAN  fNameFound = FALSE ;
+  int idx_device;
 
   assert(name != NULL);
   assert(namelen > 0);
@@ -72,52 +79,60 @@ int find_bmp(int interface, TCHAR *name, size_t namelen)
 
   /* find the device path */
   _stprintf(regpath, _T("SYSTEM\\CurrentControlSet\\Enum\\USB\\VID_%04X&PID_%04X&MI_%02X"),
-            BMP_VID, BMP_PID, interface);
+            BMP_VID, BMP_PID, iface);
   if (RegOpenKeyEx(HKEY_LOCAL_MACHINE, regpath, 0, KEY_READ, &hkeySection) != ERROR_SUCCESS)
     return 0;
+
   /*
     Now we need to enumerate all the keys below the device path because more than
     a single BMP may have been connected to this computer.
 
     As we enumerate each sub-key we also check if it is the one currently connected
-
   */
-  idx_outer = 0 ;
-  while(fNameFound == FALSE) {
+  idx_device = 0 ;
+  while (_tcslen(name) == 0 && seqnr >= 0) {
+    TCHAR subkey[128], portname[128];
+    HKEY hkeyItem;
     /* find the sub-key */
     maxlen = sizearray(subkey);
-    if (RegEnumKeyEx(hkeySection, idx_outer, subkey, &maxlen, NULL, NULL, NULL, NULL) != ERROR_SUCCESS) {
+    if (RegEnumKeyEx(hkeySection, idx_device, subkey, &maxlen, NULL, NULL, NULL, NULL) != ERROR_SUCCESS) {
       RegCloseKey(hkeySection);
       return 0;
     }
-    /* add the fixed portion */
+    /* add the fixed portion & open the key to the item */
     _tcscat(subkey, "\\Device Parameters");
+    if (RegOpenKeyEx(hkeySection, subkey, 0, KEY_READ, &hkeyItem) != ERROR_SUCCESS) {
+      RegCloseKey(hkeySection);
+      return 0;
+    }
 
-    if (interface == BMP_IF_GDB || interface == BMP_IF_UART) {
+    maxlen = sizearray(portname);
+    memset(portname, 0, maxlen);
+    if (iface == BMP_IF_GDB || iface == BMP_IF_UART) {
       /* read the port name setting */
-      maxlen = sizearray(portname);
-      if (RegGetValue(hkeySection, subkey, _T("PortName"), RRF_RT_REG_EXPAND_SZ | RRF_RT_REG_SZ,
-                      NULL, portname, &maxlen) != ERROR_SUCCESS)
-      {
+      if (RegQueryValueEx(hkeyItem, _T("PortName"), NULL, NULL, (LPBYTE)portname, &maxlen) != ERROR_SUCCESS) {
+        RegCloseKey(hkeyItem);
         RegCloseKey(hkeySection);
         return 0;
       }
     } else {
       /* read GUID */
-      LSTATUS stat;
-      maxlen = sizearray(portname);
-      stat = RegGetValue(hkeySection, subkey, _T("DeviceInterfaceGUIDs"),
-                        RRF_RT_REG_MULTI_SZ | RRF_RT_REG_SZ, NULL, portname, &maxlen);
+      LSTATUS stat = RegQueryValueEx(hkeyItem, _T("DeviceInterfaceGUIDs"), NULL, NULL, (LPBYTE)portname, &maxlen);
       /* ERROR_MORE_DATA is returned because there may technically be more GUIDs
-        assigned to the device; we only care about the first one */
-      if (stat != ERROR_SUCCESS && stat != ERROR_MORE_DATA)
-      {
+         assigned to the device; we only care about the first one */
+      if (stat != ERROR_SUCCESS && stat != ERROR_MORE_DATA) {
+        RegCloseKey(hkeyItem);
         RegCloseKey(hkeySection);
         return 0;
       }
     }
 
-    if (interface == BMP_IF_GDB || interface == BMP_IF_UART) {
+    RegCloseKey(hkeyItem);
+
+    if (iface == BMP_IF_GDB || iface == BMP_IF_UART) {
+      TCHAR basename[128], *ptr;
+      HKEY hkeySerialComm;
+      int idx;
       /* skip all characters until we find a digit */
       if ((ptr = _tcsrchr(portname, _T('\\'))) != NULL)
         _tcscpy(basename, ptr + 1); /* skip '\\.\', if present */
@@ -129,39 +144,41 @@ int find_bmp(int interface, TCHAR *name, size_t namelen)
         return 0;
 
       /* check that the COM port exists (if it doesn't, we just read the "preferred"
-        COM port for the Black Magic Probe) */
+         COM port for the Black Magic Probe) */
       if (RegOpenKeyEx(HKEY_LOCAL_MACHINE, _T("HARDWARE\\DEVICEMAP\\SERIALCOMM"), 0,
-                      KEY_READ, &hkeyInnerSection) != ERROR_SUCCESS)
-        return 0;
-
-      idx = 0;
-      for ( ;; ) {
-        TCHAR value[128], *ptr;
+                      KEY_READ, &hkeySerialComm) != ERROR_SUCCESS)
+        return 0; /* no COM ports at all! */
+      for (idx = 0; ; idx++) {
+        TCHAR value[128];
         DWORD valsize;
         maxlen = sizearray(portname);
         valsize = sizearray(value);
-        if (RegEnumValue(hkeyInnerSection, idx, portname, &maxlen, NULL, NULL, value, &valsize) != ERROR_SUCCESS)
+        if (RegEnumValue(hkeySerialComm, idx, portname, &maxlen, NULL, NULL, (LPBYTE)value, &valsize) != ERROR_SUCCESS)
           break;
         if ((ptr = _tcsrchr(value, _T('\\'))) != NULL)
           ptr += 1;   /* skip '\\.\', if present */
         else
           ptr = value;
         if (_tcsicmp(ptr, basename) == 0) {
-          _tcsncpy(name, basename, namelen);
-          name[namelen - 1] = '\0';
-          fNameFound = TRUE ;
+          if (seqnr-- == 0) {
+            _tcsncpy(name, basename, namelen);
+            name[namelen - 1] = '\0';
+          }
           break;
         }
-        idx++;
       }
-      RegCloseKey(hkeyInnerSection);
+      RegCloseKey(hkeySerialComm);
     } else {
       /* just return the GUID, whether or not the device is connected, must be
-        handled by the caller */
-      _tcsncpy(name, portname, namelen);
-      name[namelen - 1] = '\0';
+         handled by the caller */
+      //??? should verify presence of the device, for the case that multiple BMPs
+      //    have been connected to the workstation
+      if (seqnr-- == 0) {
+        _tcsncpy(name, portname, namelen);
+        name[namelen - 1] = '\0';
+      }
     }
-    idx_outer++ ;
+    idx_device++;
   }
   RegCloseKey(hkeySection);
 
@@ -181,11 +198,25 @@ static int gethex(const char *ptr, int length)
   return (int)strtol(hexstr, NULL, 16);
 }
 
-int find_bmp(int interface, char *name, size_t namelen)
+/** find_bmp() scans the system for the Black Magic Probe and a specific
+ *  interface. For a serial interface, it returns the COM port and for the
+ *  trace or DFU interfaces, it returns the GUID (needed to open a WinUSB
+ *  handle on it).
+ *  \param seqnr    The sequence number, must be 0 to find the first connected
+ *                  device, 1 to find the second connected device, and so forth.
+ *  \param iface    The interface number, e,g, BMP_IF_GDB for the GDB server.
+ *  \param name     The COM-port name (or interface GUID) will be copied in
+ *                  this parameter.
+ *  \param namelen  The size of the "name" parameter (in characters).
+ */
+int find_bmp(int seqnr, int iface, char *name, size_t namelen)
 {
   DIR *dsys;
   struct dirent *dir;
-  int found;
+
+  assert(name != NULL);
+  assert(namelen > 0);
+  *name = '\0';
 
   /* run through directories in the sysfs branch */
   #define SYSFS_ROOT  "/sys/bus/usb/devices"
@@ -193,8 +224,7 @@ int find_bmp(int interface, char *name, size_t namelen)
   if (dsys == NULL)
     return 0;
 
-  found = 0;
-  while (!found && (dir = readdir(dsys)) != NULL) {
+  while (strlen(name) == 0 && seqnr >= 0 && (dir = readdir(dsys)) != NULL) {
     if (dir->d_type == DT_LNK || (dir->d_type == DT_DIR && dir->d_name[0] != '.')) {
       /* check the modalias file */
       char path[MAX_PATH];
@@ -220,13 +250,35 @@ int find_bmp(int interface, char *name, size_t namelen)
             /* check the name of the subdirectory inside */
             ddev = opendir(path);
             if (ddev != NULL) {
-              while (!found && (dir = readdir(ddev)) != NULL) {
+              while (strlen(name) == 0 && (dir = readdir(ddev)) != NULL) {
                 if (dir->d_type == DT_LNK || (dir->d_type == DT_DIR && dir->d_name[0] != '.')) {
-                  printf("Found /dev/%s\n", dir->d_name);
-                  found = 1;
+                  if (seqnr-- == 0) {
+                    strlcpy(name, "/dev/", namelen);
+                    strlcat(name, dir->d_name, namelen);
+                  }
                 }
               }
               closedir(ddev);
+            }
+            if (strlen(name) > 0 && iface != BMP_IF_GDB) {
+              /* GDB server was found for the requested sequence number,
+                 but the requested interface is the UART -> patch the directory
+                 name and search again */
+              char *ptr = path + strlen(path) - 5;  /* -4 for "/tty", -1 to get to the last character before "/tty" */
+              assert(strlen(path) > 5);
+              assert(*ptr == '0' && *(ptr-1) == '.' && *(ptr + 1) == '/');
+              *ptr = iface + '0';
+              *name = '\0'; /* clear device name for GDB-server (we want the name for the UART) */
+              ddev = opendir(path);
+              if (ddev != NULL) {
+                while (strlen(name) == 0 && (dir = readdir(ddev)) != NULL) {
+                  if (dir->d_type == DT_LNK || (dir->d_type == DT_DIR && dir->d_name[0] != '.')) {
+                    strlcpy(name, "/dev/", namelen);
+                    strlcat(name, dir->d_name, namelen);
+                  }
+                }
+                closedir(ddev);
+              }
             }
           }
         }
@@ -235,7 +287,7 @@ int find_bmp(int interface, char *name, size_t namelen)
   }
 
   closedir(dsys);
-  return found;
+  return strlen(name) > 0;
 }
 
 #endif
@@ -251,38 +303,70 @@ static void print_port(const char *portname)
   printf("%s", portname);
 }
 
-int main(int argc,char *argv[])
+int main(int argc, char *argv[])
 {
 #if !(defined WIN32 || defined _WIN32)
   typedef char TCHAR;
 #endif
   TCHAR port_gdb[64], port_term[64];
+  int seqnr = 0;
+  int print_all = 1;
 
-  if (argc == 2) {
-    if (strcmp(argv[1], "gdbserver") == 0) {
+  if (argc >= 3) {
+    seqnr = atoi(argv[2]) - 1;
+  } else if (argc >= 2 && isdigit(argv[1][0])) {
+    seqnr = atoi(argv[1]) - 1;
+    print_all = 0;
+    argc -= 1;
+  }
+  if (seqnr < 0) {
+    printf("\nInvalid sequence number %d, sequence numbers start at 1.\n", seqnr + 1);
+    return 1;
+  }
+
+  if (argc >= 2) {
+    if (strcmp(argv[1], "gdbserver")== 0) {
       /* print out only the gdbserver port */
-      if (!find_bmp(BMP_IF_GDB, port_gdb, sizearray(port_gdb)))
+      if (!find_bmp(seqnr, BMP_IF_GDB, port_gdb, sizearray(port_gdb)))
         printf("unavailable");
       else
         print_port(port_gdb);
     } else if (strcmp(argv[1], "uart") == 0) {
       /* print out only the TTL UART port */
-      if (!find_bmp(BMP_IF_UART, port_term, sizearray(port_term)))
+      if (!find_bmp(seqnr, BMP_IF_UART, port_term, sizearray(port_term)))
         printf("unavailable");
       else
         print_port(port_term);
     }
   } else {
-    /* print both ports */
-    if (!find_bmp(BMP_IF_GDB, port_gdb, sizearray(port_gdb))) {
-      printf("\nNo Black Magic Probe could be found on this system.\n");
-      return 1;
-    }
+    assert(!print_all || seqnr == 0); /* if seqnr were set, print_all is false */
+    do {
+      /* print both ports of each Black Magic Probe */
+      if (!find_bmp(seqnr, BMP_IF_GDB, port_gdb, sizearray(port_gdb))) {
+        if (print_all && seqnr > 0)
+          break;  /* simply exit the do..while loop without giving a further message */
+        switch (seqnr) {
+        case 0:
+          printf("\nNo Black Magic Probe could be found on this system.\n");
+          break;
+        case 1:
+          printf("\nNo %dnd Black Magic Probe could be found on this system.\n", seqnr + 1);
+          break;
+        case 2:
+          printf("\nNo %drd Black Magic Probe could be found on this system.\n", seqnr + 1);
+          break;
+        default:
+          printf("\nNo %dth Black Magic Probe could be found on this system.\n", seqnr + 1);
+        }
+        return 1;
+      }
 
-    printf("\nBlack Magic Probe found:\n");
-    printf("  gdbserver port: %s\n", port_gdb);
-    printf("  TTL UART port:  %s\n",
-           find_bmp(BMP_IF_UART, port_term, sizearray(port_term)) ? port_term : "not detected");
+      printf("\nBlack Magic Probe found:\n");
+      printf("  gdbserver port: %s\n", port_gdb);
+      printf("  TTL UART port:  %s\n",
+             find_bmp(seqnr, BMP_IF_UART, port_term, sizearray(port_term)) ? port_term : "not detected");
+      seqnr += 1;
+    } while (print_all);
   }
 
   return 0;

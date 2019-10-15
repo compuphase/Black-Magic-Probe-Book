@@ -531,7 +531,7 @@ static void sources_parse(const char *gdbresult)
   head += 7;  /* skip [ too */
   for ( ;; ) {
     char name[256] = "", path[256] = "";
-    const char *sep;
+    const char *sep = head;
     int len;
     assert(*head == '{');
     head++;
@@ -587,10 +587,9 @@ static int check_sources_tstamps(const char *elffile)
 
   if (stat(elffile, &fstat) >= 0) {
     time_t tstamp_elf = fstat.st_mtime;
-    const char *fname;
     int idx;
     for (idx = 0; idx < sources_count; idx++) {
-      fname = (sources_pathlist[idx] != NULL) ? sources_pathlist[idx] : sources_namelist[idx];
+      const char *fname = (sources_pathlist[idx] != NULL) ? sources_pathlist[idx] : sources_namelist[idx];
       if (stat(fname, &fstat) >= 0 && fstat.st_mtime > tstamp_elf)
         result = 0;
     }
@@ -977,10 +976,10 @@ static int watch_update(const char *gdbresult)
     assert(tail != NULL);
     len = tail - start;
     if ((line = malloc((len + 1) * sizeof(char))) != NULL) {
-      unsigned seqnr;
       strncpy(line, start, len);
       line[len] = '\0';
       if ((start=fieldfind(line, "name")) != NULL) {
+        unsigned seqnr;
         start = fieldvalue(start, NULL);
         assert(start != NULL);
         assert(strncmp(start, "watch", 5) == 0);
@@ -1120,10 +1119,10 @@ static int check_stopped(int *filenr, int *linenr)
       lastfound = 1;
       if (strncmp(item->text, "stopped", 7) == 0) {
         const char *head, *tail;
-        unsigned len;
         last_is_stopped = 1;
         if ((head = strstr(item->text, "file=")) != 0) {
           char filename[256];
+          unsigned len;
           assert(head[5] == '"');
           head += 6;
           tail = strchr(head, '"');
@@ -2054,13 +2053,13 @@ static int handle_display_cmd(const char *command, int *param, char *symbol, siz
 static int handle_find_cmd(const char *command)
 {
   static char pattern[50] = "";
-  const char *ptr;
 
   assert(command != NULL);
   command = skipwhite(command);
   if (strncmp(command, "find", 4) == 0 && TERM_END(command, 4)) {
     STRINGLIST *item = sourcefile_root.next;
-    int linenr, idx, patlen, txtlen;
+    int linenr, patlen;
+    const char *ptr;
     if ((ptr = strchr(command, ' ')) != NULL) {
       ptr = skipwhite(ptr);
       if (*ptr != '\0')
@@ -2083,6 +2082,7 @@ static int handle_find_cmd(const char *command)
       linenr++;
     }
     while (linenr != source_cursorline) {
+      int idx, txtlen;
       assert(item != NULL && item->text != NULL);
       txtlen = strlen(item->text);
       idx = 0;
@@ -2120,7 +2120,6 @@ enum { SWOMODE_NONE, SWOMODE_MANCHESTER, SWOMODE_ASYNC, SWOMODE_PASSIVE };
 static void trace_info_channel(int chan, int enabled_only)
 {
   char msg[200];
-  const char *ptr;
 
   if (enabled_only && !channel_getenabled(chan))
     return;
@@ -2129,6 +2128,7 @@ static void trace_info_channel(int chan, int enabled_only)
   if (chan < 0 || chan >= NUM_CHANNELS) {
     strlcat(msg, "invalid", sizearray(msg));
   } else {
+    const char *ptr;
     if (channel_getenabled(chan))
       strlcat(msg, "enabled", sizearray(msg));
     else
@@ -2283,7 +2283,7 @@ int main(int argc, char *argv[])
   TASK task;
   char cmd[300], statesymbol[64], ttipvalue[256];
   int curstate, prevstate, stateparam[3];
-  int refreshflags, waitidle, trace_status, warn_source_tstamps;
+  int refreshflags, trace_status, warn_source_tstamps;
   int atprompt, insplitter, console_activate, cont_is_run, exitcode;
   int idx, result;
   int prev_clicked_line;
@@ -2380,6 +2380,7 @@ int main(int argc, char *argv[])
   btn_folder = guidriver_image_from_memory(btn_folder_data, btn_folder_datasize);
 
   while (curstate != STATE_QUIT) {
+    int waitidle;
     if (!is_idle()) {
       switch (curstate) {
       case STATE_INIT:
@@ -2408,7 +2409,7 @@ int main(int argc, char *argv[])
         }
         break;
       case STATE_SCAN_BMP:
-        if (find_bmp(BMP_IF_GDB, port_gdb, sizearray(port_gdb))) {
+        if (find_bmp(0, BMP_IF_GDB, port_gdb, sizearray(port_gdb))) {
           if (strncmp(port_gdb, "COM", 3) == 0 && strlen(port_gdb) >= 5) {
             memmove(port_gdb + 4, port_gdb, strlen(port_gdb) + 1);
             memmove(port_gdb, "\\\\.\\", 4);
@@ -2833,7 +2834,7 @@ int main(int argc, char *argv[])
         if (prevstate != curstate) {
           switch (stateparam[0]) {
           case STATEPARAM_WATCH_SET:
-            sprintf(cmd, "-var-create watch%d * \"%s\"\n", ++watchseq, statesymbol);
+            sprintf(cmd, "-var-create watch%u * \"%s\"\n", ++watchseq, statesymbol);
             break;
           case STATEPARAM_WATCH_DEL:
             sprintf(cmd, "-var-delete watch%d\n", stateparam[1]);
@@ -2891,7 +2892,7 @@ int main(int argc, char *argv[])
             ctf_parse_cleanup();
           }
           if (opt_swomode == SWOMODE_ASYNC)
-            sprintf(cmd, "monitor traceswo %d\n", opt_swobaud); /* automatically select async mode in the BMP */
+            sprintf(cmd, "monitor traceswo %u\n", opt_swobaud); /* automatically select async mode in the BMP */
           else
             strlcpy(cmd, "monitor traceswo\n", sizearray(cmd));
           task_stdin(&task, cmd);
@@ -3472,7 +3473,7 @@ int main(int argc, char *argv[])
           for (watch = watch_root.next; watch != NULL; watch = watch->next) {
             nk_layout_row_begin(ctx, NK_STATIC, ROW_HEIGHT, 4);
             nk_layout_row_push(ctx, 30);
-            sprintf(label, "%d", watch->seqnr); /* print sequence number for undisplay command */
+            sprintf(label, "%u", watch->seqnr); /* print sequence number for undisplay command */
             nk_label(ctx, label, NK_TEXT_LEFT);
             nk_layout_row_push(ctx, namewidth);
             nk_label(ctx, watch->expr, NK_TEXT_LEFT);

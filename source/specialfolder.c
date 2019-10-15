@@ -41,6 +41,9 @@
 #include <windows.h>
 #include <shellapi.h>
 #include <shlobj.h>
+#if defined __MINGW32__ || defined __MINGW64__
+  #include "strlcpy.h"
+#endif
 
 #if defined UNICODE || defined _UNICODE
   #define SHGETFOLDERPATH "SHGetFolderPathW"

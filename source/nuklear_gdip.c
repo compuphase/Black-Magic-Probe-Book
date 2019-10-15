@@ -351,8 +351,10 @@ GdipMeasureString(
 GpStatus WINGDIPAPI
 GdipSetTextRenderingHint(GpGraphics *graphics, TextRenderingHint mode);
 
-//EXTERN_C DECLSPEC_IMPORT IStream * WINAPI
-LWSTDAPI_(IStream *) SHCreateMemStream(const BYTE *pInit, _In_ UINT cbInit);
+#if !defined LWSTDAPI_
+  #define LWSTDAPI_( x )  EXTERN_C DECLSPEC_IMPORT x STDAPICALLTYPE
+#endif
+LWSTDAPI_(IStream *) SHCreateMemStream(const BYTE *pInit, UINT cbInit);
 
 struct GdipFont
 {

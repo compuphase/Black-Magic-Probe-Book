@@ -50,6 +50,7 @@ int bmp_connect(void);
 int bmp_attach(int tpwr, char *name, size_t namelength, char *arch, size_t archlength);
 int bmp_detach(int powerdown);
 
+int bmp_fullerase(void);
 int bmp_download(FILE *fp);
 int bmp_verify(FILE *fp);
 

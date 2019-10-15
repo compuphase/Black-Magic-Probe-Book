@@ -40,7 +40,7 @@ endif
 CL        := $(CDIR_BIN)gcc
 CC        := $(CDIR_BIN)gcc -c
 CFLAGS    := -Wall
-INCLUDE   := $(WINUSB_INC)
+INCLUDE   := -I$(WINUSB_INC)
 
 ####### Linker
 LNK       := $(CDIR_BIN)gcc
@@ -152,13 +152,13 @@ bmtrace.res : bmtrace.rc
 ##### Executables #####
 
 bmdebug.exe : $(OBJLIST_BMDEBUG)
-	$(LNK) $(LFLAGS) -o$@ $^ -lm -lgdiplus -lwinusb -lcomdlg32 -lshlwapi -lsetupapi -lgdi32
+	$(LNK) $(LFLAGS) -o$@ $^ -lm -lcomdlg32 -lgdi32 -lgdiplus -lsetupapi -lshlwapi -lwinusb
 
 bmflash.exe : $(OBJLIST_BMFLASH)
-	$(LNK) $(LFLAGS) -o$@ $^ -lm -lcomdlg32 -lshlwapi -lgdiplus -lgdi32
+	$(LNK) $(LFLAGS) -o$@ $^ -lm -lcomdlg32 -lgdi32 -lgdiplus -lshlwapi
 
 bmtrace.exe : $(OBJLIST_BMTRACE)
-	$(LNK) $(LFLAGS) -o$@ $^ -lm -lgdiplus -lwinusb -lcomdlg32 -lshlwapi -lsetupapi -lgdi32
+	$(LNK) $(LFLAGS) -o$@ $^ -lm -lcomdlg32 -lgdi32 -lgdiplus -lsetupapi -lshlwapi -lwinusb
 
 bmscan.exe : bmscan.c
 	$(CL) $(INCLUDE) $(CFLAGS) -DSTANDALONE -o$@ $^

@@ -29,6 +29,9 @@
 #if defined __linux__
   #include <bsd/string.h>
 #endif
+#if defined __MINGW32__ || defined __MINGW64__
+  #include "strlcpy.h"
+#endif
 
 #include "parsetsdl.h"
 
@@ -121,12 +124,12 @@ int ctf_error(int code, ...)
 static int recent_error = -1;
   char message[256];
   va_list args;
-  va_start(args, code);
 
   if (recent_error == linenumber)
     return 0;
   recent_error = linenumber;
   error_count++;
+  va_start(args, code);
 
   switch (code) {
   case CTFERR_FILEOPEN:
@@ -232,12 +235,11 @@ static void readline_cleanup(void)
 
 static int readline_next(void)
 {
-  char *ptr;
-  char in_quotes;
-
   assert(inputfile != NULL);
   assert(linebuffer != NULL);
   for (;; ) {
+    char *ptr;
+    char in_quotes;
     if (fgets(linebuffer, MAX_LINE_LENGTH - 1, inputfile)== NULL) {
       if (comment_block_start > 0)
         ctf_error(CTFERR_BLOCKCOMMENT, comment_block_start);
@@ -392,6 +394,7 @@ static CTF_TYPE *type_lookup(CTF_TYPE *root, const char *name)
 static void type_default_int(CTF_TYPE *type)
 {
   CTF_TYPE *basetype = type_lookup(&type_root, "int");
+  assert(type != NULL);
   if (basetype != NULL) {
     /* "int" type has been defined, so use it */
     memcpy(type, basetype, sizeof(CTF_TYPE));
@@ -1280,7 +1283,6 @@ static void parse_event_header(CTF_EVENT_HEADER *evthdr, CTF_TYPE **clock)
 static void parse_event_fields(CTF_EVENT_FIELD *fieldroot)
 {
   CTF_TYPE *knowntype = NULL;
-  char identifier[CTF_NAME_LENGTH] = "";
 
   assert(fieldroot != NULL);
   if (token_match(TOK_IDENTIFIER)) {
@@ -1289,6 +1291,7 @@ static void parse_event_fields(CTF_EVENT_FIELD *fieldroot)
     if (knowntype == NULL)
       ctf_error(CTFERR_UNKNOWNTYPE, token_gettext());
   } else {
+    char identifier[CTF_NAME_LENGTH] = "";
     token_need(TOK_STRUCT);
     if (token_match(TOK_IDENTIFIER)) {
       /* defined struct */

@@ -19,6 +19,9 @@
 #if defined _WIN32
   #define WIN32_LEAN_AND_MEAN
   #include <windows.h>
+  #if defined __MINGW32__ || defined __MINGW64__
+    #include "strlcpy.h"
+  #endif
 #else
   #include <unistd.h>
   #include <bsd/string.h>
@@ -92,10 +95,11 @@ void bmp_setcallback(BMP_STATCALLBACK func)
 int bmp_connect(void)
 {
   if (!rs232_isopen()) {
-    char devname[128], buffer[256], *ptr;
-    size_t size;
+    char devname[128];
     FlashRgnCount = 0;
-    if (find_bmp(BMP_IF_GDB, devname, sizearray(devname))) {
+    if (find_bmp(0, BMP_IF_GDB, devname, sizearray(devname))) {
+      char buffer[256], *ptr;
+      size_t size;
       /* connect to the port */
       rs232_open(devname,115200,8,1,PAR_NONE);
       if (!rs232_isopen()) {
@@ -318,6 +322,61 @@ int bmp_detach(int powerdown)
   return result;
 }
 
+
+int bmp_fullerase(void)
+{
+  char *cmd;
+  int rgn, rcvd, pktsize;
+
+  if (!rs232_isopen()) {
+    notice(BMPERR_NOCONNECT, "Not connected to Black Magic Probe");
+    return 0;
+  }
+  if (FlashRgnCount == 0) {
+    notice(BMPERR_NOFLASH, "No Flash memory record");
+    return 0;
+  }
+  pktsize = (PacketSize > 0) ? PacketSize : 64;
+  cmd = malloc((pktsize + 16) * sizeof(char));
+  if (cmd == NULL) {
+    notice(BMPERR_MEMALLOC, "Memory allocation error");
+    return 0;
+  }
+
+  for (rgn = 0; rgn < FlashRgnCount; rgn++) {
+    unsigned long size = FlashRgn[rgn].size;
+    int failed;
+    do {
+      sprintf(cmd, "vFlashErase:%x,%x", (unsigned)FlashRgn[rgn].address, (unsigned)size);
+      gdbrsp_xmit(cmd, -1);
+      rcvd = gdbrsp_recv(cmd, pktsize, 500);
+      failed = (rcvd != 2 || memcmp(cmd, "OK", rcvd) != 0);
+      if (failed)
+        size /= 2;
+    } while (failed && size >= 1024);
+    if (failed) {
+      notice(BMPERR_FLASHERASE, "Flash erase failed");
+      free(cmd);
+      return 0;
+    } else {
+      sprintf(cmd, "Erased Flash at 0x%08x, size %d KiB",
+              (unsigned)FlashRgn[rgn].address, (unsigned)size / 1024);
+      notice(BMPSTAT_SUCCESS, cmd);
+    }
+  }
+
+  gdbrsp_xmit("vFlashDone", -1);
+  rcvd = gdbrsp_recv(cmd, pktsize, 500);
+  if (rcvd != 2 || memcmp(cmd, "OK", rcvd)!= 0) {
+    notice(BMPERR_FLASHDONE, "Flash completion failed");
+    free(cmd);
+    return 0;
+  }
+
+  free(cmd);
+  return 1;
+}
+
 int bmp_download(FILE *fp)
 {
   char *cmd;
@@ -364,7 +423,7 @@ int bmp_download(FILE *fp)
     /* walk through all segments again, to download the payload */
     for (segment = 0; elf_segment_by_index(fp, segment, &type, &fileoffs, &filesize, &vaddr, &paddr, NULL) == ELFERR_NONE; segment++) {
       unsigned char *data;
-      unsigned pos, numbytes, esccount, idx, prefixlen;
+      unsigned pos, numbytes, esccount, idx;
       if (type != 1 || filesize == 0 || paddr < FlashRgn[rgn].address || paddr >= FlashRgn[rgn].address + FlashRgn[rgn].size)
         continue;
       notice(BMPSTAT_NOTICE, "%d: %s segment at 0x%x length 0x%x", segment, (vaddr == paddr) ? "Code" : "Data", (unsigned)paddr, (unsigned)filesize);
@@ -377,6 +436,7 @@ int bmp_download(FILE *fp)
       fseek(fp, fileoffs, SEEK_SET);
       fread(data, 1, filesize, fp);
       for (pos = 0; pos < filesize; pos += numbytes) {
+        unsigned prefixlen;
         sprintf(cmd, "vFlashWrite:%x:", (unsigned)(paddr + pos));
         prefixlen = strlen(cmd) + 4;  /* +1 for '$', +3 for '#nn' checksum */
         /* make blocks that are a multiple of 16 bytes (for guaranteed alignment)

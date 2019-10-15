@@ -317,7 +317,7 @@ void generate_funcstubs(FILE *fp, unsigned flags, const char *headerfile)
       if (field->type.typeclass == CLASS_STRING)
         fprintf(fp, "strlen(%s) + 1);\n", field->name);
       else
-        fprintf(fp, "%d);\n", field->type.size / 8);
+        fprintf(fp, "%u);\n", field->type.size / 8);
     }
 
     fprintf(fp, "}\n\n");
@@ -343,7 +343,6 @@ int main(int argc, char *argv[])
   char infile[256], outfile[256], *ptr;
   unsigned opt_flags;
   int idx;
-  FILE *fp;
 
   if (argc <= 1) {
     usage();
@@ -405,6 +404,7 @@ int main(int argc, char *argv[])
   if (!ctf_parse_init(infile))
     return 1; /* error message already issued via ctf_error_notify() */
   if (ctf_parse_run()) {
+    FILE *fp;
     int done_msg = 1;
 
     strlcat(outfile, ".h", sizearray(outfile));

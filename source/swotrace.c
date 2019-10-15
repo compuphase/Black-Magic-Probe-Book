@@ -29,6 +29,9 @@
   #include <setupapi.h>
   #include <winusb.h>
   #include <malloc.h>
+  #if defined __MINGW32__ || defined __MINGW64__
+    #include "strlcpy.h"
+  #endif
 #elif defined __linux__
   #include <alloca.h>
   #include <pthread.h>
@@ -347,7 +350,7 @@ void tracestring_process(int enabled)
 int tracestring_find(const char *text, int curline)
 {
   TRACESTRING *item;
-  int line, cur_mark, len, idx;
+  int line, cur_mark, len;
 
   assert(curline >= 0 || curline == -1);
   assert(text != NULL);
@@ -368,6 +371,7 @@ int tracestring_find(const char *text, int curline)
     line++;
   }
   while ((line != cur_mark || curline < 0) && item != NULL) {
+    int idx;
     curline = cur_mark;
     idx = 0;
     while (idx < item->length) {
@@ -583,16 +587,15 @@ static BOOL usb_ConfigEndpoint(WINUSB_INTERFACE_HANDLE hUSB, unsigned char endpo
     for (idx=0; idx<ifaceDescriptor.bNumEndpoints; idx++) {
       memset(&pipeInfo, 0, sizeof(pipeInfo));
       result = WinUsb_QueryPipe(hUSB, 0, (unsigned char)idx, &pipeInfo);
-      if (pipeInfo.PipeId != endpoint)
-        continue;
-      return TRUE;
+      if (result && pipeInfo.PipeId == endpoint)
+        return TRUE;
     }
   }
   return FALSE;
 }
 
 static HANDLE hThread = NULL;
-static WINUSB_INTERFACE_HANDLE hUSB = INVALID_HANDLE_VALUE;;
+static WINUSB_INTERFACE_HANDLE hUSB = INVALID_HANDLE_VALUE;
 static LARGE_INTEGER pcfreq;
 
 /** get_timestamp() return precision timestamp in seconds.
@@ -639,7 +642,7 @@ int trace_init(void)
   if (hThread != NULL && hUSB != INVALID_HANDLE_VALUE)
     return TRACESTAT_OK;            /* double initialization */
 
-  if (!find_bmp(BMP_IF_TRACE, guid, sizearray(guid)))
+  if (!find_bmp(0, BMP_IF_TRACE, guid, sizearray(guid)))
     return TRACESTAT_NO_INTERFACE;  /* Black Magic Probe not found (trace interface not found) */
   if (!usb_GetDevicePath(guid, path, sizearray(path)))
     return TRACESTAT_NO_DEVPATH;    /* device path to trace interface not found (should not occur) */
@@ -812,7 +815,7 @@ void tracelog_widget(struct nk_context *ctx, const char *id, float rowheight, in
   static int linecount = 0;
   static int recent_markline = -1;
   TRACESTRING *item;
-  int idx, labelwidth, tstampwidth, textwidth, len;
+  int idx, labelwidth, tstampwidth;
   struct nk_rect rcwidget = nk_layout_widget_bounds(ctx);
   struct nk_style_window const *stwin = &ctx->style.window;
   struct nk_style_button stbtn = ctx->style.button;
@@ -826,7 +829,7 @@ void tracelog_widget(struct nk_context *ctx, const char *id, float rowheight, in
   /* check the length of the longest channel name, and the longest timestamp */
   labelwidth = 0;
   for (idx = 0; idx < NUM_CHANNELS; idx++) {
-    len = strlen(channels[idx].name);
+    int len = strlen(channels[idx].name);
     if (channels[idx].enabled && labelwidth < len)
       labelwidth = len;
   }
@@ -842,6 +845,7 @@ void tracelog_widget(struct nk_context *ctx, const char *id, float rowheight, in
   if (nk_group_begin_titled(ctx, id, "", widget_flags)) {
     int lines = 0, lineheight = 0, widgetlines = 0, ypos;
     for (item = tracestring_root.next; item != NULL; item = item->next) {
+      int textwidth;
       struct nk_color clrtxt;
       NK_ASSERT(item->text != NULL);
       nk_layout_row_begin(ctx, NK_STATIC, rowheight, 4);

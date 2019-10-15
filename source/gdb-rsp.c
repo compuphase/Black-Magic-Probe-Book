@@ -106,7 +106,7 @@ void gdbrsp_packetsize(size_t size)
  */
 size_t gdbrsp_recv(char *buffer, size_t size, int timeout)
 {
-  size_t count, head, tail, idx;
+  size_t head, tail, idx;
   int cycles, chk_cache;
 
   if (!rs232_isopen())
@@ -121,7 +121,7 @@ size_t gdbrsp_recv(char *buffer, size_t size, int timeout)
   chk_cache = (cache_idx > 0);  /* analyse data in the cache even if no new data is received */
   head = tail = 0;
   while (cache_idx < cache_size) {
-    count = rs232_recv(cache + cache_idx, cache_size - cache_idx);
+    size_t count = rs232_recv(cache + cache_idx, cache_size - cache_idx);
     cache_idx += count;
     if (count > 0 || chk_cache) {
       chk_cache = 0;
@@ -248,7 +248,7 @@ int gdbrsp_xmit(const char *buffer, int size)
   if (buflen > 6 && memcmp(buffer, "qRcmd,", 6) == 0) {
     const char *src = buffer + 6;
     unsigned char *dest = fullbuffer + 6 + 1;
-    int count = buflen - 6;
+    count = buflen - 6;
     memcpy(fullbuffer + 1, buffer, 6);
     while (count > 0) {
       *dest++ = int2hex((*src >> 4) & 0x0f);

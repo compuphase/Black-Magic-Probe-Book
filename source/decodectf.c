@@ -26,6 +26,9 @@
 #if defined __linux__
   #include <bsd/string.h>
 #endif
+#if defined __MINGW32__ || defined __MINGW64__
+  #include "strlcpy.h"
+#endif
 
 #include "parsetsdl.h"
 #include "decodectf.h"
@@ -249,13 +252,13 @@ int msgstack_peek(uint16_t *streamid, double *timestamp, const char **message)
 
 static void str_reverse(char *str, int length)
 {
-  char temp, *tail;
+  char *tail;
 
   assert(str != NULL);
   assert(length >= 0);
   tail = str + length - 1;
   while (tail > str) {
-    temp = *str;
+    char temp = *str;
     *str++ = *tail;
     *tail-- = temp;
   }
@@ -384,7 +387,7 @@ static void format_field(const char *fieldname, const CTF_TYPE *type, const unsi
       msgbuffer_append(kv->name, -1);
     } else {
       char txt[32];
-      sprintf(txt, "(%d)", v);
+      sprintf(txt, "(%d)", (int)v);
       msgbuffer_append(txt, -1);
     }
     break;
@@ -533,10 +536,10 @@ restart:
   case STATE_GET_EVENTID:
     /* get the event header from the stream.id or the passed-in channel */
     { /* local block */
-      const CTF_STREAM *stream = stream_by_id(channel);
-      if (stream != NULL) {
-        evt_header = &stream->event;
-        clock = (stream->clock != NULL) ? clock_by_name(stream->clock->selector) : NULL;
+      const CTF_STREAM *s = stream_by_id(channel);
+      if (s != NULL) {
+        evt_header = &s->event;
+        clock = (s->clock != NULL) ? clock_by_name(s->clock->selector) : NULL;
       } else {
         /* stream not found, drop the decoding */
         state = STATE_SCAN_MAGIC;

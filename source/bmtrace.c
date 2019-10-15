@@ -30,6 +30,9 @@
   #include <direct.h>
   #include <io.h>
   #include <malloc.h>
+  #if defined __MINGW32__ || defined __MINGW64__
+    #include "strlcpy.h"
+  #endif
 #elif defined __linux__
   #include <alloca.h>
   #include <pthread.h>
@@ -474,9 +477,9 @@ int main(void)
             if (strlen(valstr) == 0) {
               channel_setname(chan, NULL);
             } else {
-              char *ptr;
-              while ((ptr = strchr(valstr, ' ')) != NULL)
-                *ptr = '-'; /* can't handle spaces in the channel names */
+              char *pspace;
+              while ((pspace = strchr(valstr, ' ')) != NULL)
+                *pspace = '-'; /* can't handle spaces in the channel names */
               channel_setname(chan, valstr);
             }
             cur_chan_edit = -1;

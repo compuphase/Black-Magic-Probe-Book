@@ -38,9 +38,9 @@
    BMP_IF_GDB or BMP_IF_UART. */
 #if defined WIN32 || defined _WIN32
   #include <tchar.h>
-  int find_bmp(int iface, TCHAR *name, size_t namelen);
+  int find_bmp(int seqnr, int iface, TCHAR *name, size_t namelen);
 #else
-  int find_bmp(int interface, char *name, size_t namelen);
+  int find_bmp(int seqnr, int iface, char *name, size_t namelen);
 #endif
 
 #if defined __cplusplus

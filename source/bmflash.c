@@ -24,6 +24,9 @@
   #include <shellapi.h>
   #include <direct.h>
   #include <io.h>
+  #if defined __MINGW32__ || defined __MINGW64__
+    #include "strlcpy.h"
+  #endif
 #elif defined __linux__
   #include <unistd.h>
   #include <bsd/string.h>
@@ -167,8 +170,8 @@ static int log_widget(struct nk_context *ctx, const char *id, const char *conten
   if (nk_group_begin_titled(ctx, id, "", NK_WINDOW_BORDER)) {
     int lineheight = 0;
     const char *head = content;
-    const char *tail;
     while (head != NULL && *head != '\0' && !(*head == '\n' && *(head + 1) == '\0')) {
+      const char *tail;
       if ((tail = strchr(head, '\n')) == NULL)
         tail = strchr(head, '\0');
       NK_ASSERT(tail != NULL);
@@ -344,13 +347,12 @@ static int serialize_address(FILE *fp, const char *section, unsigned long addres
                              unsigned char *data, int datasize)
 {
   unsigned long offset;
-  int err;
 
   /* find section, if provided */
   assert(fp != NULL);
   if (strlen(section) > 0) {
     unsigned long length;
-    err = elf_section_by_name(fp, section, &offset, NULL, &length);
+    int err = elf_section_by_name(fp, section, &offset, NULL, &length);
     if (err == ELFERR_NOMATCH) {
       log_addstring("^1Serialization section not found\n");
       return 0;
@@ -398,13 +400,14 @@ static int serialize_match(FILE *fp, const char *match, unsigned long offset,
         int len = 0;
         match += 2;     /* skip '\x' */
         while (len < 2 && isdigit(*match)) {
-          int ch;
+          int ch = -1;
           if (*match >= '0' && *match <= '9')
             ch = *match - '0';
           else if (*match >= 'A' && *match <= 'F')
             ch = *match - 'A' + 10;
           else if (*match >= 'a' && *match <= 'f')
             ch = *match - 'a' + 10;
+          assert(ch >= 0 && ch <= 15);
           val = (val << 4) | ch;
           match++;
           len++;
@@ -527,6 +530,7 @@ int main(int argc, char *argv[])
   char txtSerial[32] = "", txtSerialSize[32] = "";
   char txtConfigFile[256];
   int opt_tpwr = nk_false;
+  int opt_fullerase = nk_false;
   int opt_architecture = 0;
   int opt_serialize = SER_NONE;
   int opt_format = FMT_BIN;
@@ -616,6 +620,7 @@ int main(int argc, char *argv[])
 
           nk_layout_row_dynamic(ctx, ROW_HEIGHT, 1);
           nk_checkbox_label(ctx, "Power Target (3.3V)", &opt_tpwr);
+          nk_checkbox_label(ctx, "Full Flash erase before download", &opt_fullerase);
 
           nk_tree_state_pop(ctx);
         }
@@ -677,6 +682,7 @@ int main(int argc, char *argv[])
           if (opt_architecture >= sizearray(architectures))
             opt_architecture = 0;
           opt_tpwr = (int)ini_getl("Options", "tpwr", 0, txtCfgFile);
+          opt_fullerase = (int)ini_getl("Options", "full-erase", 0, txtCfgFile);
           opt_serialize = (int)ini_getl("Serialize", "option", 0, txtCfgFile);
           ini_gets("Serialize", "address", ".text:0", field, sizearray(field), txtCfgFile);
           if ((ptr = strchr(field, ':')) != NULL) {
@@ -719,13 +725,13 @@ int main(int argc, char *argv[])
         help_active = 1;
       nk_spacing(ctx, 1);
       if (nk_button_label(ctx, "Download") || nk_input_is_key_pressed(&ctx->input, NK_KEY_F5)) {
+        //??? start a state sequence, so that the GUI is updated between the steps
         /* close Options and Serialization, open Status */
         tab_states[TAB_OPTIONS] = NK_MINIMIZED;
         tab_states[TAB_SERIALIZATION] = NK_MINIMIZED;
         tab_states[TAB_STATUS]= NK_MAXIMIZED;
         if (access(txtFilename, 0) == 0) {
           char field[100];
-          int result;
           FILE *fpTgt, *fpWork;
           /* save settings in cache file */
           strcpy(txtCfgFile, txtFilename);
@@ -736,6 +742,7 @@ int main(int argc, char *argv[])
             field[0] = '\0';
           ini_puts("Options", "architecture", field, txtCfgFile);
           ini_putl("Options", "tpwr", opt_tpwr, txtCfgFile);
+          ini_putl("Options", "full-erase", opt_fullerase, txtCfgFile);
           ini_putl("Serialize", "option", opt_serialize, txtCfgFile);
           sprintf(field, "%s:%s", txtSection, txtAddress);
           ini_puts("Serialize", "address", field, txtCfgFile);
@@ -800,7 +807,10 @@ int main(int argc, char *argv[])
           if (result) {
             if (opt_architecture > 0)
               bmp_runscript("memremap", architectures[opt_architecture], NULL);
-            result = bmp_download((fpWork != NULL)? fpWork : fpTgt);
+            if (opt_fullerase)
+              result = bmp_fullerase();
+            if (result)
+              result = bmp_download((fpWork != NULL)? fpWork : fpTgt);
           }
           if (result) {
             if (opt_architecture > 0)
