@@ -8,7 +8,13 @@
 #
 # -------------------------------------------------------------
 
-# Platform-dependend options can be set in makefile.cfg
+# Options to set in makefile.cfg
+#  o  GLFW_INC      the path where the include files for GLFW 3.3 can be found,
+#                   including the -I option;
+#                   for exampe: -I~/develop/glfw-3.3/inc
+#  o  GLFW_LIB      the path where the library for GLFW 3.3 can be found,
+#                   including the -L option
+#                   for exampe: -L~/develop/glfw-3.3/lib
 -include makefile.cfg
 
 
@@ -30,11 +36,11 @@
 CL        = gcc
 CC        = gcc -c
 CFLAGS    = -Wall
-INCLUDE   = -I../glfw-3.3/include
+INCLUDE   = $(GLFW_INC)
 
 ####### Linker
 LNK       = gcc
-LFLAGS    = -L../glfw-3.3/lib
+LFLAGS    = $(GLFW_LIB)
 
 
 ifdef NDEBUG

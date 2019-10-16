@@ -82,7 +82,7 @@ OBJLIST_BMTRACE = bmtrace.obj bmscan.obj bmp-script.obj bmp-support.obj crc32.ob
 project : bmdebug.exe bmflash.exe bmtrace.exe bmscan.exe elf-postlink.exe tracegen.exe
 
 depend :
-    mkmf -c -dS -s -f makefile.dep $(OBJLIST_BMDEBUG) $(OBJLIST_BMFLASH) $(OBJLIST_BMTRACE)
+	makedepend -b -fmakefile.dep $(OBJLIST_BMDEBUG:.obj=.c) $(OBJLIST_BMFLASH:.obj=.c) $(OBJLIST_BMTRACE:.obj=.c)
 
 
 ##### C files #####

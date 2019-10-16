@@ -40,11 +40,11 @@ endif
 CL        := $(CDIR_BIN)gcc
 CC        := $(CDIR_BIN)gcc -c
 CFLAGS    := -Wall
-INCLUDE   := -I$(WINUSB_INC)
+INCLUDE   := $(WINUSB_INC)
 
 ####### Linker
 LNK       := $(CDIR_BIN)gcc
-LFLAGS    := -L$(WINUSB_LIB)
+LFLAGS    := $(WINUSB_LIB)
 
 
 ifdef NDEBUG
