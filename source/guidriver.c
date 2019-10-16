@@ -142,8 +142,9 @@ struct nk_context* guidriver_init(const char *caption, int width, int height,
       i += 6;
     } else {
       assert(0);
+      tch = 0;  /* to avoid a compiler warning about a potentionally uninitialized variable */
     }
-    wcapt[j++] = tch;
+    wcapt[j++] = (wchar_t)tch;
   }
   wcapt[j] = 0;
 

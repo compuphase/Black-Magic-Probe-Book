@@ -151,15 +151,15 @@ size_t gdbrsp_recv(char *buffer, size_t size, int timeout)
           rs232_send((const unsigned char*)"+", 1);
           count = tail - head;  /* number of payload bytes */
           if (count >= 3 && cache[head] == 'O' && isxdigit(cache[head + 1]) && isxdigit(cache[head + 2])) {
-            int c;
+            unsigned c;
             /* convert the first letter to a lower-case 'o', so that an output
                message of the single letter 'K' won't be mis-interpreted as 'OK' */
             buffer[0] = 'o';
             count = (count + 1) / 2;
             for (c = 1, idx = head + 1; c < count && c < size; c += 1, idx += 2)
-              buffer[c] = (hex2int(cache[idx]) << 4) | hex2int(cache[idx + 1]);
+              buffer[c] = (char)((hex2int(cache[idx]) << 4) | hex2int(cache[idx + 1]));
           } else {
-            int c;
+            unsigned c;
             for (c = 0, idx = head; c < count && c < size; c += 1, idx += 1) {
               if (cache[idx] == '}') {
                 /* escaped binary encoding */
@@ -272,7 +272,7 @@ int gdbrsp_xmit(const char *buffer, int size)
   }
   /* add checksum */
   sum = 0;
-  for (idx = 1; idx < size - 3; idx++)
+  for (idx = 1; idx < (unsigned)size - 3; idx++)
     sum += fullbuffer[idx];     /* run over fullbuffer, so that the checksum is over the translated buffer */
   *(fullbuffer + size - 3) = '#';
   *(fullbuffer + size - 2) = int2hex((sum >> 4) & 0x0f);

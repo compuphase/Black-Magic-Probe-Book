@@ -92,9 +92,9 @@ int rs232_open(const char *port, unsigned baud, int databits, int stopbits, int 
     if (databits>0)
       dcb.ByteSize=8;
     if (stopbits>0)
-      dcb.StopBits=(stopbits==2)? TWOSTOPBITS : ONESTOPBIT;
+      dcb.StopBits=(stopbits==2) ? TWOSTOPBITS : ONESTOPBIT;
     if (parity>0)
-      dcb.Parity=parity-1;
+      dcb.Parity=(BYTE)(parity-1);
     dcb.fDtrControl=DTR_CONTROL_DISABLE;
     dcb.fOutX=FALSE;
     dcb.fInX=FALSE;

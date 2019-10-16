@@ -29,8 +29,12 @@
 #if defined __linux__
   #include <bsd/string.h>
 #endif
-#if defined __MINGW32__ || defined __MINGW64__
+#if defined __MINGW32__ || defined __MINGW64__ || defined _MSC_VER
   #include "strlcpy.h"
+  #if defined _MSC_VER
+    #define strdup(s)       _strdup(s)
+    #define stricmp(s1,s2)  _stricmp((s1),(s2))
+  #endif
 #endif
 
 #include "parsetsdl.h"
@@ -298,9 +302,9 @@ static CTF_TYPE *type_init(CTF_TYPE *root, const char *name, int typeclass, int 
     memset(item, 0, sizeof(CTF_TYPE));
     if (name != NULL)
       strlcpy(item->name, name, CTF_NAME_LENGTH);
-    item->typeclass = typeclass;
+    item->typeclass = (uint8_t)typeclass;
     item->size = size;
-    item->flags = flags;
+    item->flags = (uint8_t)flags;
     assert(root != NULL);
     item->next = root->next;
     root->next = item;
@@ -491,7 +495,7 @@ static int token_next(void)
   }
 
   assert(linebuffer != NULL);
-  if (linebuffer_index >= strlen(linebuffer)) {
+  if ((unsigned)linebuffer_index >= strlen(linebuffer)) {
     if (!readline_next()) {
       recent_token.id = TOK_EOF;
       return recent_token.id;
@@ -522,9 +526,10 @@ static int token_next(void)
       if (linebuffer[linebuffer_index] == '.') {
         double mult = 0.1;
         recent_token.id = TOK_LFLOAT;
+        recent_token.real = recent_token.number;
         linebuffer_index++;
         while (isdigit(linebuffer[linebuffer_index])) {
-          recent_token.number += (linebuffer[linebuffer_index] - '0') * mult;
+          recent_token.real += (linebuffer[linebuffer_index] - '0') * mult;
           mult /= 10.0;
           linebuffer_index++;
         }
@@ -638,7 +643,7 @@ static long token_getlong(void)
   return recent_token.number;
 }
 
-static long token_getreal(void)
+static double token_getreal(void)
 {
   return recent_token.real;
 }
@@ -1154,15 +1159,15 @@ static void parse_packet_header(void)
       if (strcmp(identifier, "magic") == 0) {
         if (type.typeclass != CLASS_INTEGER || type.length != 0)
           ctf_error(CTFERR_WRONGTYPE);
-        ctf_packet.header.magic_size = type.size;
+        ctf_packet.header.magic_size = (uint8_t)type.size;
       } else if (strcmp(identifier, "stream.id") == 0 || strcmp(identifier, "stream_id") == 0) {
         if (type.typeclass != CLASS_INTEGER || type.length != 0)
           ctf_error(CTFERR_WRONGTYPE);
-        ctf_packet.header.streamid_size = type.size;
+        ctf_packet.header.streamid_size = (uint8_t)type.size;
       } else if (strcmp(identifier, "uuid") == 0) {
         if (type.typeclass != CLASS_INTEGER || type.size != 8 || type.length == 0)
         ctf_error(CTFERR_WRONGTYPE);
-        ctf_packet.header.uuid_size = type.length * type.size;
+        ctf_packet.header.uuid_size = (uint8_t)(type.length * type.size);
       } else {
         ctf_error(CTFERR_INVALIDFIELD, identifier);
       }
@@ -1181,15 +1186,15 @@ static void parse_packet_header(void)
         if (strcmp(field->identifier, "magic")== 0) {
           if (field->typeclass != CLASS_INTEGER || field->length != 0)
             ctf_error(CTFERR_WRONGTYPE);
-          ctf_packet.header.magic_size = field->size;
+          ctf_packet.header.magic_size = (uint8_t)field->size;
         } else if (strcmp(field->identifier, "stream.id") == 0 || strcmp(field->identifier, "stream_id") == 0) {
           if (field->typeclass != CLASS_INTEGER || field->length != 0)
             ctf_error(CTFERR_WRONGTYPE);
-          ctf_packet.header.streamid_size = field->size;
+          ctf_packet.header.streamid_size = (uint8_t)field->size;
         } else if (strcmp(field->identifier, "uuid") == 0) {
           if (field->typeclass != CLASS_INTEGER || field->size != 8 || field->length == 0)
           ctf_error(CTFERR_WRONGTYPE);
-          ctf_packet.header.uuid_size = field->length * field->size;
+          ctf_packet.header.uuid_size = (uint8_t)(field->length * field->size);
         } else {
           ctf_error(CTFERR_INVALIDFIELD, field->identifier);
         }
@@ -1233,11 +1238,11 @@ static void parse_event_header(CTF_EVENT_HEADER *evthdr, CTF_TYPE **clock)
       if (strcmp(identifier, "event.id") == 0 || strcmp(identifier, "id") == 0) {
         if (type.typeclass != CLASS_INTEGER || type.length != 0)
           ctf_error(CTFERR_WRONGTYPE);
-        evthdr->header.id_size = type.size;
+        evthdr->header.id_size = (uint8_t)type.size;
       } else if (strcmp(identifier, "timestamp") == 0) {
         if (type.typeclass != CLASS_INTEGER || type.length != 0)
           ctf_error(CTFERR_WRONGTYPE);
-        evthdr->header.timestamp_size = type.size;
+        evthdr->header.timestamp_size = (uint8_t)type.size;
         /* store a reference to the clock (a clock type must always be created
            with typealias, because of the "map" attribute, so the type always
            has a name) */
@@ -1261,11 +1266,11 @@ static void parse_event_header(CTF_EVENT_HEADER *evthdr, CTF_TYPE **clock)
         if (strcmp(field->identifier, "event.id")== 0 || strcmp(field->identifier, "id")== 0) {
           if (field->typeclass != CLASS_INTEGER || field->length != 0)
             ctf_error(CTFERR_WRONGTYPE);
-          evthdr->header.id_size = field->size;
+          evthdr->header.id_size = (uint8_t)field->size;
         } else if (strcmp(field->identifier, "timestamp") == 0) {
           if (field->typeclass != CLASS_INTEGER || field->length != 0)
             ctf_error(CTFERR_WRONGTYPE);
-          evthdr->header.timestamp_size = field->size;
+          evthdr->header.timestamp_size = (uint8_t)field->size;
           /* store a reference to the clock (a clock type must always be created
              with typealias, because of the "map" attribute, so the type always
              has a name) */
@@ -1533,7 +1538,7 @@ static void parse_trace(void)
             ptr++;
           if (!isxdigit(ptr[0]) || !isxdigit(ptr[1]))
             break;
-          ctf_trace.uuid[idx] = (hexdigit(ptr[0]) << 4) | hexdigit(ptr[1]);
+          ctf_trace.uuid[idx] = (uint8_t)((hexdigit(ptr[0]) << 4) | hexdigit(ptr[1]));
         }
       }
       token_need(';');
@@ -1596,7 +1601,7 @@ static void parse_clock(void)
             ptr++;
           if (!isxdigit(ptr[0]) || !isxdigit(ptr[1]))
             break;
-          clock->uuid[idx] = (hexdigit(ptr[0]) << 4) | hexdigit(ptr[1]);
+          clock->uuid[idx] = (uint8_t)((hexdigit(ptr[0]) << 4) | hexdigit(ptr[1]));
         }
       } else if (strcmp(identifier, "freq") == 0) {
         token_need(TOK_LINTEGER);

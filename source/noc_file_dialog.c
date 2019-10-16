@@ -97,6 +97,10 @@ const char *noc_file_dialog_open(int flags,
 #include <windows.h>
 #include <commdlg.h>
 
+#if defined _MSC_VER
+    #define strdup(s)       _strdup(s)
+#endif
+
 const char *noc_file_dialog_open(int flags,
                                  const char *filters,
                                  const char *default_path,

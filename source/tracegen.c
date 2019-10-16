@@ -29,6 +29,8 @@
 
 #if defined __linux__
   #include <bsd/string.h>
+#elif defined __MINGW32__ || defined __MINGW64__ || defined _MSC_VER
+  #include "strlcpy.h"
 #endif
 
 #include "parsetsdl.h"
@@ -51,6 +53,7 @@
 
 int ctf_error_notify(int code, int linenr, const char *message)
 {
+  (void)code; /* unused */
   if (linenr > 0)
     fprintf(stderr, "ERROR on line %d: ", linenr);
   else

@@ -19,7 +19,7 @@
 #if defined _WIN32
   #define WIN32_LEAN_AND_MEAN
   #include <windows.h>
-  #if defined __MINGW32__ || defined __MINGW64__
+  #if defined __MINGW32__ || defined __MINGW64__ || defined _MSC_VER
     #include "strlcpy.h"
   #endif
 #else
@@ -453,7 +453,7 @@ int bmp_download(FILE *fp)
           for (idx = 0; idx < numbytes; idx++)
             if (data[pos + idx] == '$' || data[pos + idx] == '#' || data[pos + idx] == '}')
               esccount += 1;
-          if (numbytes + esccount + prefixlen <= pktsize)
+          if (numbytes + esccount + prefixlen <= (unsigned)pktsize)
             break;
           numbytes -= 16;
         }
@@ -520,7 +520,7 @@ int bmp_verify(FILE *fp)
     }
     fseek(fp, offset, SEEK_SET);
     fread(data, 1, filesize, fp);
-    crc_src = crc32(~0, data, filesize);
+    crc_src = (unsigned)crc32((uint32_t)~0, data, filesize);
     free(data);
     /* request CRC from Black Magic Probe */
     sprintf(cmd, "qCRC:%lx,%lx",paddr,filesize);

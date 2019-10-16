@@ -27,6 +27,16 @@
   #if defined __MINGW32__ || defined __MINGW64__
     #include <sys/stat.h>
     #include "strlcpy.h"
+  #elif defined _MSC_VER
+    #include "strlcpy.h"
+    #include <sys/stat.h>
+    #define stat _stat
+    #define access(p,m)       _access((p),(m))
+    #define memicmp(p1,p2,c)  _memicmp((p1),(p2),(c))
+    #define mkdir(p)          _mkdir(p)
+    #define strdup(s)         _strdup(s)
+    #define stricmp(s1,s2)    _stricmp((s1),(s2))
+    #define strnicmp(s1,s2,c) _strnicmp((s1),(s2),(c))
   #endif
 #elif defined __linux__
   #include <alloca.h>
@@ -432,8 +442,8 @@ static void console_input(const char *text)
 
 static char **sources_namelist = NULL;
 static char **sources_pathlist = NULL;
-static int sources_size = 0;
-static int sources_count = 0;
+static unsigned sources_size = 0;
+static unsigned sources_count = 0;
 
 static void sources_add(const char *filename, const char *filepath)
 {
@@ -443,7 +453,7 @@ static void sources_add(const char *filename, const char *filepath)
 
   /* check whether the source already exists */
   if (sources_namelist != NULL) {
-    int idx;
+    unsigned idx;
     for (idx = 0; idx < sources_count; idx++) {
       if (strcmp(sources_namelist[idx], filename) == 0) {
         const char *p1 = (sources_pathlist[idx] != NULL) ? sources_pathlist[idx] : "";
@@ -484,7 +494,7 @@ static void sources_add(const char *filename, const char *filepath)
  */
 static void sources_clear(int freelists)
 {
-  int idx;
+  unsigned idx;
 
   if (sources_size == 0) {
     assert(sources_count == 0);
@@ -587,7 +597,7 @@ static int check_sources_tstamps(const char *elffile)
 
   if (stat(elffile, &fstat) >= 0) {
     time_t tstamp_elf = fstat.st_mtime;
-    int idx;
+    unsigned idx;
     for (idx = 0; idx < sources_count; idx++) {
       const char *fname = (sources_pathlist[idx] != NULL) ? sources_pathlist[idx] : sources_namelist[idx];
       if (stat(fname, &fstat) >= 0 && fstat.st_mtime > tstamp_elf)
@@ -599,7 +609,7 @@ static int check_sources_tstamps(const char *elffile)
 
 static int source_lookup(const char *filename)
 {
-  int idx;
+  unsigned idx;
   const char *base;
 
   if (sources_namelist == NULL)
@@ -639,7 +649,7 @@ static int source_load(int srcindex)
 
   source_clear();
   assert(srcindex >= 0);
-  if (srcindex >= sources_count)
+  if (srcindex >= (int)sources_count)
     return 0;           /* new file index is invalid */
 
   fp = fopen(sources_pathlist[srcindex], "rt");
@@ -777,7 +787,7 @@ static int breakpoint_parse(const char *gdbresult)
         if ((start=fieldfind(line, "number")) != NULL) {
           start = fieldvalue(start, NULL);
           assert(start != NULL);
-          bp->number = strtol(start, NULL, 10);
+          bp->number = (short)strtol(start, NULL, 10);
         }
         if ((start=fieldfind(line, "type")) != NULL) {
           start = fieldvalue(start, NULL);
@@ -807,7 +817,7 @@ static int breakpoint_parse(const char *gdbresult)
             len = sizearray(filename) - 1;
           strncpy(filename, start, len);
           filename[len] = '\0';
-          bp->filenr = source_lookup(filename);
+          bp->filenr = (short)source_lookup(filename);
         }
         if ((start=fieldfind(line, "line")) != NULL) {
           start = fieldvalue(start, NULL);
@@ -919,7 +929,7 @@ static int watch_add(const char *gdbresult, const char *expr)
   return 1;
 }
 
-static int watch_del(int seqnr)
+static int watch_del(unsigned seqnr)
 {
   WATCH *watch, *prev;
 
@@ -1594,14 +1604,15 @@ static void console_widget(struct nk_context *ctx, const char *id, float rowheig
   /* black background on group */
   nk_style_push_color(ctx, &ctx->style.window.fixed_background.data.color, nk_rgba(20, 29, 38, 225));
   if (nk_group_begin_titled(ctx, id, "", NK_WINDOW_BORDER)) {
-    int lines = 0, lineheight = 0;
+    int lines = 0;
+    float lineheight = 0;
     for (item = consolestring_root.next; item != NULL; item = item->next) {
-      int textwidth;
+      float textwidth;
       if (item->flags & console_hiddenflags)
         continue;
       NK_ASSERT(item->text != NULL);
       nk_layout_row_begin(ctx, NK_STATIC, rowheight, 1);
-      if (lineheight == 0) {
+      if (lineheight <= 0.1) {
         struct nk_rect rcline = nk_layout_widget_bounds(ctx);
         lineheight = rcline.h;
       }
@@ -1636,10 +1647,10 @@ static void console_widget(struct nk_context *ctx, const char *id, float rowheig
     if (lines > 0) {
       /* calculate scrolling: if number of lines change, scroll to the last line */
       int ypos = scrollpos;
-      int widgetlines = (rcwidget.h - 2 * stwin->padding.y) / lineheight;
+      int widgetlines = (int)((rcwidget.h - 2 * stwin->padding.y) / lineheight);
       if (lines != linecount) {
         linecount = lines;
-        ypos = (lines - widgetlines + 1) * lineheight;
+        ypos = (int)((lines - widgetlines + 1) * lineheight);
       }
       if (ypos < 0)
         ypos = 0;
@@ -1656,8 +1667,8 @@ static int source_cursorfile = 0; /* file and line in the view and that the curs
 static int source_cursorline = 0;
 static int source_execfile = 0;   /* file and line that the execution point is at */
 static int source_execline = 0;
-static int source_lineheight = 0;
-static int source_charwidth = 0;
+static float source_lineheight = 0;
+static float source_charwidth = 0;
 static int source_vp_rows = 0;
 
 /* source_widget() draws the text of a source file */
@@ -1684,15 +1695,15 @@ static void source_widget(struct nk_context *ctx, const char *id, float rowheigh
   /* black background on group */
   nk_style_push_color(ctx, &ctx->style.window.fixed_background.data.color, nk_rgba(20, 29, 38, 225));
   if (nk_group_begin_titled(ctx, id, "", NK_WINDOW_BORDER)) {
-    int lines = 0;
-    int maxwidth = 0, maxlen = 0;
+    int lines = 0, maxlen = 0;
+    float maxwidth = 0;
     for (item = sourcefile_root.next; item != NULL; item = item->next) {
-      int textwidth;
+      float textwidth;
       BREAKPOINT *bkpt;
       lines++;
       NK_ASSERT(item->text != NULL);
       nk_layout_row_begin(ctx, NK_STATIC, rowheight, 4);
-      if (source_lineheight == 0) {
+      if (source_lineheight <= 0.1) {
         struct nk_rect rcline = nk_layout_widget_bounds(ctx);
         source_lineheight = rcline.h;
       }
@@ -1753,7 +1764,7 @@ static void source_widget(struct nk_context *ctx, const char *id, float rowheigh
     nk_group_end(ctx);
     if (maxlen > 0)
       source_charwidth = maxwidth / maxlen;
-    source_vp_rows = (rcwidget.h - 2 * stwin->padding.y) / source_lineheight;
+    source_vp_rows = (int)((rcwidget.h - 2 * stwin->padding.y) / source_lineheight);
     if (lines > 0) {
       if (saved_execline != source_execline || saved_execfile != source_execfile) {
         saved_execfile = source_execfile;
@@ -1764,15 +1775,15 @@ static void source_widget(struct nk_context *ctx, const char *id, float rowheigh
         int topline;
         unsigned xscroll, yscroll;
         nk_group_get_scroll(ctx, id, &xscroll, &yscroll);
-        topline = yscroll / source_lineheight;
+        topline = (int)(yscroll / source_lineheight);
         if (source_cursorline < topline + 1) {
           topline = source_cursorline - 1;
           if (topline < 0)
             topline = 0;
-          nk_group_set_scroll(ctx, id, 0, topline * source_lineheight);
+          nk_group_set_scroll(ctx, id, 0, (nk_uint)(topline * source_lineheight));
         } else if (source_cursorline >= topline + source_vp_rows && lines > 3) {
           topline = source_cursorline - source_vp_rows;
-          nk_group_set_scroll(ctx, id, 0, topline * source_lineheight);
+          nk_group_set_scroll(ctx, id, 0, (nk_uint)(topline * source_lineheight));
         }
         saved_cursorline = source_cursorline;
       }
@@ -1804,7 +1815,7 @@ static int source_mouse2char(struct nk_context *ctx, const char *id,
   if (source_lineheight <= 0)
     return 0;
   if (row != NULL)
-    *row = ((int)(mouse->pos.y - widget_bounds.y) + yscroll) / source_lineheight + 1;
+    *row = (int)(((mouse->pos.y - widget_bounds.y) + yscroll) / source_lineheight) + 1;
   if (col != NULL) {
     float offs = 2 * rowheight + rowheight / 2 + 2 * ctx->style.window.spacing.x;
     float c = mouse->pos.x - widget_bounds.x - offs + xscroll;
@@ -1834,7 +1845,7 @@ static int source_getsymbol(char *symname, size_t symlen, int row, int col)
   if (item == NULL)
     return 0;
   assert(item->text != NULL);
-  if (col > strlen(item->text))
+  if ((unsigned)col > strlen(item->text))
     return 0;
   /* when moving to the left, skip '.' and '->' to complete the structure field
      with the structure variable; also skip '*' so that pointing at '*ptr' shows
@@ -1864,7 +1875,7 @@ static int source_getsymbol(char *symname, size_t symlen, int row, int col)
   if (nest != 0)
     return 0;
   len = tail - head;
-  if (len >= symlen)
+  if ((unsigned)len >= symlen)
     return 0; /* full symbol name does not fit, no need to try to look it up */
   strncpy(symname, head, len);
   symname[len] = '\0';
@@ -1985,7 +1996,7 @@ static int handle_list_cmd(const char *command)
         return 1;
       }
     } else {
-      int line, idx;                            /* "list filename" & "list filename:#" */
+      unsigned line, idx;                       /* "list filename" & "list filename:#" */
       char *p2 = strchr(p1, ':');
       if (p2 != NULL) {
         *p2++ = '\0';
@@ -2000,7 +2011,7 @@ static int handle_list_cmd(const char *command)
             break;
       } else {
         /* no extension, ignore extension on match */
-        int len = strlen(p1);
+        unsigned len = strlen(p1);
         for (idx = 0; idx < sources_count; idx++)
           if (strncmp(sources_namelist[idx], p1, len) == 0 && sources_namelist[idx][len] == '.')
             break;
@@ -2272,7 +2283,7 @@ int main(int argc, char *argv[])
   char valstr[128];
   int canvas_width, canvas_height;
   enum nk_collapse_states tab_states[TAB_COUNT];
-  int tab_heights[TAB_COUNT];
+  float tab_heights[TAB_COUNT];
   int opt_tpwr = nk_false;
   int opt_allmsg = nk_false;
   int opt_autodownload = nk_true;
@@ -2380,6 +2391,7 @@ int main(int argc, char *argv[])
   btn_folder = guidriver_image_from_memory(btn_folder_data, btn_folder_datasize);
 
   while (curstate != STATE_QUIT) {
+    /* handle state */
     int waitidle;
     if (!is_idle()) {
       switch (curstate) {
@@ -3061,7 +3073,7 @@ int main(int argc, char *argv[])
       waitidle = 0;
     }
 
-    /* Input */
+    /* handle user input */
     nk_input_begin(ctx);
     if (!guidriver_poll(waitidle)) /* if text was added to the console, don't wait in guidriver_poll(); system is NOT idle */
       break;
@@ -3152,9 +3164,9 @@ int main(int argc, char *argv[])
           nk_layout_row_push(ctx, combo_width);
           if (sources_count > 0) {
             int curfile = source_cursorfile;
-            if (curfile < 0 || curfile >= sources_count)
+            if (curfile < 0 || (unsigned)curfile >= sources_count)
               curfile = 0;
-            source_cursorfile = nk_combo(ctx, (const char**)sources_namelist, sources_count, curfile, COMBOROW_CY, nk_vec2(combo_width, 10*ROW_HEIGHT));
+            source_cursorfile = nk_combo(ctx, (const char**)sources_namelist, sources_count, curfile, (int)COMBOROW_CY, nk_vec2(combo_width, 10*ROW_HEIGHT));
             if (source_cursorfile != curfile)
               source_cursorline = 1;  /* reset scroll */
           }
@@ -3320,7 +3332,7 @@ int main(int argc, char *argv[])
       /* right column */
       if (nk_group_begin(ctx, "right", NK_WINDOW_BORDER)) {
         if (nk_tree_state_push(ctx, NK_TREE_TAB, "Configuration", &tab_states[TAB_CONFIGURATION])) {
-          int edtwidth;
+          float edtwidth;
           char basename[256], *p;
           bounds = nk_widget_bounds(ctx);
           edtwidth = bounds.w - 65;
@@ -3401,30 +3413,31 @@ int main(int argc, char *argv[])
         if (nk_tree_state_push(ctx, NK_TREE_TAB, "Breakpoints", &tab_states[TAB_BREAKPOINTS])) {
           BREAKPOINT *bp;
           char label[300];
-          int val, width;
+          float width = 0;
           struct nk_user_font const *font = ctx->style.font;
           /* find longest breakpoint description */
-          width = 0;
           for (bp = breakpoint_root.next; bp != NULL; bp = bp->next) {
+            float w;
             if (bp->flags & BKPTFLG_FUNCTION) {
               assert(bp->name != NULL);
               strlcpy(label, bp->name, sizearray(label));
             } else {
-              assert(bp->filenr < sources_count);
+              assert((unsigned)bp->filenr < sources_count);
               sprintf(label, "%s : %d", sources_namelist[bp->filenr], bp->linenr);
             }
-            val = font->width(font->userdata, font->height, label, strlen(label)) + 10;
-            if (val > width)
-              width = val;
+            w = font->width(font->userdata, font->height, label, strlen(label)) + 10;
+            if (w > width)
+              width = w;
           }
           for (bp = breakpoint_root.next; bp != NULL; bp = bp->next) {
+            int en;
             nk_layout_row_begin(ctx, NK_STATIC, ROW_HEIGHT, 3);
             nk_layout_row_push(ctx, 30);
             sprintf(label, "%d", bp->number);
-            val = bp->enabled;
-            if (nk_checkbox_label(ctx, label, &val)) {
+            en = bp->enabled;
+            if (nk_checkbox_label(ctx, label, &en)) {
               curstate = STATE_BREAK_TOGGLE;
-              stateparam[0] = (val == 0) ? STATEPARAM_BP_DISABLE : STATEPARAM_BP_ENABLE;
+              stateparam[0] = (en == 0) ? STATEPARAM_BP_DISABLE : STATEPARAM_BP_ENABLE;
               stateparam[1] = bp->number;
             }
             nk_layout_row_push(ctx, width);
@@ -3432,7 +3445,7 @@ int main(int argc, char *argv[])
               assert(bp->name != NULL);
               strlcpy(label, bp->name, sizearray(label));
             } else {
-              assert(bp->filenr < sources_count);
+              assert((unsigned)bp->filenr < sources_count);
               sprintf(label, "%s : %d", sources_namelist[bp->filenr], bp->linenr);
             }
             nk_label(ctx, label, NK_TEXT_LEFT);
@@ -3453,7 +3466,7 @@ int main(int argc, char *argv[])
 
         if (nk_tree_state_push(ctx, NK_TREE_TAB, "Watches", &tab_states[TAB_WATCHES])) {
           WATCH *watch;
-          int namewidth, valwidth, w;
+          float namewidth, valwidth, w;
           char label[20];
           struct nk_user_font const *font = ctx->style.font;
           /* find longest watch expression and value */
@@ -3493,7 +3506,7 @@ int main(int argc, char *argv[])
               stateparam[1] = watch->seqnr;
             }
           }
-          if (namewidth == 0) {
+          if (namewidth <= 0.1) {
             /* this means there are no watches */
             nk_layout_row_dynamic(ctx, ROW_HEIGHT, 1);
             nk_label(ctx, "No watches", NK_TEXT_ALIGN_CENTERED | NK_TEXT_ALIGN_MIDDLE);
@@ -3616,7 +3629,7 @@ int main(int argc, char *argv[])
   for (idx = 0; idx < TAB_COUNT; idx++) {
     char key[40];
     sprintf(key, "view%d", idx);
-    sprintf(valstr, "%d %d", tab_states[idx], tab_heights[idx]);
+    sprintf(valstr, "%d %d", tab_states[idx], (int)tab_heights[idx]);
     ini_puts("Settings", key, valstr, txtConfigFile);
   }
   ini_putl("Settings", "tpwr", opt_tpwr, txtConfigFile);

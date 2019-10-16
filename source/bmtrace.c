@@ -32,6 +32,10 @@
   #include <malloc.h>
   #if defined __MINGW32__ || defined __MINGW64__
     #include "strlcpy.h"
+  #elif defined _MSC_VER
+    #include "strlcpy.h"
+    #define access(p,m)       _access((p),(m))
+    #define mkdir(p)          _mkdir(p)
   #endif
 #elif defined __linux__
   #include <alloca.h>
@@ -69,9 +73,7 @@
 #if defined __linux__ || defined __FreeBSD__ || defined __APPLE__
   #define stricmp(s1,s2)    strcasecmp((s1),(s2))
 #endif
-#if defined _MSC_VER
-  #define alloca(n) _alloca(n)
-#endif
+
 #if !defined sizearray
   #define sizearray(e)    (sizeof(e) / sizeof((e)[0]))
 #endif
@@ -383,13 +385,13 @@ int main(void)
         nk_label(ctx, "CPU clock", NK_TEXT_ALIGN_RIGHT | NK_TEXT_ALIGN_MIDDLE);
         nk_layout_row_push(ctx, 80);
         result = nk_edit_string_zero_terminated(ctx, NK_EDIT_FIELD | NK_EDIT_SIG_ENTER, cpuclock_str, sizearray(cpuclock_str), nk_filter_decimal);
-        if ((result & NK_EDIT_COMMITED) != 0 || ((result & NK_EDIT_DEACTIVATED) && strtol(cpuclock_str, NULL, 10) != cpuclock))
+        if ((result & NK_EDIT_COMMITED) != 0 || ((result & NK_EDIT_DEACTIVATED) && strtoul(cpuclock_str, NULL, 10) != cpuclock))
           reinitialize = 1;
         nk_layout_row_push(ctx, 60);
         nk_label(ctx, "Bit rate", NK_TEXT_ALIGN_RIGHT | NK_TEXT_ALIGN_MIDDLE);
         nk_layout_row_push(ctx, 75);
         result = nk_edit_string_zero_terminated(ctx, NK_EDIT_FIELD | NK_EDIT_SIG_ENTER, bitrate_str, sizearray(bitrate_str), nk_filter_decimal);
-        if ((result & NK_EDIT_COMMITED) != 0 || ((result & NK_EDIT_DEACTIVATED) && strtol(bitrate_str, NULL, 10) != bitrate))
+        if ((result & NK_EDIT_COMMITED) != 0 || ((result & NK_EDIT_DEACTIVATED) && strtoul(bitrate_str, NULL, 10) != bitrate))
           reinitialize = 1;
       }
 

@@ -1,6 +1,7 @@
 # -------------------------------------------------------------
 #
 #       Makefile for BlackMagic utilities
+#       o  uses GCC & GNU Make
 #
 #       For release version, use NDEBUG=
 #       Do "make depend" to update dependencies in this makefile

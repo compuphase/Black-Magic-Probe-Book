@@ -41,7 +41,7 @@
 #include <windows.h>
 #include <shellapi.h>
 #include <shlobj.h>
-#if defined __MINGW32__ || defined __MINGW64__
+#if defined __MINGW32__ || defined __MINGW64__ || defined _MSC_VER
   #include "strlcpy.h"
 #endif
 
@@ -98,20 +98,20 @@ static BOOL GetShellFolder(int FolderID, LPTSTR pszSelectedDir, size_t MaxPathLe
   if (hinstShell == NULL)
     return FALSE;
 
-  xSHGetFolderPath = (void*)GetProcAddress(hinstShell, SHGETFOLDERPATH);
+  xSHGetFolderPath = (fpSHGetFolderPath)GetProcAddress(hinstShell, SHGETFOLDERPATH);
   if (xSHGetFolderPath == NULL) {
     /* new function is not present in this DLL (probably SHELL32.DLL), try again
        with SHFOLDER.DLL */
     FreeLibrary(hinstShell);
     hinstShell = LoadLibrary(_T("shfolder.dll"));
     if (hinstShell != NULL)
-      xSHGetFolderPath = (void*)GetProcAddress(hinstShell, SHGETFOLDERPATH);
+      xSHGetFolderPath = (fpSHGetFolderPath)GetProcAddress(hinstShell, SHGETFOLDERPATH);
   } /* if */
 
   if (xSHGetFolderPath == NULL) {
     /* new function is not present in either DLL, try the older function */
     if (hinstShell != NULL)
-      xSHGetSpecialFolderLocation = (void*)GetProcAddress(hinstShell, _T("SHGetSpecialFolderLocation"));
+      xSHGetSpecialFolderLocation = (fpSHGetSpecialFolderLocation)GetProcAddress(hinstShell, _T("SHGetSpecialFolderLocation"));
     if (xSHGetSpecialFolderLocation == NULL) {
       /* older function is not present in this DLL (possibly SHFOLDER.DLL),
        * try the SHELL32.DLL
@@ -121,7 +121,7 @@ static BOOL GetShellFolder(int FolderID, LPTSTR pszSelectedDir, size_t MaxPathLe
       hinstShell = LoadLibrary(_T("shell32.dll"));
       if (hinstShell == NULL)
         return FALSE;
-      xSHGetSpecialFolderLocation = (void*)GetProcAddress(hinstShell, _T("SHGetSpecialFolderLocation"));
+      xSHGetSpecialFolderLocation = (fpSHGetSpecialFolderLocation)GetProcAddress(hinstShell, _T("SHGetSpecialFolderLocation"));
       if (xSHGetSpecialFolderLocation == NULL) {
         FreeLibrary(hinstShell);
         return FALSE;

@@ -26,6 +26,11 @@
   #include <io.h>
   #if defined __MINGW32__ || defined __MINGW64__
     #include "strlcpy.h"
+  #elif defined _MSC_VER
+    #include "strlcpy.h"
+    #define access(p,m)       _access((p),(m))
+    #define mkdir(p)          _mkdir(p)
+    #define stricmp(s1,s2)    _stricmp((s1),(s2))
   #endif
 #elif defined __linux__
   #include <unistd.h>
@@ -168,7 +173,7 @@ static int log_widget(struct nk_context *ctx, const char *id, const char *conten
   bkgnd = stwin->fixed_background;
   stwin->fixed_background = nk_style_item_color(nk_rgba(20, 29, 38, 225));
   if (nk_group_begin_titled(ctx, id, "", NK_WINDOW_BORDER)) {
-    int lineheight = 0;
+    float lineheight = 0;
     const char *head = content;
     while (head != NULL && *head != '\0' && !(*head == '\n' && *(head + 1) == '\0')) {
       const char *tail;
@@ -176,7 +181,7 @@ static int log_widget(struct nk_context *ctx, const char *id, const char *conten
         tail = strchr(head, '\0');
       NK_ASSERT(tail != NULL);
       nk_layout_row_dynamic(ctx, rowheight, 1);
-      if (lineheight == 0) {
+      if (lineheight <= 0.1) {
         struct nk_rect rcline = nk_layout_widget_bounds(ctx);
         lineheight = rcline.h;
       }
@@ -197,11 +202,11 @@ static int log_widget(struct nk_context *ctx, const char *id, const char *conten
     nk_group_end(ctx);
     if (scrollpos != NULL) {
       /* calculate scrolling */
-      int widgetlines = (rcwidget.h - 2 * stwin->padding.y) / lineheight;
-      int ypos = (lines - widgetlines + 1) * lineheight;
+      int widgetlines = (int)((rcwidget.h - 2 * stwin->padding.y) / lineheight);
+      int ypos = (int)((lines - widgetlines + 1) * lineheight);
       if (ypos < 0)
         ypos = 0;
-      if (ypos != *scrollpos) {
+      if ((unsigned)ypos != *scrollpos) {
         nk_group_set_scroll(ctx, id, 0, ypos);
         *scrollpos = ypos;
       }
@@ -471,6 +476,18 @@ static int serialize_match(FILE *fp, const char *match, unsigned long offset,
   return 1;
 }
 
+enum {
+  STATE_IDLE,
+  STATE_SAVE,
+  STATE_ATTACH,
+  STATE_PRE_DOWNLOAD,
+  STATE_PATCH_ELF,
+  STATE_FULLERASE,
+  STATE_DOWNLOAD,
+  STATE_VERIFY,
+  STATE_FINISH,
+};
+
 int main(int argc, char *argv[])
 {
   static const char *architectures[] = { "generic", "lpc8xx", "lpc11xx", "lpc15xx",
@@ -525,10 +542,12 @@ int main(int argc, char *argv[])
   struct nk_rect rcwidget;
   enum nk_collapse_states tab_states[TAB_COUNT];
   int running = 1;
+  int curstate = STATE_IDLE;
   char txtFilename[256] = "", txtCfgFile[256];
   char txtSection[32] = "", txtAddress[32] = "", txtMatch[64] = "", txtOffset[32] = "";
   char txtSerial[32] = "", txtSerialSize[32] = "";
   char txtConfigFile[256];
+  FILE *fpTgt, *fpWork;
   int opt_tpwr = nk_false;
   int opt_fullerase = nk_false;
   int opt_architecture = 0;
@@ -578,17 +597,164 @@ int main(int argc, char *argv[])
   tab_states[TAB_OPTIONS] = NK_MINIMIZED;
   tab_states[TAB_SERIALIZATION] = NK_MINIMIZED;
   tab_states[TAB_STATUS]= NK_MAXIMIZED;
+  fpTgt = fpWork = NULL;
 
   while (running) {
-    /* Input */
+    /* handle state */
+    int waitidle = 1;
+    int result;
+    switch (curstate) {
+    case STATE_IDLE:
+      if (fpTgt != NULL) {
+        fclose(fpTgt);
+        fpTgt = NULL;
+      }
+      if (fpWork != NULL) {
+        fclose(fpWork);
+        fpWork = NULL;
+      }
+      break;
+    case STATE_SAVE:
+      tab_states[TAB_OPTIONS] = NK_MINIMIZED;
+      tab_states[TAB_SERIALIZATION] = NK_MINIMIZED;
+      tab_states[TAB_STATUS]= NK_MAXIMIZED;
+      if (access(txtFilename, 0) == 0) {
+        char field[100];
+        /* save settings in cache file */
+        strcpy(txtCfgFile, txtFilename);
+        strcat(txtCfgFile, ".prog");
+        if (opt_architecture > 0 && opt_architecture < sizearray(architectures))
+          strcpy(field, architectures[opt_architecture]);
+        else
+          field[0] = '\0';
+        ini_puts("Options", "architecture", field, txtCfgFile);
+        ini_putl("Options", "tpwr", opt_tpwr, txtCfgFile);
+        ini_putl("Options", "full-erase", opt_fullerase, txtCfgFile);
+        ini_putl("Serialize", "option", opt_serialize, txtCfgFile);
+        sprintf(field, "%s:%s", txtSection, txtAddress);
+        ini_puts("Serialize", "address", field, txtCfgFile);
+        sprintf(field, "%s:%s", txtMatch, txtOffset);
+        ini_puts("Serialize", "match", field, txtCfgFile);
+        sprintf(field, "%s:%s:%d", txtSerial, txtSerialSize, opt_format);
+        ini_puts("Serialize", "serial", field, txtCfgFile);
+        curstate = STATE_ATTACH;
+      } else {
+        log_addstring("^1Failed to open the ELF file\n");
+        curstate = STATE_IDLE;
+      }
+      waitidle = 0;
+      break;
+    case STATE_ATTACH:
+      result = bmp_connect();
+      if (result) {
+        char mcufamily[32];
+        int arch;
+        result = bmp_attach(opt_tpwr, mcufamily, sizearray(mcufamily), NULL, 0);
+        for (arch = 0; arch < sizearray(architectures); arch++)
+          if (stricmp(architectures[arch], mcufamily) == 0)
+            break;
+        if (arch >= sizearray(architectures))
+          arch = 0;
+        if (arch != opt_architecture) {
+          char msg[128];
+          sprintf(msg, "^3Detected MCU family %s (check options)\n", architectures[arch]);
+          log_addstring(msg);
+        }
+      }
+      curstate = result ? STATE_PRE_DOWNLOAD : STATE_IDLE;
+      waitidle = 0;
+      break;
+    case STATE_PRE_DOWNLOAD:
+      /* open the working file */
+      fpTgt = fopen(txtFilename, "rb");
+      if (fpTgt == NULL) {
+        log_addstring("^1Failed to load the target file\n");
+        curstate = STATE_IDLE;
+      } else {
+        curstate = STATE_PATCH_ELF;
+      }
+      waitidle = 0;
+      break;
+    case STATE_PATCH_ELF:
+      /* verify whether to patch the ELF file (create a temporary file) */
+      if (opt_architecture > 0 || opt_serialize != SER_NONE) {
+        assert(fpTgt != NULL);
+        fpWork = tmpfile();
+        if (fpWork == NULL) {
+          log_addstring("^1Failed to process the target file\n");
+          curstate = STATE_IDLE;
+          waitidle = 0;
+          break;
+        }
+        result = copyfile(fpWork, fpTgt);
+        if (result && opt_architecture > 0)
+          result = patch_vecttable(fpWork, architectures[opt_architecture]);
+        if (result && opt_serialize != SER_NONE) {
+          /* create replacement buffer, depending on format */
+          unsigned char data[50];
+          int datasize = (int)strtol(txtSerialSize, NULL, 10);
+          serialize_databuffer(data, datasize, (int)strtol(txtSerial,NULL,10), opt_format);
+          if (opt_serialize == SER_ADDRESS)
+            result = serialize_address(fpWork, txtSection, strtoul(txtAddress,NULL,16), data, datasize);
+          else if (opt_serialize == SER_MATCH)
+            result = serialize_match(fpWork, txtMatch, strtoul(txtOffset,NULL,16), data, datasize);
+          if (result) {
+            char msg[100];
+            sprintf(msg, "Serial adjusted to %d\n", (int)strtol(txtSerial, NULL, 10));
+            log_addstring(msg);
+          }
+        }
+        curstate = result ? STATE_FULLERASE : STATE_IDLE;
+      } else {
+        curstate = STATE_FULLERASE;
+      }
+      waitidle = 0;
+      break;
+    case STATE_FULLERASE:
+      /* optionally erase all Flash memory */
+      if (opt_fullerase) {
+        result = bmp_fullerase();
+        curstate = result ? STATE_DOWNLOAD : STATE_IDLE;
+      } else {
+        curstate = STATE_DOWNLOAD;
+      }
+      waitidle = 0;
+      break;
+    case STATE_DOWNLOAD:
+      /* download to target */
+      if (opt_architecture > 0)
+        bmp_runscript("memremap", architectures[opt_architecture], NULL);
+      result = bmp_download((fpWork != NULL) ? fpWork : fpTgt);
+      curstate = result ? STATE_VERIFY : STATE_IDLE;
+      waitidle = 0;
+      break;
+    case STATE_VERIFY:
+      /* compare the checksum of Flash memory to the file */
+      if (opt_architecture > 0)
+        bmp_runscript("memremap", architectures[opt_architecture], NULL);
+      result = bmp_verify((fpWork != NULL)? fpWork : fpTgt);
+      curstate = result ? STATE_FINISH : STATE_IDLE;
+      waitidle = 0;
+      break;
+    case STATE_FINISH:
+      /* optionally increment the serial number */
+      if (opt_serialize != SER_NONE) {
+        int num = (int)strtol(txtSerial, NULL, 10);
+        sprintf(txtSerial, "%d", num + 1);
+      }
+      curstate = STATE_IDLE;
+      waitidle = 0;
+      break;
+    }
+
+    /* handle user input */
     nk_input_begin(ctx);
-    if (!guidriver_poll(1))
+    if (!guidriver_poll(waitidle)) /* if text was added to the log, don't wait in guidriver_poll(); system is NOT idle */
       running = 0;
     nk_input_end(ctx);
 
     /* GUI */
     if (nk_begin(ctx, "MainPanel", nk_rect(0, 0, WINDOW_WIDTH, WINDOW_HEIGHT), 0)) {
-      int result;
       nk_layout_row_begin(ctx, NK_STATIC, ROW_HEIGHT, 2);
       nk_layout_row_push(ctx, WINDOW_WIDTH - 57);
       result = nk_edit_string_zero_terminated(ctx, NK_EDIT_FIELD | NK_EDIT_SIG_ENTER, txtFilename, sizearray(txtFilename), nk_filter_ascii);
@@ -613,10 +779,10 @@ int main(int argc, char *argv[])
       nk_layout_row_dynamic(ctx, 7.5*ROW_HEIGHT, 1);
       if (nk_group_begin_titled(ctx, "options", "", 0)) {
         if (nk_tree_state_push(ctx, NK_TREE_TAB, "Options", &tab_states[TAB_OPTIONS])) {
-          nk_layout_row(ctx, NK_DYNAMIC, ROW_HEIGHT * 0.8, 2 , nk_ratio(2, 0.45, 0.55));
+          nk_layout_row(ctx, NK_DYNAMIC, ROW_HEIGHT * 0.8, 2, nk_ratio(2, 0.45, 0.55));
           nk_label(ctx, "MCU Family", NK_TEXT_ALIGN_LEFT | NK_TEXT_ALIGN_MIDDLE);
           rcwidget = nk_widget_bounds(ctx);
-          opt_architecture = nk_combo(ctx, architectures, NK_LEN(architectures), opt_architecture, COMBOROW_CY, nk_vec2(rcwidget.w, 4.5*ROW_HEIGHT));
+          opt_architecture = nk_combo(ctx, architectures, NK_LEN(architectures), opt_architecture, (int)COMBOROW_CY, nk_vec2(rcwidget.w, 4.5*ROW_HEIGHT));
 
           nk_layout_row_dynamic(ctx, ROW_HEIGHT, 1);
           nk_checkbox_label(ctx, "Power Target (3.3V)", &opt_tpwr);
@@ -724,117 +890,8 @@ int main(int argc, char *argv[])
       if (nk_button_label(ctx, "Help") || nk_input_is_key_pressed(&ctx->input, NK_KEY_F1))
         help_active = 1;
       nk_spacing(ctx, 1);
-      if (nk_button_label(ctx, "Download") || nk_input_is_key_pressed(&ctx->input, NK_KEY_F5)) {
-        //??? start a state sequence, so that the GUI is updated between the steps
-        /* close Options and Serialization, open Status */
-        tab_states[TAB_OPTIONS] = NK_MINIMIZED;
-        tab_states[TAB_SERIALIZATION] = NK_MINIMIZED;
-        tab_states[TAB_STATUS]= NK_MAXIMIZED;
-        if (access(txtFilename, 0) == 0) {
-          char field[100];
-          FILE *fpTgt, *fpWork;
-          /* save settings in cache file */
-          strcpy(txtCfgFile, txtFilename);
-          strcat(txtCfgFile, ".prog");
-          if (opt_architecture > 0 && opt_architecture < sizearray(architectures))
-            strcpy(field, architectures[opt_architecture]);
-          else
-            field[0] = '\0';
-          ini_puts("Options", "architecture", field, txtCfgFile);
-          ini_putl("Options", "tpwr", opt_tpwr, txtCfgFile);
-          ini_putl("Options", "full-erase", opt_fullerase, txtCfgFile);
-          ini_putl("Serialize", "option", opt_serialize, txtCfgFile);
-          sprintf(field, "%s:%s", txtSection, txtAddress);
-          ini_puts("Serialize", "address", field, txtCfgFile);
-          sprintf(field, "%s:%s", txtMatch, txtOffset);
-          ini_puts("Serialize", "match", field, txtCfgFile);
-          sprintf(field, "%s:%s:%d", txtSerial, txtSerialSize, opt_format);
-          ini_puts("Serialize", "serial", field, txtCfgFile);
-          /* attach the Black Magic Probe to the target */
-          fpTgt = fpWork = NULL;
-          result = bmp_connect();
-          if (result) {
-            char mcufamily[32];
-            int arch;
-            result = bmp_attach(opt_tpwr, mcufamily, sizearray(mcufamily), NULL, 0);
-            for (arch = 0; arch < sizearray(architectures); arch++)
-              if (stricmp(architectures[arch], mcufamily) == 0)
-                break;
-            if (arch >= sizearray(architectures))
-              arch = 0;
-            if (arch != opt_architecture) {
-              char msg[128];
-              sprintf(msg, "^3Detected MCU family %s (check options)\n", architectures[arch]);
-              log_addstring(msg);
-            }
-          }
-          if (result) {
-            fpTgt = fopen(txtFilename, "rb");
-            if (fpTgt == NULL) {
-              log_addstring("^1Failed to load the target file\n");
-              result = 0;
-            }
-            /* verify whether to patch the ELF file (create a temporary file) */
-            if (result && (opt_architecture > 0 || opt_serialize != SER_NONE)) {
-              fpWork = tmpfile();
-              if (fpTgt == NULL || fpWork == NULL) {
-                log_addstring("^1Failed to process the target file\n");
-                result = 0;
-              }
-              if (result)
-                result = copyfile(fpWork, fpTgt);
-              if (result && opt_architecture > 0)
-                result = patch_vecttable(fpWork, architectures[opt_architecture]);
-              if (result && opt_serialize != SER_NONE) {
-                /* create replacement buffer, depending on format */
-                unsigned char data[50];
-                int datasize = (int)strtol(txtSerialSize, NULL, 10);
-                serialize_databuffer(data, datasize, (int)strtol(txtSerial,NULL,10), opt_format);
-                if (opt_serialize == SER_ADDRESS)
-                  result = serialize_address(fpWork, txtSection, strtoul(txtAddress,NULL,16), data, datasize);
-                else if (opt_serialize == SER_MATCH)
-                  result = serialize_match(fpWork, txtMatch, strtoul(txtOffset,NULL,16), data, datasize);
-                if (result) {
-                  char msg[100];
-                  sprintf(msg, "Serial adjusted to %d\n", (int)strtol(txtSerial, NULL, 10));
-                  log_addstring(msg);
-                }
-              }
-            }
-          }
-
-          /* download to target */
-          if (result) {
-            if (opt_architecture > 0)
-              bmp_runscript("memremap", architectures[opt_architecture], NULL);
-            if (opt_fullerase)
-              result = bmp_fullerase();
-            if (result)
-              result = bmp_download((fpWork != NULL)? fpWork : fpTgt);
-          }
-          if (result) {
-            if (opt_architecture > 0)
-              bmp_runscript("memremap", architectures[opt_architecture], NULL);
-            result = bmp_verify((fpWork != NULL)? fpWork : fpTgt);
-          }
-
-          /* optionally increment the serial number */
-          if (result && opt_serialize != SER_NONE) {
-            int num = (int)strtol(txtSerial, NULL, 10);
-            sprintf(txtSerial, "%d", num + 1);
-          }
-
-          if (fpTgt != NULL)
-            fclose(fpTgt);
-          if (fpWork != NULL) {
-            fclose(fpWork);
-            fpWork = NULL;
-          }
-          bmp_detach(0);
-        } else {
-          log_addstring("^1Failed to open the ELF file\n");
-        }
-      }
+      if (nk_button_label(ctx, "Download") || nk_input_is_key_pressed(&ctx->input, NK_KEY_F5))
+        curstate = STATE_SAVE;  /* start the download sequence */
 
       if (help_active) {
         static struct nk_rect rc = {10, 10, WINDOW_WIDTH - 20, WINDOW_HEIGHT - 20};

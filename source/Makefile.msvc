@@ -1,0 +1,166 @@
+# -------------------------------------------------------------
+#
+#       Makefile for Black Magic Probe utilities
+#       o  uses nmake & Microsoft Visual C/C++
+#
+#       For release version, use NDEBUG=
+#       Do "make depend" to update dependencies in this makefile
+#
+# -------------------------------------------------------------
+
+# !include makefile.cfg
+
+# -------------------------------------------------------------
+#               Defines
+# -------------------------------------------------------------
+
+# preset for development version
+C_DEBUG =
+L_DEBUG =
+R_DEBUG =
+!ifdef NDEBUG
+    # retail version
+    C_DEBUG = /D NDEBUG
+    L_DEBUG =
+    R_DEBUG = /D NDEBUG
+!endif
+
+
+# -------------------------------------------------------------
+#               Compilers and their options
+# -------------------------------------------------------------
+
+####### C compiler
+CL        = cl
+CC        = cl /c
+CFLAGS    = /nologo /MT /W1 /EHsc /D _WIN32 $(C_DEBUG) /D NOC_FILE_DIALOG_WIN32 /D _CRT_SECURE_NO_WARNINGS
+
+####### Resource compiler
+RC        = rc
+RCFLAGS   = /D _WIN32 /D WIN32 $(R_DEBUG)
+
+####### Linker
+LNK       = link
+LFLAGS    = $(L_DEBUG) /NOLOGO /SUBSYSTEM:windows
+
+
+# -------------------------------------------------------------
+#               Inference rules
+# -------------------------------------------------------------
+
+.c.exe :
+	$(CL) $(CFLAGS) /D STANDALONE /Fe$@ $<
+
+.c.obj :
+	$(CC) $(CFLAGS) /Fo$@ $<
+
+.rc.res :
+	$(RC) -r $(RCFLAGS) /Fo$@ $<
+
+
+# -------------------------------------------------------------
+#               Project
+# -------------------------------------------------------------
+
+OBJLIST_BMDEBUG = bmdebug.obj bmscan.obj bmp-script.obj elf-postlink.obj \
+                  guidriver.obj minini.obj rs232.obj \
+                  specialfolder.obj strlcpy.obj \
+                  decodectf.obj parsetsdl.obj swotrace.obj \
+                  nuklear.obj nuklear_gdip.obj noc_file_dialog.obj
+
+OBJLIST_BMFLASH = bmflash.obj bmscan.obj bmp-script.obj bmp-support.obj crc32.obj \
+                  elf-postlink.obj gdb-rsp.obj guidriver.obj minIni.obj rs232.obj \
+                  specialfolder.obj strlcpy.obj xmltractor.obj \
+                  nuklear.obj nuklear_gdip.obj noc_file_dialog.obj
+
+OBJLIST_BMTRACE = bmtrace.obj bmscan.obj bmp-script.obj bmp-support.obj crc32.obj \
+                  elf-postlink.obj gdb-rsp.obj guidriver.obj minini.obj rs232.obj \
+                  specialfolder.obj strlcpy.obj xmltractor.obj \
+                  decodectf.obj parsetsdl.obj swotrace.obj \
+                  nuklear.obj nuklear_gdip.obj noc_file_dialog.obj
+
+project : bmdebug.exe bmflash.exe bmtrace.exe bmscan.exe elf-postlink.exe tracegen.exe
+
+depend :
+    mkmf -c -dS -s -f makefile.dep $(OBJLIST_BMDEBUG) $(OBJLIST_BMFLASH) $(OBJLIST_BMTRACE)
+
+
+##### C files #####
+
+bmdebug.obj : bmdebug.c
+
+bmflash.obj : bmflash.c
+
+bmscan.obj : bmscan.c
+
+bmtrace.obj : bmtrace.c
+
+bmp-script.obj : bmp-script.c
+
+bmp-support.obj : bmp-support.c
+
+crc32.obj : crc32.c
+
+elf-postlink.obj : elf-postlink.c
+
+gdb-rsp.obj : gdb-rsp.c
+
+guidriver.obj : guidriver.c
+
+minIni.obj : minIni.c
+
+rs232.obj : rs232.c
+
+specialfolder.obj : specialfolder.c
+
+swotrace.obj : swotrace.c
+
+xmltractor.obj : xmltractor.c
+
+decodectf.obj : decodectf.c
+
+parsetsdl.obj : parsetsdl.c
+
+noc_file_dialog.obj : noc_file_dialog.c
+
+nuklear.obj : nuklear.c
+
+nuklear_gdip.obj : nuklear_gdip.c
+
+
+##### Resource files #####
+
+bmdebug.res : bmdebug.rc
+
+bmflash.res : bmflash.rc
+
+bmtrace.res : bmtrace.rc
+
+
+##### Executables #####
+
+bmdebug.exe : $(OBJLIST_BMDEBUG) bmdebug.res
+	$(LNK) $(LFLAGS) /ENTRY:mainCRTStartup /OUT:$@ $** advapi32.lib comdlg32.lib gdi32.lib gdiplus.lib user32.lib winmm.lib shell32.lib shlwapi.lib setupapi.lib winusb.lib
+
+bmflash.exe : $(OBJLIST_BMFLASH) bmflash.res
+	$(LNK) $(LFLAGS) /ENTRY:mainCRTStartup /OUT:$@ $** advapi32.lib comdlg32.lib gdi32.lib gdiplus.lib user32.lib winmm.lib shell32.lib shlwapi.lib
+
+bmtrace.exe : $(OBJLIST_BMTRACE) bmtrace.res
+	$(LNK) $(LFLAGS) /ENTRY:mainCRTStartup /OUT:$@ $** advapi32.lib comdlg32.lib gdi32.lib gdiplus.lib user32.lib winmm.lib shell32.lib shlwapi.lib setupapi.lib winusb.lib
+
+bmscan.exe : bmscan.c
+	$(CL) $(CFLAGS) /D STANDALONE /Fe$@ $** advapi32.lib
+	del $*.obj
+
+elf-postlink.exe : elf-postlink.c
+	$(CL) $(CFLAGS) /D STANDALONE /Fe$@ $**
+	del $*.obj
+
+tracegen.exe : tracegen.c parsetsdl.c strlcpy.c
+	$(CL) $(CFLAGS) /D STANDALONE /Fe$@ $**
+	del $*.obj
+
+# put generated dependencies at the end, otherwise it does not blend well with
+# inference rules, if an item also has an explicit rule.
+# !include makefile.dep
+

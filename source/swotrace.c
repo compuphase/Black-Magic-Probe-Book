@@ -29,8 +29,11 @@
   #include <setupapi.h>
   #include <winusb.h>
   #include <malloc.h>
-  #if defined __MINGW32__ || defined __MINGW64__
+  #if defined __MINGW32__ || defined __MINGW64__ || defined _MSC_VER
     #include "strlcpy.h"
+  #endif
+  #if defined _MSC_VER
+    #define memicmp(p1,p2,c)  _memicmp((p1),(p2),(c))
   #endif
 #elif defined __linux__
   #include <alloca.h>
@@ -57,9 +60,7 @@
   #define stricmp(s1,s2)    strcasecmp((s1),(s2))
   static int memicmp(const unsigned char *p1, const unsigned char *p2, size_t count);
 #endif
-#if defined _MSC_VER
-  #define alloca(n) _alloca(n)
-#endif
+
 #if !defined sizearray
   #define sizearray(e)    (sizeof(e) / sizeof((e)[0]))
 #endif
@@ -167,7 +168,7 @@ static int trace_decodectf = 0;
 
 void tracestring_add(const unsigned char *buffer, size_t length, double timestamp)
 {
-  int idx, chan;
+  unsigned idx, chan;
 
   NK_ASSERT(buffer != NULL);
   NK_ASSERT(length > 0);
@@ -206,13 +207,13 @@ void tracestring_add(const unsigned char *buffer, size_t length, double timestam
             TRACESTRING *item = malloc(sizeof(TRACESTRING));
             if (item != NULL) {
               memset(item, 0, sizeof(TRACESTRING));
-              item->length = strlen(message);
+              item->length = (unsigned short)strlen(message);
               item->size = item->length + 1;
               item->text = malloc(item->size * sizeof(unsigned char));
               if (item->text != NULL) {
                 strcpy(item->text, message);
                 item->length = item->size - 1;
-                item->channel = streamid;
+                item->channel = (unsigned char)streamid;
                 if (tstamp > 0.001)
                   timestamp = tstamp; /* use precision timestamp from remote host */
                 item->timestamp = timestamp;
@@ -225,7 +226,7 @@ void tracestring_add(const unsigned char *buffer, size_t length, double timestam
                   sprintf(item->timefmt, "%.6f", timestamp);
                 else
                   sprintf(item->timefmt, "%.3f", timestamp);
-                item->timefmt_len = strlen(item->timefmt);
+                item->timefmt_len = (unsigned short)strlen(item->timefmt);
                 assert(item->timefmt_len < sizearray(item->timefmt));
                 /* append to tail */
                 if (tracestring_tail != NULL)
@@ -277,7 +278,7 @@ void tracestring_add(const unsigned char *buffer, size_t length, double timestam
             memcpy(ptr, tracestring_tail->text, tracestring_tail->length);
             free((void*)tracestring_tail->text);
             tracestring_tail->text = ptr;
-            tracestring_tail->size = newsize;
+            tracestring_tail->size = (unsigned short)newsize;
           }
         }
         if (tracestring_tail->length < tracestring_tail->size)
@@ -293,7 +294,7 @@ void tracestring_add(const unsigned char *buffer, size_t length, double timestam
           item->size = TRACESTRING_INITSIZE;
           item->text = malloc(item->size * sizeof(unsigned char));
           if (item->text != NULL) {
-            item->channel = chan;
+            item->channel = (unsigned char)chan;
             item->timestamp = timestamp;
             if (tracestring_root.next != NULL)
               timestamp -= tracestring_root.next->timestamp;
@@ -301,7 +302,7 @@ void tracestring_add(const unsigned char *buffer, size_t length, double timestam
               timestamp = 0.0;
             /* create formatted timestamp */
             sprintf(item->timefmt, "%.3f", timestamp);
-            item->timefmt_len = strlen(item->timefmt);
+            item->timefmt_len = (unsigned short)strlen(item->timefmt);
             assert(item->timefmt_len < sizearray(item->timefmt));
             /* append to tail */
             if (tracestring_tail != NULL)
@@ -451,9 +452,8 @@ int trace_enablectf(int enable)
 
 static BOOL MakeGUID(const char *label, GUID *guid)
 {
-  int i;
-  char *pEnd;
-  char b[3]; b[2]= 0;
+  unsigned i;
+  char b[5];
 
   /* check whether the string has a valid format &*/
   if (strlen(label) != 38)
@@ -475,14 +475,17 @@ static BOOL MakeGUID(const char *label, GUID *guid)
     }
   }
 
-  guid->Data1 = strtoul(label+1, &pEnd, 16);
-  guid->Data2 = strtoul(label+10, &pEnd, 16);
-  guid->Data3 = strtoul(label+15, &pEnd, 16);
-  memcpy(&b[0], label+20, 2*sizeof(b[0])); guid->Data4[0]= strtoul(&b[0],&pEnd, 16);
-  memcpy(&b[0], label+22, 2*sizeof(b[0])); guid->Data4[1]= strtoul(&b[0],&pEnd, 16);
+  guid->Data1 = strtoul(label+1, NULL, 16);
+  guid->Data2 = (unsigned short)strtoul(label+10, NULL, 16);
+  guid->Data3 = (unsigned short)strtoul(label+15, NULL, 16);
+  memset(b, 0, sizeof b);
+  for (i = 0; i < 2; i++) {
+    memcpy(&b[0], label+20+i*2, 2*sizeof(b[0]));
+    guid->Data4[i] = (unsigned char)strtoul(&b[0], NULL, 16);
+  }
   for (i = 0; i < 6; i++) {
     memcpy(&b[0], label+25+i*2, 2*sizeof(b[0]));
-    guid->Data4[2+i] = strtoul(&b[0], &pEnd, 16);
+    guid->Data4[2+i] = (unsigned char)strtoul(&b[0], NULL, 16);
   }
 
   return TRUE;
@@ -833,23 +836,24 @@ void tracelog_widget(struct nk_context *ctx, const char *id, float rowheight, in
     if (channels[idx].enabled && labelwidth < len)
       labelwidth = len;
   }
-  labelwidth = (labelwidth * rowheight) / 2 + 10;
+  labelwidth = (int)((labelwidth * rowheight) / 2) + 10;
   tstampwidth = 0;
   for (item = tracestring_root.next; item != NULL; item = item->next)
     if (tstampwidth < item->timefmt_len)
       tstampwidth = item->timefmt_len;
-  tstampwidth = (tstampwidth * rowheight) / 2 + 10;
+  tstampwidth = (int)((tstampwidth * rowheight) / 2) + 10;
 
   /* black background on group */
   nk_style_push_color(ctx, &ctx->style.window.fixed_background.data.color, nk_rgba(20, 29, 38, 225));
   if (nk_group_begin_titled(ctx, id, "", widget_flags)) {
-    int lines = 0, lineheight = 0, widgetlines = 0, ypos;
+    int lines = 0, widgetlines = 0, ypos;
+    float lineheight = 0;
     for (item = tracestring_root.next; item != NULL; item = item->next) {
       int textwidth;
       struct nk_color clrtxt;
       NK_ASSERT(item->text != NULL);
       nk_layout_row_begin(ctx, NK_STATIC, rowheight, 4);
-      if (lineheight == 0) {
+      if (lineheight <= 0.1) {
         struct nk_rect rcline = nk_layout_widget_bounds(ctx);
         lineheight = rcline.h;
       }
@@ -912,17 +916,17 @@ void tracelog_widget(struct nk_context *ctx, const char *id, float rowheight, in
        2) if line to mark is different than last time (and valid) make that
           line visible */
     ypos = scrollpos;
-    widgetlines = (rcwidget.h - 2 * stwin->padding.y) / lineheight;
+    widgetlines = (int)((rcwidget.h - 2 * stwin->padding.y) / lineheight);
     if (lines != linecount) {
       linecount = lines;
-      ypos = (lines - widgetlines + 1) * lineheight;
+      ypos = (int)((lines - widgetlines + 1) * lineheight);
     } else if (markline != recent_markline) {
       recent_markline = markline;
       if (markline >= 0) {
         ypos = markline - widgetlines / 2;
         if (ypos > lines - widgetlines + 1)
           ypos = lines - widgetlines + 1;
-        ypos *= lineheight;
+        ypos = (int)(ypos * lineheight);
       }
     }
     if (ypos < 0)

@@ -29,22 +29,27 @@
 #include "elf-postlink.h"
 
 #if defined __GNUC__
-#  define PACKED        __attribute__((packed))
+  #define PACKED        __attribute__((packed))
 #else
-#  define PACKED
+  #define PACKED
 #endif
 
 #if defined __linux__ || defined __FreeBSD__ || defined __APPLE__
-#  pragma pack(1)       /* structures must be packed (byte-aligned) */
+  #pragma pack(1)       /* structures must be packed (byte-aligned) */
 #elif defined MACOS && defined __MWERKS__
-#  pragma options align=mac68k
+  #pragma options align=mac68k
 #else
-#  pragma pack(push)
-#  pragma pack(1)       /* structures must be packed (byte-aligned) */
-#  if defined __TURBOC__
-#    pragma option -a-  /* "pack" pragma for older Borland compilers */
-#  endif
+  #pragma pack(push)
+  #pragma pack(1)       /* structures must be packed (byte-aligned) */
+  #if defined __TURBOC__
+    #pragma option -a-  /* "pack" pragma for older Borland compilers */
+  #endif
 #endif
+
+#if defined _MSC_VER
+  #define stricmp(s1,s2)    _stricmp((s1),(s2))
+#endif
+
 
 typedef struct tagELF32HDR {
   uint8_t  magic[4];    /* 0x7f + "ELF" */
@@ -488,6 +493,7 @@ int elf_section_by_address(FILE *fp,unsigned long baseaddr,
     assert(size==sizeof(section));
 
     /* find the section index nearest (but not below) the base address */
+    idx_section=0;
     nearest_idx=-1;
     nearest_addr=UINT_MAX;
     fseek(fp,offs,SEEK_SET);

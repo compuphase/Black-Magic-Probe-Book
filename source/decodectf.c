@@ -25,9 +25,11 @@
 
 #if defined __linux__
   #include <bsd/string.h>
-#endif
-#if defined __MINGW32__ || defined __MINGW64__
+#elif defined __MINGW32__ || defined __MINGW64__ || defined _MSC_VER
   #include "strlcpy.h"
+#endif
+#if defined _MSC_VER
+    #define strdup(s)         _strdup(s)
 #endif
 
 #include "parsetsdl.h"
@@ -277,7 +279,7 @@ static char *fmt_uint32(uint32_t num, char *str, int base)
 
   while (num != 0) {
     int rem = num % base;
-    str[i++] = (rem > 9) ? (rem - 10) + 'a' : rem + '0';
+    str[i++] = (char)((rem > 9) ? (rem - 10) + 'a' : rem + '0');
     num = num / base;
   }
   str[i]= '\0';         /* append string terminator */
@@ -311,7 +313,7 @@ static char *fmt_uint64(uint64_t num, char *str, int base)
 
   while (num != 0) {
     int rem = num % base;
-    str[i++] = (rem > 9) ? (rem - 10) + 'a' : rem + '0';
+    str[i++] = (char)((rem > 9) ? (rem - 10) + 'a' : rem + '0');
     num = num / base;
   }
   str[i]= '\0';         /* append string terminator */
@@ -379,7 +381,7 @@ static void format_field(const char *fieldname, const CTF_TYPE *type, const unsi
 
   case CLASS_ENUM: {
     const CTF_KEYVALUE *kv;
-    uint32_t v = 0;
+    int32_t v = 0;
     memcpy(&v, data, type->size / 8);
     for (kv = type->keys->next; kv != NULL && kv->value != v; kv = kv->next)
       /* nothing */;
@@ -572,7 +574,7 @@ restart:
         if (field == NULL) {
           /* this event has no fields */
           msgbuffer_append("", 1);  /* force zero-terminate msgbuffer */
-          msgstack_push(event->stream_id, timestamp, msgbuffer);
+          msgstack_push((uint16_t)event->stream_id, timestamp, msgbuffer);
           msgbuffer_reset();
           result += 1;  /* flag: one more trace message completed */
           state = STATE_SCAN_MAGIC;
@@ -669,7 +671,7 @@ restart:
     field = field->next;
     if (field == NULL) {
       msgbuffer_append("", 1);  /* force zero-terminate msgbuffer */
-      msgstack_push(event->stream_id, timestamp, msgbuffer);
+      msgstack_push((uint16_t)event->stream_id, timestamp, msgbuffer);
       msgbuffer_reset();
       result += 1;  /* flag: one more trace message completed */
       state = STATE_SCAN_MAGIC;

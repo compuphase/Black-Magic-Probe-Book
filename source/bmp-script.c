@@ -20,6 +20,10 @@
 #if defined _WIN32
   #define WIN32_LEAN_AND_MEAN
   #include <windows.h>
+  #if defined _MSC_VER
+    #define strdup(s)         _strdup(s)
+    #define stricmp(s1,s2)    _stricmp((s1),(s2))
+  #endif
 #else
   #include <unistd.h>
   #include <bsd/string.h>
