@@ -118,6 +118,11 @@ int find_bmp(int seqnr, int iface, TCHAR *name, size_t namelen)
     } else {
       /* read GUID */
       LSTATUS stat = RegQueryValueEx(hkeyItem, _T("DeviceInterfaceGUIDs"), NULL, NULL, (LPBYTE)portname, &maxlen);
+      /* continue scanning through the subkeys if we didn't find 'DeviceInterfaceGUIDs' in this one */
+      if(stat == ERROR_FILE_NOT_FOUND) {
+        idx_device++;
+        continue;
+      }
       /* ERROR_MORE_DATA is returned because there may technically be more GUIDs
          assigned to the device; we only care about the first one */
       if (stat != ERROR_SUCCESS && stat != ERROR_MORE_DATA) {
