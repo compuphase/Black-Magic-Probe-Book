@@ -202,7 +202,7 @@ int main(void)
   struct nk_context *ctx;
   struct nk_image btn_folder;
   int canvas_width, canvas_height;
-  char mcu_driver[32];
+  char mcu_driver[32], mcu_arch[16];
   char txtConfigFile[256], findtext[128] = "", valstr[128] = "";
   char txtTSDLfile[256] = "";
   char cpuclock_str[15] = "", bitrate_str[15] = "";
@@ -280,7 +280,7 @@ int main(void)
       } else {
         int result = bmp_connect();
         if (result)
-          result = bmp_attach(2, mcu_driver, sizearray(mcu_driver), NULL, 0); //??? can check architecture: no SWO on Cortex-M0
+          result = bmp_attach(2, mcu_driver, sizearray(mcu_driver), mcu_arch, sizearray(mcu_arch)); //??? can check architecture: no SWO on Cortex-M0
         if (result) {
           unsigned long params[2];
           bmp_enabletrace((opt_mode == MODE_ASYNC) ? bitrate : 0);
