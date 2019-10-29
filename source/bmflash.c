@@ -48,7 +48,7 @@
 #include "noc_file_dialog.h"
 #include "bmp-script.h"
 #include "bmp-support.h"
-#include "elf-postlink.h"
+#include "elf.h"
 #include "gdb-rsp.h"
 #include "minIni.h"
 #include "rs232.h"

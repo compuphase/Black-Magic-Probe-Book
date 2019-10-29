@@ -20,8 +20,8 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#ifndef _ELF_POSTLINK_H
-#define _ELF_POSTLINK_H
+#ifndef _ELF__H
+#define _ELF__H
 
 #if defined __cplusplus
   extern "C" {
@@ -56,5 +56,5 @@ int elf_patch_vecttable(FILE *fp,const char *driver,unsigned int *checksum);
   }
 #endif
 
-#endif /* _ELF_POSTLINK_H */
+#endif /* _ELF_H */
 

@@ -2705,7 +2705,7 @@ int main(int argc, char *argv[])
         if (!atprompt)
           break;
         if (prevstate != curstate) {
-          task_stdin(&task, "-break-insert -t main\n");  //??? allow user-defined startup function
+          task_stdin(&task, "-break-insert -t main\n");
           atprompt = 0;
           prevstate = curstate;
         } else if (gdbmi_isresult() != NULL) {
@@ -3024,6 +3024,7 @@ int main(int argc, char *argv[])
           break;
         }
         if (prevstate != curstate) {
+          gdbmi_sethandled(1);
           sprintf(cmd, "-data-evaluate-expression %s\n", statesymbol);
           task_stdin(&task, cmd);
           atprompt = 0;
@@ -3261,7 +3262,7 @@ int main(int argc, char *argv[])
           nk_layout_row_dynamic(ctx, splitter_rows[1] - ROW_HEIGHT - SPACING, 1);
           console_widget(ctx, "console-out", FONT_HEIGHT);
           nk_layout_row_dynamic(ctx, ROW_HEIGHT, 1);
-          if (curstate < STATE_START) {
+          if (curstate < STATE_START && curstate != STATE_SCAN_BMP) {
             /* while initializing, say "please wait" */
             strlcpy(console_edit, "Please wait...", sizearray(console_edit));
             nk_edit_string_zero_terminated(ctx, NK_EDIT_FIELD | NK_EDIT_READ_ONLY, console_edit, sizearray(console_edit), nk_filter_ascii);

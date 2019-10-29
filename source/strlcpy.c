@@ -1,4 +1,5 @@
-/* source https://gist.github.com/Fonger/98cc95ac39fbe1a7e4d9 */
+/* source https://gist.github.com/Fonger/98cc95ac39fbe1a7e4d9
+   modified for more robustness */
 
 #include <stdlib.h>
 #include <string.h>
@@ -8,35 +9,27 @@
  * '_cups_strlcat()' - Safely concatenate two strings.
  */
 
-size_t                  /* O - Length of string */
-strlcat(char       *dst,        /* O - Destination string */
-              const char *src,      /* I - Source string */
-          size_t     size)      /* I - Size of destination string buffer */
+size_t                      /* O - Length of string (excluding the terminating zero) */
+strlcat(char       *dst,    /* O - Destination string */
+        const char *src,    /* I - Source string */
+        size_t     size)    /* I - Size of destination string buffer */
 {
   size_t    srclen;         /* Length of source string */
   size_t    dstlen;         /* Length of destination string */
 
+  if (size == 0)
+    return 0;
 
- /*
-  * Figure out how much room is left...
-  */
-
+  /* Figure out how much room is left... */
   dstlen = strlen(dst);
-  size   -= dstlen + 1;
-
-  if (!size)
+  if (size <= dstlen + 1)
     return (dstlen);        /* No room, return immediately... */
+  size -= dstlen + 1;
 
- /*
-  * Figure out how much room is needed...
-  */
-
+  /* Figure out how much room is needed... */
   srclen = strlen(src);
 
- /*
-  * Copy the appropriate amount...
-  */
-
+  /* Copy the appropriate amount... */
   if (srclen > size)
     srclen = size;
 
@@ -51,26 +44,22 @@ strlcat(char       *dst,        /* O - Destination string */
  * '_cups_strlcpy()' - Safely copy two strings.
  */
 
-size_t                  /* O - Length of string */
-strlcpy(char       *dst,        /* O - Destination string */
-              const char *src,      /* I - Source string */
-          size_t      size)     /* I - Size of destination string buffer */
+size_t                      /* O - Length of string */
+strlcpy(char       *dst,    /* O - Destination string */
+        const char *src,    /* I - Source string */
+        size_t      size)   /* I - Size of destination string buffer */
 {
   size_t    srclen;         /* Length of source string */
 
 
- /*
-  * Figure out how much room is needed...
-  */
-
+  /* Figure out how much room is needed... */
+  if (size == 0)
+    return 0;
   size --;
 
   srclen = strlen(src);
 
- /*
-  * Copy the appropriate amount...
-  */
-
+  /* Copy the appropriate amount... */
   if (srclen > size)
     srclen = size;
 

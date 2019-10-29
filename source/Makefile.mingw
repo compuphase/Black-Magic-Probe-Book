@@ -2,6 +2,7 @@
 #
 #       Makefile for Black Magic Probe utilities
 #       o  uses MingW
+#       o  Nuklear GUI with GDI+ back-end
 #
 #       For release version, use NDEBUG=
 #       Do "make depend" to update dependencies in this makefile
@@ -69,27 +70,32 @@ endif
 #               Project
 # -------------------------------------------------------------
 
-OBJLIST_BMDEBUG = bmdebug.o bmscan.o bmp-script.o elf-postlink.o \
-                  guidriver.o minIni.o rs232.o \
-                  specialfolder.o strlcpy.o \
+OBJLIST_BMDEBUG = bmdebug.o bmscan.o bmp-script.o elf.o \
+                  guidriver.o minIni.o rs232.o specialfolder.o strlcpy.o \
                   decodectf.o parsetsdl.o swotrace.o \
                   nuklear.o nuklear_gdip.o noc_file_dialog.o
 
 OBJLIST_BMFLASH = bmflash.o bmscan.o bmp-script.o bmp-support.o crc32.o \
-                  elf-postlink.o gdb-rsp.o guidriver.o minIni.o rs232.o \
+                  elf.o gdb-rsp.o guidriver.o minIni.o rs232.o \
                   specialfolder.o xmltractor.o strlcpy.o \
                   nuklear.o nuklear_gdip.o noc_file_dialog.o
 
 OBJLIST_BMTRACE = bmtrace.o bmscan.o bmp-script.o bmp-support.o crc32.o \
-                  elf-postlink.o gdb-rsp.o guidriver.o minIni.o rs232.o \
+                  elf.o gdb-rsp.o guidriver.o minIni.o rs232.o \
                   specialfolder.o xmltractor.o strlcpy.o \
                   decodectf.o parsetsdl.o swotrace.o \
                   nuklear.o nuklear_gdip.o noc_file_dialog.o
 
+OBJLIST_POSTLINK = elf-postlink.o elf.o
+
+OBJLIST_TRACEGEN = tracegen.o parsetsdl.o strlcpy.o
+
+
 project : bmdebug.exe bmflash.exe bmtrace.exe bmscan.exe elf-postlink.exe tracegen.exe
 
 depend :
-	makedepend -b -fmakefile.dep $(OBJLIST_BMDEBUG:.o=.c) $(OBJLIST_BMFLASH:.o=.c) $(OBJLIST_BMTRACE:.o=.c)
+	makedepend -b -fmakefile.dep $(OBJLIST_BMDEBUG:.o=.c) $(OBJLIST_BMFLASH:.o=.c) \
+                   $(OBJLIST_BMTRACE:.o=.c) $(OBJLIST_POSTLINK:.o=.c) $(OBJLIST_TRACEGEN:.o=.c)
 
 clean : 
     $(Q)$(shell rm *.o, *.exe)
@@ -110,6 +116,8 @@ bmp-support.o : bmp-support.c
 
 crc32.o : crc32.c
 
+elf.o : elf.c
+
 elf-postlink.o : elf-postlink.c
 
 gdb-rsp.o : gdb-rsp.c
@@ -125,6 +133,8 @@ specialfolder.o : specialfolder.c
 strlcpy.o : strlcpy.c
 
 swotrace.o : swotrace.c
+
+tracegen.o : tracegen.c
 
 xmltractor.o : xmltractor.c
 
@@ -163,11 +173,11 @@ bmtrace.exe : $(OBJLIST_BMTRACE)
 bmscan.exe : bmscan.c
 	$(CL) $(INCLUDE) $(CFLAGS) -DSTANDALONE -o$@ $^
 
-elf-postlink.exe : elf-postlink.c
-	$(CL) $(INCLUDE) $(CFLAGS) -DSTANDALONE -o$@ $^
+elf-postlink.exe : $(OBJLIST_POSTLINK)
+	$(LNK) $(LFLAGS) -o$@ $^
 
-tracegen.exe : tracegen.c parsetsdl.c strlcpy.c
-	$(CL) $(INCLUDE) $(CFLAGS) -o$@ $^
+tracegen.exe : $(OBJLIST_TRACEGEN)
+	$(LNK) $(LFLAGS) -o@ $^
 
 
 # put generated dependencies at the end, otherwise it does not blend well with

@@ -36,7 +36,7 @@
 #include "bmp-script.h"
 #include "bmp-support.h"
 #include "crc32.h"
-#include "elf-postlink.h"
+#include "elf.h"
 #include "gdb-rsp.h"
 #include "rs232.h"
 #include "xmltractor.h"
@@ -236,8 +236,11 @@ restart:
             *(char*)ptr = '\0';
           /* possibly split the name into a family and an architecture */
           if ((ptr = strrchr(namebuffer, ' ')) != NULL && ptr[1] == 'M' && isdigit(ptr[2])) {
-            *(char*)ptr++ = '\0';
-            strlcpy(arch, ptr, archlength);
+            *(char*)ptr = '\0';
+            if (arch != NULL && archlength > 0)
+              strlcpy(arch, ptr + 1, archlength);
+            while (ptr > namebuffer && *(ptr - 1) == ' ')
+              *(char*)--ptr = '\0'; /* strip trailing whitespace */
           }
           strlcpy(name, namebuffer, namelength);
         }
@@ -321,7 +324,6 @@ int bmp_detach(int powerdown)
 
   return result;
 }
-
 
 int bmp_fullerase(void)
 {

@@ -41,7 +41,8 @@ RCFLAGS   = /D _WIN32 /D WIN32 $(R_DEBUG)
 
 ####### Linker
 LNK       = link
-LFLAGS    = $(L_DEBUG) /NOLOGO /SUBSYSTEM:windows
+LFLAGS_W  = $(L_DEBUG) /NOLOGO /SUBSYSTEM:windows
+LFLAGS_C  = $(L_DEBUG) /NOLOGO /SUBSYSTEM:console
 
 
 # -------------------------------------------------------------
@@ -62,27 +63,33 @@ LFLAGS    = $(L_DEBUG) /NOLOGO /SUBSYSTEM:windows
 #               Project
 # -------------------------------------------------------------
 
-OBJLIST_BMDEBUG = bmdebug.obj bmscan.obj bmp-script.obj elf-postlink.obj \
+OBJLIST_BMDEBUG = bmdebug.obj bmscan.obj bmp-script.obj elf.obj \
                   guidriver.obj minini.obj rs232.obj \
                   specialfolder.obj strlcpy.obj \
                   decodectf.obj parsetsdl.obj swotrace.obj \
                   nuklear.obj nuklear_gdip.obj noc_file_dialog.obj
 
 OBJLIST_BMFLASH = bmflash.obj bmscan.obj bmp-script.obj bmp-support.obj crc32.obj \
-                  elf-postlink.obj gdb-rsp.obj guidriver.obj minIni.obj rs232.obj \
+                  elf.obj gdb-rsp.obj guidriver.obj minIni.obj rs232.obj \
                   specialfolder.obj strlcpy.obj xmltractor.obj \
                   nuklear.obj nuklear_gdip.obj noc_file_dialog.obj
 
 OBJLIST_BMTRACE = bmtrace.obj bmscan.obj bmp-script.obj bmp-support.obj crc32.obj \
-                  elf-postlink.obj gdb-rsp.obj guidriver.obj minini.obj rs232.obj \
+                  elf.obj gdb-rsp.obj guidriver.obj minini.obj rs232.obj \
                   specialfolder.obj strlcpy.obj xmltractor.obj \
                   decodectf.obj parsetsdl.obj swotrace.obj \
                   nuklear.obj nuklear_gdip.obj noc_file_dialog.obj
 
+OBJLIST_POSTLINK = elf-postlink.obj elf.obj
+
+OBJLIST_TRACEGEN = tracegen.obj parsetsdl.obj strlcpy.obj
+
+
 project : bmdebug.exe bmflash.exe bmtrace.exe bmscan.exe elf-postlink.exe tracegen.exe
 
 depend :
-	makedepend -b -fmakefile.dep $(OBJLIST_BMDEBUG:.obj=.c) $(OBJLIST_BMFLASH:.obj=.c) $(OBJLIST_BMTRACE:.obj=.c)
+	makedepend -b -fmakefile.dep $(OBJLIST_BMDEBUG:.obj=.c) $(OBJLIST_BMFLASH:.obj=.c) \
+                   $(OBJLIST_BMTRACE:.obj=.c) $(OBJLIST_POSTLINK:.obj=.c) $(OBJLIST_TRACEGEN:.obj=.c)
 
 
 ##### C files #####
@@ -100,6 +107,8 @@ bmp-script.obj : bmp-script.c
 bmp-support.obj : bmp-support.c
 
 crc32.obj : crc32.c
+
+elf.obj : elf.c
 
 elf-postlink.obj : elf-postlink.c
 
@@ -121,6 +130,8 @@ decodectf.obj : decodectf.c
 
 parsetsdl.obj : parsetsdl.c
 
+tracegen.obj : tracegen.c
+
 noc_file_dialog.obj : noc_file_dialog.c
 
 nuklear.obj : nuklear.c
@@ -140,25 +151,23 @@ bmtrace.res : bmtrace.rc
 ##### Executables #####
 
 bmdebug.exe : $(OBJLIST_BMDEBUG) bmdebug.res
-	$(LNK) $(LFLAGS) /ENTRY:mainCRTStartup /OUT:$@ $** advapi32.lib comdlg32.lib gdi32.lib gdiplus.lib user32.lib winmm.lib shell32.lib shlwapi.lib setupapi.lib winusb.lib
+	$(LNK) $(LFLAGS_W) /ENTRY:mainCRTStartup /OUT:$@ $** advapi32.lib comdlg32.lib gdi32.lib gdiplus.lib user32.lib winmm.lib shell32.lib shlwapi.lib setupapi.lib winusb.lib
 
 bmflash.exe : $(OBJLIST_BMFLASH) bmflash.res
-	$(LNK) $(LFLAGS) /ENTRY:mainCRTStartup /OUT:$@ $** advapi32.lib comdlg32.lib gdi32.lib gdiplus.lib user32.lib winmm.lib shell32.lib shlwapi.lib
+	$(LNK) $(LFLAGS_W) /ENTRY:mainCRTStartup /OUT:$@ $** advapi32.lib comdlg32.lib gdi32.lib gdiplus.lib user32.lib winmm.lib shell32.lib shlwapi.lib
 
 bmtrace.exe : $(OBJLIST_BMTRACE) bmtrace.res
-	$(LNK) $(LFLAGS) /ENTRY:mainCRTStartup /OUT:$@ $** advapi32.lib comdlg32.lib gdi32.lib gdiplus.lib user32.lib winmm.lib shell32.lib shlwapi.lib setupapi.lib winusb.lib
+	$(LNK) $(LFLAGS_W) /ENTRY:mainCRTStartup /OUT:$@ $** advapi32.lib comdlg32.lib gdi32.lib gdiplus.lib user32.lib winmm.lib shell32.lib shlwapi.lib setupapi.lib winusb.lib
 
 bmscan.exe : bmscan.c
 	$(CL) $(CFLAGS) /D STANDALONE /Fe$@ $** advapi32.lib
 	del $*.obj
 
-elf-postlink.exe : elf-postlink.c
-	$(CL) $(CFLAGS) /D STANDALONE /Fe$@ $**
-	del $*.obj
+elf-postlink.exe : $(OBJLIST_POSTLINK)
+	$(LNK) $(LFLAGS_C) /OUT:$@ $**
 
-tracegen.exe : tracegen.c parsetsdl.c strlcpy.c
-	$(CL) $(CFLAGS) /D STANDALONE /Fe$@ $**
-	del $*.obj
+tracegen.exe : $(OBJLIST_TRACEGEN)
+	$(LNK) $(LFLAGS_C) /OUT:$@ $**
 
 # put generated dependencies at the end, otherwise it does not blend well with
 # inference rules, if an item also has an explicit rule.

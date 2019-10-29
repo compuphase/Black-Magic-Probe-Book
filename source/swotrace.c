@@ -666,10 +666,14 @@ int trace_init(void)
 
 void trace_close(void)
 {
-  TerminateThread(hThread, 0);
-  WinUsb_Free(hUSB);
-  hThread = NULL;
-  hUSB = INVALID_HANDLE_VALUE;
+  if (hThread != NULL) {
+    TerminateThread(hThread, 0);
+    hThread = NULL;
+  }
+  if (hUSB != INVALID_HANDLE_VALUE) {
+    WinUsb_Free(hUSB);
+    hUSB = INVALID_HANDLE_VALUE;
+  }
 }
 
 #else

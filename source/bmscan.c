@@ -119,8 +119,10 @@ int find_bmp(int seqnr, int iface, TCHAR *name, size_t namelen)
       /* read GUID */
       LSTATUS stat = RegQueryValueEx(hkeyItem, _T("DeviceInterfaceGUIDs"), NULL, NULL, (LPBYTE)portname, &maxlen);
       /* ERROR_MORE_DATA is returned because there may technically be more GUIDs
-         assigned to the device; we only care about the first one */
-      if (stat != ERROR_SUCCESS && stat != ERROR_MORE_DATA) {
+         assigned to the device; we only care about the first one
+         ERROR_FILE_NOT_FOUND is returned when the key is not found, which may
+         happen on a clone BMP (without SWO trace support) */
+      if (stat != ERROR_SUCCESS && stat != ERROR_MORE_DATA && stat != ERROR_FILE_NOT_FOUND) {
         RegCloseKey(hkeyItem);
         RegCloseKey(hkeySection);
         return 0;
@@ -159,12 +161,9 @@ int find_bmp(int seqnr, int iface, TCHAR *name, size_t namelen)
           ptr += 1;   /* skip '\\.\', if present */
         else
           ptr = value;
-        if (_tcsicmp(ptr, basename) == 0) {
-          if (seqnr-- == 0) {
-            _tcsncpy(name, basename, namelen);
-            name[namelen - 1] = '\0';
-          }
-          break;
+        if (_tcsicmp(ptr, basename) == 0 && seqnr-- == 0) {
+          _tcsncpy(name, basename, namelen);
+          name[namelen - 1] = '\0';
         }
       }
       RegCloseKey(hkeySerialComm);
@@ -173,7 +172,7 @@ int find_bmp(int seqnr, int iface, TCHAR *name, size_t namelen)
          handled by the caller */
       //??? should verify presence of the device, for the case that multiple BMPs
       //    have been connected to the workstation
-      if (seqnr-- == 0) {
+      if (_tcslen(portname) > 0 && seqnr-- == 0) {
         _tcsncpy(name, portname, namelen);
         name[namelen - 1] = '\0';
       }

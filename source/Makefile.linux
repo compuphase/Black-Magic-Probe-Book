@@ -1,6 +1,7 @@
 # -------------------------------------------------------------
 #
-#       Makefile for BlackMagic utilities
+#       Makefile for BlackMagic utilities, Linux version using
+#       GLFW for the Nuklear GUI.
 #       o  uses GCC & GNU Make
 #
 #       For release version, use NDEBUG=
@@ -65,30 +66,35 @@ endif
 #               Project
 # -------------------------------------------------------------
 
-OBJLIST_BMDEBUG = bmdebug.o bmscan.o bmp-script.o elf-postlink.o \
-                  guidriver.o minIni.o rs232.o \
-                  specialfolder.o \
+OBJLIST_BMDEBUG = bmdebug.o bmscan.o bmp-script.o elf.o \
+                  guidriver.o minIni.o rs232.o specialfolder.o \
                   decodectf.o parsetsdl.o swotrace.o \
                   nuklear.o nuklear_glfw_gl2.o noc_file_dialog.o \
                   findfont.o lodepng.o
 
 OBJLIST_BMFLASH = bmflash.o bmscan.o bmp-script.o bmp-support.o crc32.o \
-                  elf-postlink.o gdb-rsp.o guidriver.o minIni.o rs232.o \
-		  specialfolder.o xmltractor.o \
+                  elf.o gdb-rsp.o guidriver.o minIni.o rs232.o \
+                  specialfolder.o xmltractor.o \
                   nuklear.o nuklear_glfw_gl2.o noc_file_dialog.o \
                   findfont.o lodepng.o
 
 OBJLIST_BMTRACE = bmtrace.o bmscan.o bmp-script.o bmp-support.o crc32.o \
-                  elf-postlink.o gdb-rsp.o guidriver.o minIni.o rs232.o \
+                  elf.o gdb-rsp.o guidriver.o minIni.o rs232.o \
                   specialfolder.o xmltractor.o \
                   decodectf.o parsetsdl.o swotrace.o \
                   nuklear.o nuklear_glfw_gl2.o noc_file_dialog.o \
                   findfont.o lodepng.o
 
+OBJLIST_POSTLINK = elf-postlink.o elf.o
+
+OBJLIST_TRACEGEN = tracegen.o parsetsdl.o
+
+
 project: bmdebug bmflash bmtrace bmscan elf-postlink tracegen
 
 depend :
-	makedepend -b -fmakefile.dep $(OBJLIST_BMDEBUG:.o=.c) $(OBJLIST_BMFLASH:.o=.c) $(OBJLIST_BMTRACE:.o=.c)
+	makedepend -b -fmakefile.dep $(OBJLIST_BMDEBUG:.o=.c) $(OBJLIST_BMFLASH:.o=.c) \
+                   $(OBJLIST_BMTRACE:.o=.c) $(OBJLIST_POSTLINK:.o=.c) $(OBJLIST_TRACEGEN:.o=.c)
 
 
 ##### C files #####
@@ -107,6 +113,8 @@ bmp-support.o : bmp-support.c
 
 crc32.o : crc32.c
 
+elf.o : elf.c
+
 elf-postlink.o : elf-postlink.c
 
 findfont.o : findfont.c
@@ -124,6 +132,8 @@ rs232.o : rs232.c
 specialfolder.o : specialfolder.c
 
 swotrace.o : swotrace.c
+
+tracegen.o : tracegen.c
 
 xmltractor.o : xmltractor.c
 
@@ -152,13 +162,13 @@ bmtrace : $(OBJLIST_BMTRACE)
 	$(LNK) $(LFLAGS) -o$@ $^ -lfontconfig -lglfw3 -lGL -lm -lbsd -ldl -lpthread -lX11 -lxcb -lXau -lXdmcp `pkg-config --libs gtk+-3.0` -lusb-1.0
 
 bmscan : bmscan.c
-	$(CL) $(INCLUDE) $(CFLAGS) -DSTANDALONE -o$@ $^
+	$(CL) $(INCLUDE) $(CFLAGS) -DSTANDALONE -o$@ $^ -lbsd
 
-elf-postlink : elf-postlink.c
-	$(CL) $(INCLUDE) $(CFLAGS) -DSTANDALONE -o$@ $^
+elf-postlink : $(OBJLIST_POSTLINK)
+	$(LNK) $(LFLAGS) -o$@ $^
 
-tracegen : tracegen.c parsetsdl.c
-	$(CL) $(INCLUDE) $(CFLAGS) -o$@ $^ -lbsd
+tracegen : $(OBJLIST_TRACEGEN)
+	$(LNK) $(LFLAGS) -o$@ $^ -lbsd
 
 
 # put generated dependencies at the end, otherwise it does not blend well with
