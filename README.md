@@ -22,7 +22,7 @@ The files that it concerns are:
 * winusb.h
 * winusbio.h
 
-The repository for this project contains the file `winusb.def`. You can use this file to create an import library for MingW using `dlltool`. The command line options to use are documented on top of the file `winusbdef`.
+The repository for this project contains the file `winusb.def`. You can use this file to create an import library for MingW using `dlltool`. The command line options to use are documented on top of the file `winusb.def`.
 The location of the header and library files for WinUSB can be set in `makefile.cfg`, see the `Makefile.mingw` for details.
 ### Windows with Visual C/C++
 The makefile for Visual C/C++ uses Microsoft's `nmake`, which is a bare-bones `make` clone. Generating the dependencies does not work yet at this moment.
