@@ -4,9 +4,9 @@ While setting up and using the Black Magic Probe has also been covered in wikis 
 ## Utilities
 Several utilities accompagny this guide. Some are small, such as `bmscan` to locate the (virtual) serial port at which the Black Magic Probe is found. Another is a helper tool for a specific family of micro-controllers (`elf-postlink`). There are GUI utilities and text-mode utilities. All have been tested under Microsoft Windows and Linux.
 ## Building the software
-Several makefiles are provided for various compilers. Use the one that is appropriate for your system.
-Most makefiles include a file called "makefile.cfg" for confuguration. Each makefile has a short section near the top to document which macros you can put in makefile.cfg. The file makefile.cfg is not in this repository; it should be written by you.
-The makefiles also include a dependencies file (if it exists), called "makefile.dep". However, this file is not in the repository either. The project builds without this file, but for tinkering with the code, good dependencies are vital. To get a dependencies file, you need to run `make depend`. This in turn requires that you have the utility [makedepend](https://github.com/compuphase/makedepend) installed.
+Several makefiles are provided for various compilers. Use the one that is appropriate for your system. It is most convenient if you rename the correct makefile (for your system) to `Makefile`, so that you don't have to specify it on the command line each time you run `make`.
+Most makefiles include a file called "makefile.cfg" for confuguration. Each makefile has a short section near the top to document which macros you can put in makefile.cfg. The file makefile.cfg is not in this repository; it should be written by you (unless the defaults are fine for your workstation setup).
+The makefiles also include a dependencies file (if it exists), called "makefile.dep". A basic cross-platform dependencies file is provided. If you start tinkering with the code, and especially if you add new files, you will want to rebuild the dependencies by running `make depend`. This in turn requires that you have the utility [makedepend](https://github.com/compuphase/makedepend) installed.
 ### Linux
 Prerequisites are
 * libusb-1.0
@@ -25,4 +25,4 @@ The files that it concerns are:
 The repository for this project contains the file `winusb.def`. You can use this file to create an import library for MingW using `dlltool`. The command line options to use are documented on top of the file `winusbdef`.
 The location of the header and library files for WinUSB can be set in `makefile.cfg`, see the `Makefile.mingw` for details.
 ### Windows with Visual C/C++
-The makefile for Visual C/C++ uses Microsoft's `nmake`, which is a bare-bones `make` clone. Generating the dependencies does not work yet at this moment.
+The makefile for Visual C/C++ uses Microsoft's `nmake`, which is a bare-bones `make` clone.
