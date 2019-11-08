@@ -70,7 +70,7 @@ endif
 #               Project
 # -------------------------------------------------------------
 
-OBJLIST_BMDEBUG = bmdebug.o bmscan.o bmp-script.o elf.o \
+OBJLIST_BMDEBUG = bmdebug.o bmscan.o bmp-script.o dwarf.o elf.o \
                   guidriver.o minIni.o rs232.o specialfolder.o strlcpy.o \
                   decodectf.o parsetsdl.o swotrace.o \
                   nuklear.o nuklear_gdip.o noc_file_dialog.o
@@ -115,6 +115,8 @@ bmp-script.o : bmp-script.c
 bmp-support.o : bmp-support.c
 
 crc32.o : crc32.c
+
+dwarf.o : dwarf.c
 
 elf.o : elf.c
 

@@ -315,7 +315,8 @@ struct nk_context* guidriver_init(const char *caption, int width, int height, in
   free(icons[0].pixels);
 
   ctx = nk_glfw3_init(winApp, NK_GLFW3_INSTALL_CALLBACKS);
-  if (font_locate(path, sizeof path, "Ubuntu", "")
+  if (font_locate(path, sizeof path, "DejaVu Sans", "")
+      || font_locate(path, sizeof path, "Ubuntu", "")
       || font_locate(path, sizeof path, "FreeSans", "")
       || font_locate(path, sizeof path, "Liberation Sans", ""))
   {
@@ -328,7 +329,9 @@ struct nk_context* guidriver_init(const char *caption, int width, int height, in
     if (fontStd != NULL)
       nk_style_set_font(ctx, &fontStd->handle);
   }
-  if (font_locate(path, sizeof path, "Andale Mono", "")
+  if (font_locate(path, sizeof path, "Hack", "")
+      || font_locate(path, sizeof path, "Andale Mono", "")
+	  || font_locate(path, sizeof path, "FreeMono", "")
       || font_locate(path, sizeof path, "Liberation Mono", ""))
   {
     struct nk_font_atlas *atlas;

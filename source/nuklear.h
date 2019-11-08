@@ -506,8 +506,9 @@ enum nk_symbol_type {
     NK_SYMBOL_TRIANGLE_RIGHT,
     NK_SYMBOL_PLUS,
     NK_SYMBOL_MINUS,
-    NK_SYMBOL_MAX,
     NK_SYMBOL_TRIANGLE_DOWN_SMALL,
+    NK_SYMBOL_TRIPLE_DOT,
+    NK_SYMBOL_MAX
 };
 /* =============================================================================
  *
@@ -750,6 +751,7 @@ enum nk_keys {
     NK_KEY_CUT,
     NK_KEY_PASTE,
     NK_KEY_FIND,
+    NK_KEY_GOTO,
     NK_KEY_REPLACE,
     NK_KEY_UP,
     NK_KEY_DOWN,
@@ -3159,6 +3161,10 @@ NK_API void nk_value_color_byte(struct nk_context*, const char *prefix, struct n
 NK_API void nk_value_color_float(struct nk_context*, const char *prefix, struct nk_color);
 NK_API void nk_value_color_hex(struct nk_context*, const char *prefix, struct nk_color);
 #endif
+#define NK_SYMBOL_VERTICAL    0x100
+#define NK_SYMBOL_REPEAT(c)   ((c) << 24)   /* in high word of the alignment byte */
+NK_API void nk_symbol_colored(struct nk_context *ctx, enum nk_symbol_type, nk_flags alignment, struct nk_color color);
+NK_API void nk_symbol(struct nk_context *ctx, enum nk_symbol_type, nk_flags alignment);
 /* =============================================================================
  *
  *                                  BUTTON

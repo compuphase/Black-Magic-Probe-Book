@@ -68,8 +68,13 @@ static const REG_DEF registers[] = {
   { "SCB_MEMMAP_V4",        0xE01FC040, 4 },  /**< LPC ARM7TDMI series */
   { "M4MEMMAP",             0x40043100, 4 },  /**< LPC43xx series */
 
-  { "RCC_APB2ENR",          0x40021018, 4 },  /**< APB2 Peripheral Clock Enable Register */
-  { "AFIO_MAPR",            0x40010004, 4 },  /**< STM32 AF remap and debug I/O configuration */
+  { "RCC_APB2ENR",          0x40021018, 4 },  /**< STM32F1 APB2 Peripheral Clock Enable Register */
+  { "AFIO_MAPR",            0x40010004, 4 },  /**< STM32F1 AF remap and debug I/O configuration */
+  { "RCC_AHB1ENR",          0x40023830, 4 },  /**< STM32F4 AHB1 Peripheral Clock Enable Register */
+  { "GPIOB_MODER",          0x40020400, 4 },  /**< STM32F4 GPIO Port B Mode Register */
+  { "GPIOB_AFRL",           0x40020420, 4 },  /**< STM32F4 GPIO Port B Alternate Function Low Register */
+  { "GPIOB_OSPEEDR",        0x40020408, 4 },  /**< STM32F4 GPIO Port B Output Speed Register */
+  { "GPIOB_PUPDR",          0x4002040C, 4 },  /**< STM32F4 GPIO Port B Pull-Up/Pull-Down Register */
   { "DBGMCU_CR",            0xE0042004, 4 },  /**< STM32 Debug MCU Configuration Register */
 
   { "TRACECLKDIV_LPC13xx",  0x400480AC, 4 },
@@ -120,11 +125,21 @@ static const REG_SCRIPT scripts[] = {
   },
 
   /* MCU-specific & generic configuration for SWO tracing */
-  { "swo-device", "STM32F1 medium density,"
-                  "STM32F1 high density,"
-                  "STM32F3,STM32F03,STM32F05,STM32F07,STM32F09",
+  { "swo-device", "STM32F1 medium density,STM32F1 high density",
     "RCC_APB2ENR |= 1 \n"
     "AFIO_MAPR |= 0x2000000 \n" /* 2 << 24 */
+    "DBGMCU_CR |= 0x20 \n"      /* 1 << 5 */
+  },
+  { "swo-device", "STM32F3,STM32F03,STM32F05,STM32F07,STM32F09,STM32F2",
+    "DBGMCU_CR |= 0x20 \n"      /* 1 << 5 */
+  },
+  { "swo-device", "STM32F4,STM32F7",
+    "RCC_AHB1ENR |= 0x02 \n"    /* enable GPIOB clock */
+    "GPIOB_MODER ~= 0x00c0 \n"  /* PB3: use alternate function */
+    "GPIOB_MODER |= 0x0080 \n"
+    "GPIOB_AFRL ~= 0xf000 \n"   /* set AF0 (==TRACESWO) on PB3 */
+    "GPIOB_OSPEEDR |= 0x00c0 \n"/* set max speed on PB3 */
+    "GPIOB_PUPDR ~= 0x00c0 \n"  /* no pull-up or pull-down on PB3 */
     "DBGMCU_CR |= 0x20 \n"      /* 1 << 5 */
   },
   { "swo-device", "LPC13xx",

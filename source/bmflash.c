@@ -54,9 +54,12 @@
 #include "rs232.h"
 #include "specialfolder.h"
 
-#include "res/btn_folder.h"
 #if defined __linux__ || defined __unix__
   #include "res/icon_download_64.h"
+#endif
+
+#if !defined _MAX_PATH
+  #define _MAX_PATH 260
 #endif
 
 #ifndef NK_ASSERT
@@ -172,7 +175,7 @@ static int log_widget(struct nk_context *ctx, const char *id, const char *conten
   /* black background on group */
   bkgnd = stwin->fixed_background;
   stwin->fixed_background = nk_style_item_color(nk_rgba(20, 29, 38, 225));
-  if (nk_group_begin_titled(ctx, id, "", NK_WINDOW_BORDER)) {
+  if (nk_group_begin(ctx, id, NK_WINDOW_BORDER)) {
     float lineheight = 0;
     const char *head = content;
     while (head != NULL && *head != '\0' && !(*head == '\n' && *(head + 1) == '\0')) {
@@ -538,15 +541,14 @@ int main(int argc, char *argv[])
   enum { TAB_OPTIONS, TAB_SERIALIZATION, TAB_STATUS, /* --- */ TAB_COUNT };
 
   struct nk_context *ctx;
-  struct nk_image btn_folder;
   struct nk_rect rcwidget;
   enum nk_collapse_states tab_states[TAB_COUNT];
   int running = 1;
   int curstate = STATE_IDLE;
-  char txtFilename[256] = "", txtCfgFile[256];
+  char txtFilename[_MAX_PATH] = "", txtCfgFile[_MAX_PATH];
   char txtSection[32] = "", txtAddress[32] = "", txtMatch[64] = "", txtOffset[32] = "";
   char txtSerial[32] = "", txtSerialSize[32] = "";
-  char txtConfigFile[256];
+  char txtConfigFile[_MAX_PATH];
   FILE *fpTgt, *fpWork;
   int opt_tpwr = nk_false;
   int opt_fullerase = nk_false;
@@ -592,7 +594,6 @@ int main(int argc, char *argv[])
 
   ctx = guidriver_init("BlackMagic Flash Programmer", WINDOW_WIDTH, WINDOW_HEIGHT, 0, FONT_HEIGHT);
   set_style(ctx);
-  btn_folder = guidriver_image_from_memory(btn_folder_data, btn_folder_datasize);
 
   tab_states[TAB_OPTIONS] = NK_MINIMIZED;
   tab_states[TAB_SERIALIZATION] = NK_MINIMIZED;
@@ -763,7 +764,7 @@ int main(int argc, char *argv[])
       else if ((result & NK_EDIT_DEACTIVATED) != 0 && strncmp(txtFilename, txtCfgFile, strlen(txtFilename)) != 0)
         load_options = 2;
       nk_layout_row_push(ctx, 26);
-      if (nk_button_image(ctx, btn_folder) || nk_input_is_key_pressed(&ctx->input, NK_KEY_OPEN)) {
+      if (nk_button_symbol(ctx, NK_SYMBOL_TRIPLE_DOT) || nk_input_is_key_pressed(&ctx->input, NK_KEY_OPEN)) {
         const char *s = noc_file_dialog_open(NOC_FILE_DIALOG_OPEN,
                                              "ELF Executables\0*.elf;*.bin;*.\0All files\0*.*\0",
                                              NULL, NULL, "Select ELF Executable",
@@ -777,7 +778,7 @@ int main(int argc, char *argv[])
       nk_layout_row_end(ctx);
 
       nk_layout_row_dynamic(ctx, 7.5*ROW_HEIGHT, 1);
-      if (nk_group_begin_titled(ctx, "options", "", 0)) {
+      if (nk_group_begin(ctx, "options", 0)) {
         if (nk_tree_state_push(ctx, NK_TREE_TAB, "Options", &tab_states[TAB_OPTIONS])) {
           nk_layout_row(ctx, NK_DYNAMIC, ROW_HEIGHT * 0.8, 2, nk_ratio(2, 0.45, 0.55));
           nk_label(ctx, "MCU Family", NK_TEXT_ALIGN_LEFT | NK_TEXT_ALIGN_MIDDLE);

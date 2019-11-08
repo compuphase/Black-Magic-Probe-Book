@@ -1069,6 +1069,13 @@ nk_gdip_handle_event(HWND wnd, UINT msg, WPARAM wparam, LPARAM lparam)
             }
             break;
 
+        case 'G':
+            if (ctrl) {
+                nk_input_key(&gdip.ctx, NK_KEY_GOTO, down);
+                return 1;
+            }
+            break;
+
         case 'H':
             if (ctrl) {
                 nk_input_key(&gdip.ctx, NK_KEY_REPLACE, down);

@@ -59,6 +59,7 @@
 
 #include "bmscan.h"
 #include "bmp-script.h"
+#include "dwarf.h"
 #include "guidriver.h"
 #include "noc_file_dialog.h"
 #include "minIni.h"
@@ -68,9 +69,12 @@
 #include "decodectf.h"
 #include "swotrace.h"
 
-#include "res/btn_folder.h"
 #if defined __linux__ || defined __unix__
   #include "res/icon_debug_64.h"
+#endif
+
+#if !defined _MAX_PATH
+  #define _MAX_PATH 260
 #endif
 
 #ifndef NK_ASSERT
@@ -93,6 +97,7 @@
 #endif
 
 static char *translate_path(char *path, int todos);
+static const char *source_getname(unsigned idx);
 
 
 #define STRFLG_INPUT    0x0001  /* stdin echo */
@@ -172,7 +177,7 @@ static void stringlist_clear(STRINGLIST *root)
 /** stringlist_getlast() returns the last string that has the "include" flags
  *  all set and that has none of the "exclude" flags set. So setting include to
  *  STRFLG_RESULT and exclude to STRFLG_HANDLED returns the last result message
- *  that is not hidden, and include and exclude to 0 simply returns the very
+ *  that is not handled, and include and exclude to 0 simply returns the very
  *  last message.
  */
 static STRINGLIST *stringlist_getlast(STRINGLIST *root, int include, int exclude)
@@ -396,7 +401,7 @@ static int console_add(const char *text, int flags)
     const char *tail = strpbrk(head, "\r\n");
     if (tail == NULL) {
       tail = head + strlen(head);
-      addstring = 0;
+      addstring = 0;  /* string is not terminated, wait for more characters to come in */
     } else {
       addstring = 1;
     }
@@ -421,6 +426,13 @@ static int console_add(const char *text, int flags)
         /* after gdbmi_leader(), there may again be \n in the resulting string */
         char *tok;
         for (tok = strtok((char*)ptr, "\n"); tok != NULL; tok = strtok(NULL, "\n")) {
+          /* avoid adding a "log" string when the same string is at the tail of
+             the list */
+          if (xtraflags & STRFLG_LOG) {
+            STRINGLIST *last = stringlist_getlast(&consolestring_root, 0, 0);
+            if (strcmp(last->text, tok) == 0)
+              continue;
+          }
           stringlist_add(&consolestring_root, tok, flags | xtraflags);
           if ((xtraflags & STRFLG_TARGET) != 0 && (curflags & STRFLG_STARTUP) == 0)
             stringlist_add(&semihosting_root, tok, curflags | xtraflags);
@@ -437,6 +449,209 @@ static void console_input(const char *text)
   gdbmi_sethandled(0); /* clear result on new input */
   assert(text != NULL);
   console_add(text, STRFLG_INPUT);
+}
+
+static int console_autocomplete(char *text, size_t textsize, const DWARF_SYMBOLLIST *symboltable)
+{
+  typedef struct tagGDBCOMMAND {
+    const char *command;
+    const char *shorthand;
+    const char *parameters;
+  } GDBCOMMAND;
+  static const GDBCOMMAND commands[] = {
+    { "attach", NULL, NULL },
+    { "backtrace", "bt", NULL },
+    { "break", "b", "%func %file" },
+    { "clear", NULL, "%func %file" },
+    { "command", NULL, NULL },
+    { "cond", NULL, NULL },
+    { "continue", "c", NULL },
+    { "delete", NULL, NULL },
+    { "disable", NULL, NULL },
+    { "display", NULL, "%func" },
+    { "down", NULL, NULL },
+    { "enable", NULL, NULL },
+    { "file", NULL, NULL },
+    { "find", NULL, NULL },
+    { "finish", "fin", NULL },
+    { "frame", NULL, NULL },
+    { "info", NULL, "args locals sources" },
+    { "list", NULL, "%func %var %file" },
+    { "load", NULL, NULL },
+    { "monitor", NULL, "connect_srst hard_srst jtag_scan morse option swdp_scan targets tpwr traceswo vector_catch" },
+    { "next", "n", NULL },
+    { "print", "p", "%var" },
+    { "ptype", NULL, "%var" },
+    { "quit", NULL, NULL },
+    { "run", NULL, NULL },
+    { "set", NULL, "%var" },
+    { "start", NULL, NULL },
+    { "step", "s", NULL },
+    { "target", NULL, "extended-remote remote" },
+    { "tbreak", NULL, "%func %file" },
+    { "trace", NULL, "async channel disable info passive" },
+    { "undisplay", NULL, NULL },
+    { "until", "u", NULL },
+    { "up", NULL, NULL },
+    { "watch", NULL, "%var" }
+  };
+  static char *cache_text = NULL;
+  static int cache_cutoff = 0;
+  static int cache_skip = 0;
+  char *word;
+  size_t len, idx, skip;
+  int result = 0;
+
+  assert(text != NULL);
+
+  /* first check whether the text is unmodified from the last cached string */
+  if (cache_text != NULL && strcmp(text, cache_text) == 0) {
+    assert(cache_cutoff >= 0 && cache_cutoff < textsize);
+    text[cache_cutoff] = '\0';
+    cache_skip += 1;
+  } else {
+    cache_skip = 0;
+    cache_cutoff = strlen(text);
+  }
+
+  /* delete any leading spaces (they cause trouble in parsing) */
+  while (text[0] == ' ')
+    memmove(text, text + 1, strlen(text));
+
+  /* get the start of the last word */
+  if ((word = strrchr(text, ' ')) == NULL)
+    word = text;
+  else
+    word = (char*)skipwhite(word);
+  if (strlen(word) == 0)
+    return 0; /* no start of a word; nothing to autocomplete */
+
+  skip = cache_skip;
+  if (word == text) {
+    /* first word: auto-complete command */
+    const GDBCOMMAND *first = NULL;
+    /* step 1: find shorthand (must be full match) */
+    for (idx = 0; !result && idx < sizearray(commands); idx++) {
+      if (commands[idx].shorthand != NULL && strcmp(word, commands[idx].shorthand) == 0) {
+        strlcpy(text, commands[idx].command, textsize);
+        result = 1;
+      }
+    }
+    /* step 2: find a partial match on the full name, but skip the first matches */
+    len = strlen(word);
+    for (idx = 0; !result && idx < sizearray(commands); idx++) {
+      assert(commands[idx].command != NULL);
+      if (strncmp(word, commands[idx].command, len) == 0) {
+        if (first == NULL)
+          first = &commands[idx];
+        if (skip == 0) {
+          strlcpy(text, commands[idx].command, textsize);
+          result = 1;
+        }
+        skip--;
+      }
+    }
+    /* step 3: if there were matches, but all were skipped, wrap around to find
+       the first match */
+    if (!result && first != NULL) {
+      cache_skip = 0;
+      strlcpy(text, first->command, textsize);
+      result = 1;
+    }
+    if (result)
+      strlcat(text, " ", textsize);
+  } else {
+    /* any next word: auto-completion depends on the command */
+    const GDBCOMMAND *cmd = NULL;
+    char str[50], *ptr;
+    int count, fullmatch;
+    /* get the command */
+    ptr = strchr(text, ' ');
+    assert(ptr != NULL);  /* last space was found, so first space must be too */
+    len = ptr - text;
+    if (len >= sizearray(str))
+      len = sizearray(str) - 1;
+    strncpy(str, text, len);
+    str[len] = '\0';
+    /* accept either a full match on the alias or a partial match on the command
+       name, but only if there is a single partial match */
+    count = fullmatch = 0;
+    for (idx = 0; !fullmatch && idx < sizearray(commands); idx++) {
+      if (commands[idx].shorthand != NULL && strcmp(str, commands[idx].shorthand) == 0) {
+        cmd = &commands[idx];
+        fullmatch = 1;
+      } else if (strncmp(str, commands[idx].command, len) == 0) {
+        cmd = &commands[idx];
+        count++;
+      }
+    }
+    if (fullmatch || count == 1) {
+      assert(cmd != NULL);
+      len = strlen(word);
+      if (cmd->parameters != NULL) {
+        char *params = strdup(cmd->parameters);
+        if (params != NULL) {
+          const char *first = NULL;
+          for (ptr = strtok(params, " "); !result && ptr != NULL; ptr = strtok(NULL, " ")) {
+            if (strcmp(ptr, "%file") == 0) {
+              const char *fname;
+              for (idx = 0; !result && (fname = source_getname(idx)) != NULL; idx++) {
+                if (strncmp(word, fname, len)== 0) {
+                  if (first == NULL)
+                    first = fname;
+                  if (skip == 0) {
+                    strlcpy(word, fname, textsize - (word - text));
+                    result = 1;
+                  }
+                  skip--;
+                }
+              }
+            } else if (strcmp(ptr, "%var") == 0 || strcmp(ptr, "%func") == 0) {
+              const DWARF_SYMBOLLIST *sym;
+              for (idx = 0; !result && (sym = dwarf_get_sym(symboltable, idx)) != 0; idx++) {
+                assert(sym->name != NULL);
+                if (strncmp(word, sym->name, len)== 0) {
+                  if ((strcmp(ptr, "%var") == 0 && sym->address == 0) || (strcmp(ptr, "%func") == 0 && sym->address != 0)) {
+                    if (first == NULL)
+                      first = sym->name;
+                    if (skip == 0) {
+                      strlcpy(word, sym->name, textsize - (word - text));
+                      result = 1;
+                    }
+                    skip--;
+                  }
+                }
+              }
+            } else if (strncmp(word, ptr, len)== 0) {
+              if (first == NULL)
+                first = ptr;
+              if (skip == 0) {
+                strlcpy(word, ptr, textsize - (word - text));
+                result = 1;
+              }
+              skip--;
+            }
+          }
+          if (!result && first != NULL) {
+            cache_skip = 0;
+            strlcpy(word, first, textsize - (word - text));
+            result = 1;
+          }
+          free((void*)params);
+        }
+      }
+    }
+  }
+
+  /* update cache */
+  if (cache_text != NULL) {
+    free((void*)cache_text);
+    cache_text = NULL;
+  }
+  if (result)
+    cache_text = strdup(text);
+
+  return result;
 }
 
 
@@ -540,7 +755,7 @@ static void sources_parse(const char *gdbresult)
   assert(head[6] == '[');
   head += 7;  /* skip [ too */
   for ( ;; ) {
-    char name[256] = "", path[256] = "";
+    char name[_MAX_PATH] = "", path[_MAX_PATH] = "";
     const char *sep = head;
     int len;
     assert(*head == '{');
@@ -627,6 +842,13 @@ static int source_lookup(const char *filename)
       return idx;
 
   return -1;
+}
+
+static const char *source_getname(unsigned idx)
+{
+  if (idx < sources_count)
+    return sources_namelist[idx];
+  return NULL;
 }
 
 
@@ -810,7 +1032,7 @@ static int breakpoint_parse(const char *gdbresult)
           bp->address = strtoul(start, NULL, 0);
         }
         if ((start=fieldfind(line, "file")) != NULL) {
-          char filename[256];
+          char filename[_MAX_PATH];
           start = fieldvalue(start, &len);
           assert(start != NULL);
           if (len >= sizearray(filename))
@@ -1045,7 +1267,7 @@ static const char *lastdirsep(const char *path)
 
 static int ctf_findmetadata(const char *target, char *metadata, size_t metadata_len)
 {
-  char basename[256], path[256], *ptr;
+  char basename[_MAX_PATH], path[_MAX_PATH], *ptr;
   unsigned len, idx;
 
   /* create the base name (without path) from the target name; add a .tsdl extension */
@@ -1131,7 +1353,7 @@ static int check_stopped(int *filenr, int *linenr)
         const char *head, *tail;
         last_is_stopped = 1;
         if ((head = strstr(item->text, "file=")) != 0) {
-          char filename[256];
+          char filename[_MAX_PATH];
           unsigned len;
           assert(head[5] == '"');
           head += 6;
@@ -1554,6 +1776,7 @@ static int is_idle(void)
 #define FONT_HEIGHT   14
 #define ROW_HEIGHT    (1.6 * FONT_HEIGHT)
 #define COMBOROW_CY   (0.8 * ROW_HEIGHT)
+#define BUTTON_WIDTH  (3 * FONT_HEIGHT)
 
 static void set_style(struct nk_context *ctx)
 {
@@ -1603,7 +1826,7 @@ static void console_widget(struct nk_context *ctx, const char *id, float rowheig
 
   /* black background on group */
   nk_style_push_color(ctx, &ctx->style.window.fixed_background.data.color, nk_rgba(20, 29, 38, 225));
-  if (nk_group_begin_titled(ctx, id, "", NK_WINDOW_BORDER)) {
+  if (nk_group_begin(ctx, id, NK_WINDOW_BORDER)) {
     int lines = 0;
     float lineheight = 0;
     for (item = consolestring_root.next; item != NULL; item = item->next) {
@@ -1694,7 +1917,7 @@ static void source_widget(struct nk_context *ctx, const char *id, float rowheigh
 
   /* black background on group */
   nk_style_push_color(ctx, &ctx->style.window.fixed_background.data.color, nk_rgba(20, 29, 38, 225));
-  if (nk_group_begin_titled(ctx, id, "", NK_WINDOW_BORDER)) {
+  if (nk_group_begin(ctx, id, NK_WINDOW_BORDER)) {
     int lines = 0, maxlen = 0;
     float maxwidth = 0;
     for (item = sourcefile_root.next; item != NULL; item = item->next) {
@@ -1974,7 +2197,8 @@ enum {
 
 #define TERM_END(s, i)  ((s)[i] == ' ' || (s)[i] == '\0')
 
-static int handle_list_cmd(const char *command)
+static int handle_list_cmd(const char *command, const DWARF_SYMBOLLIST *symboltable,
+                           const DWARF_PATHLIST *filetable)
 {
   command = skipwhite(command);
   if (strncmp(command, "list", 4) == 0 && TERM_END(command, 4)) {
@@ -1996,25 +2220,32 @@ static int handle_list_cmd(const char *command)
         return 1;
       }
     } else {
-      unsigned line, idx;                       /* "list filename" & "list filename:#" */
-      char *p2 = strchr(p1, ':');
-      if (p2 != NULL) {
-        *p2++ = '\0';
-        line = (int)strtol(p2, NULL, 10);
+      const DWARF_SYMBOLLIST *sym;              /* "list filename", "list filename:#" or "list function" */
+      unsigned line = 0, idx = UINT_MAX;
+      sym = dwarf_lookup_sym(symboltable, p1);
+      if (sym != NULL) {
+        const DWARF_PATHLIST *path = dwarf_lookup_path(filetable, sym->fileindex);
+        if (path != NULL)
+          idx = source_lookup(path->name);
+        line = sym->line;
       } else {
-        line = 1;
-      }
-      if (strchr(p1, '.') != NULL) {
-        /* extension is given, try an exact match */
-        for (idx = 0; idx < sources_count; idx++)
-          if (strcmp(sources_namelist[idx], p1) == 0)
-            break;
-      } else {
-        /* no extension, ignore extension on match */
-        unsigned len = strlen(p1);
-        for (idx = 0; idx < sources_count; idx++)
-          if (strncmp(sources_namelist[idx], p1, len) == 0 && sources_namelist[idx][len] == '.')
-            break;
+        char *p2 = strchr(p1, ':');
+        if (p2 != NULL) {
+          *p2++ = '\0';
+          line = (int)strtol(p2, NULL, 10);
+        } else {
+          line = 1;
+        }
+        if (strchr(p1, '.') != NULL) {
+          /* extension is given, try an exact match */
+          idx = source_lookup(p1);
+        } else {
+          /* no extension, ignore extension on match */
+          unsigned len = strlen(p1);
+          for (idx = 0; idx < sources_count; idx++)
+            if (strncmp(sources_namelist[idx], p1, len) == 0 && sources_namelist[idx][len] == '.')
+              break;
+        }
       }
       if (idx < sources_count && line >= 1) {
         source_cursorfile = idx;
@@ -2277,8 +2508,7 @@ int main(int argc, char *argv[])
   enum { SPLITTER_NONE, SPLITTER_VERTICAL, SPLITTER_HORIZONTAL, SIZER_SEMIHOSTING, SIZER_SWO };
 
   struct nk_context *ctx;
-  struct nk_image btn_folder;
-  char txtFilename[256], txtConfigFile[256], txtGDBpath[256], txtTSDLfile[256];
+  char txtFilename[_MAX_PATH], txtConfigFile[_MAX_PATH], txtGDBpath[_MAX_PATH], txtTSDLfile[_MAX_PATH];
   char port_gdb[64], mcu_family[64], mcu_architecture[64];
   char valstr[128];
   int canvas_width, canvas_height;
@@ -2300,6 +2530,9 @@ int main(int argc, char *argv[])
   int prev_clicked_line;
   unsigned watchseq;
   unsigned long scriptparams[3];
+  DWARF_LINELOOKUP linetable = { NULL };
+  DWARF_SYMBOLLIST symboltable = { NULL};
+  DWARF_PATHLIST filetable = { NULL};
 
   /* locate the configuration file */
   if (folder_AppConfig(txtConfigFile, sizearray(txtConfigFile))) {
@@ -2388,7 +2621,6 @@ int main(int argc, char *argv[])
 
   ctx = guidriver_init("BlackMagic Debugger", canvas_width, canvas_height, GUIDRV_RESIZEABLE | GUIDRV_TIMER, FONT_HEIGHT);
   set_style(ctx);
-  btn_folder = guidriver_image_from_memory(btn_folder_data, btn_folder_datasize);
 
   while (curstate != STATE_QUIT) {
     /* handle state */
@@ -2449,6 +2681,8 @@ int main(int argc, char *argv[])
           if (strncmp(gdbmi_isresult(), "connected", 9) == 0) {
             curstate = STATE_MON_TPWR;
           } else {
+            sprintf(cmd, "Port %s busy or unavailable\n", port_gdb);
+            console_add(cmd, STRFLG_ERROR);
             curstate = STATE_SCAN_BMP;
             set_idle_time(1000); /* drop back to scan (after on timeout) */
           }
@@ -2481,6 +2715,8 @@ int main(int argc, char *argv[])
           task_stdin(&task, "monitor swdp_scan\n");
           atprompt = 0;
           prevstate = curstate;
+          mcu_family[0] = '\0';
+          mcu_architecture[0] = '\0';
         } else if (gdbmi_isresult() != NULL) {
           if (strncmp(gdbmi_isresult(), "done", 4) == 0) {
             /* save architecture */
@@ -2490,23 +2726,30 @@ int main(int argc, char *argv[])
             ptr = item->text;
             while (*ptr <= ' ' && *ptr != '\0')
               ptr++;
-            assert(isdigit(*ptr));
-            while (isdigit(*ptr))
-              ptr++;
-            while (*ptr <= ' ' && *ptr != '\0')
-              ptr++;
-            assert(*ptr != '\0');
-            strlcpy(mcu_family, ptr, sizearray(mcu_family));
-            /* split off architecture (if present) */
-            mcu_architecture[0] = '\0';
-            if ((ptr = strrchr(mcu_family, ' ')) != NULL && ptr[1] == 'M' && isdigit(ptr[2])) {
-              *(char*)ptr++ = '\0';
-              strlcpy(mcu_architecture, ptr, sizearray(mcu_architecture));
+            /* expect: 1 STM32F10x medium density [M3/M4] */
+            if (isdigit(*ptr)) {
+              while (isdigit(*ptr))
+                ptr++;
+              while (*ptr <= ' ' && *ptr != '\0')
+                ptr++;
+              assert(*ptr != '\0');
+              strlcpy(mcu_family, ptr, sizearray(mcu_family));
+              /* split off architecture (if present) */
+              mcu_architecture[0] = '\0';
+              if ((ptr = strrchr(mcu_family, ' ')) != NULL && ptr[1] == 'M' && isdigit(ptr[2])) {
+                *(char*)ptr++ = '\0';
+                strlcpy(mcu_architecture, ptr, sizearray(mcu_architecture));
+              }
+            } else {
+              strlcpy(cmd, ptr, sizearray(cmd));
+              strlcat(cmd, "\n", sizearray(cmd));
+              console_add(cmd, STRFLG_ERROR);
             }
-            curstate = STATE_ASYNC_MODE;
-          } else {
-            set_idle_time(1000); /* stay in scan state, so toggling TPWR works */
           }
+          if (strlen(mcu_family) > 0)
+            curstate = STATE_ASYNC_MODE;
+          else
+            set_idle_time(1000); /* stay in scan state, so toggling TPWR works */
           gdbmi_sethandled(0);
         }
         break;
@@ -2525,6 +2768,8 @@ int main(int argc, char *argv[])
         }
         break;
       case STATE_ATTACH:
+        if (check_stopped(&source_execfile, &source_execline))
+          curstate = STATE_STOPPED;
         if (!atprompt)
           break;
         if (prevstate != curstate) {
@@ -2534,10 +2779,7 @@ int main(int argc, char *argv[])
           atprompt = 0;
           prevstate = curstate;
         } else if (gdbmi_isresult() != NULL) {
-          if (strncmp(gdbmi_isresult(), "done", 4) == 0)
-            curstate = STATE_FILE;
-          else
-            set_idle_time(1000); /* stay in attach state */
+          curstate = (strncmp(gdbmi_isresult(), "done", 4) == 0) ? STATE_FILE : STATE_STOPPED;
           gdbmi_sethandled(0);
         }
         break;
@@ -2545,6 +2787,7 @@ int main(int argc, char *argv[])
         if (!atprompt)
           break;
         if (prevstate != curstate) {
+          dwarf_cleanup(&linetable,&symboltable,&filetable);
           sprintf(cmd, "-file-exec-and-symbols %s\n", txtFilename);
           if (task_stdin(&task, cmd))
             console_input(cmd);
@@ -2556,9 +2799,12 @@ int main(int argc, char *argv[])
             source_cursorfile = source_cursorline = 0;
             source_execfile = source_execline = 0;
           } else {
-            if (strncmp(gdbmi_isresult(), "error", 5) == 0)
-              console_add(gdbmi_isresult(), STRFLG_ERROR);
-            set_idle_time(1000); /* stay in attach state */
+            if (strncmp(gdbmi_isresult(), "error", 5) == 0) {
+              strlcpy(cmd, gdbmi_isresult(), sizearray(cmd));
+              strlcat(cmd, "\n", sizearray(cmd));
+              console_add(cmd, STRFLG_ERROR);
+            }
+            set_idle_time(1000); /* stay in file state */
           }
           gdbmi_sethandled(0);
         }
@@ -2567,6 +2813,15 @@ int main(int argc, char *argv[])
         if (!atprompt)
           break;
         if (prevstate != curstate) {
+          /* read the DWARF information (for function and variable lookup) */
+          FILE *fp = fopen(txtFilename, "rb");
+          if (fp != NULL) {
+            int address_size;
+            dwarf_read(fp,&linetable,&symboltable,&filetable,&address_size);
+            fclose(fp);
+          }
+          /* also get the list of source files from GDB (it might use a different
+             order of the file index numbers) */
           sources_clear(0);
           source_clear();
           strcpy(cmd, "-file-list-exec-source-files\n");
@@ -2580,8 +2835,11 @@ int main(int argc, char *argv[])
             warn_source_tstamps = !check_sources_tstamps(txtFilename); /* check timestamps of sources against elf file */
             curstate = STATE_MEMACCESS_1;
           } else {
-            if (strncmp(gdbmi_isresult(), "error", 5) == 0)
-              console_add(gdbmi_isresult(), STRFLG_ERROR);
+            if (strncmp(gdbmi_isresult(), "error", 5) == 0) {
+              strlcpy(cmd, gdbmi_isresult(), sizearray(cmd));
+              strlcat(cmd, "\n", sizearray(cmd));
+              console_add(cmd, STRFLG_ERROR);
+            }
             set_idle_time(1000); /* stay in attach state */
           }
           gdbmi_sethandled(0);
@@ -2675,11 +2933,17 @@ int main(int argc, char *argv[])
         }
         break;
       case STATE_CHECK_MAIN:
+        /* first try to find "main" in the DWARF information (if this fails,
+           we have for some reason failed to load/parse the DWARF information) */
+        if (prevstate != curstate && dwarf_lookup_sym(&symboltable, "main") != NULL) {
+          //??? also check whether "main" is a function
+          curstate = STATE_START;     /* main() found, restart program at main */
+          break;
+        }
         if (!atprompt)
           break;
         if (prevstate != curstate) {
           /* check whether the there is a function "main" */
-          //??? use the DWARF information
           task_stdin(&task, "info functions ^main$\n");
           atprompt = 0;
           prevstate = curstate;
@@ -2691,12 +2955,12 @@ int main(int argc, char *argv[])
           assert(item != NULL && item->text != NULL);
           ptr = strstr(item->text, "main");
           if (ptr != NULL && (ptr == item->text || *(ptr - 1) == ' ')) {
-            curstate = STATE_START;   /* main() found, restart program at main */
+            curstate = STATE_START;     /* main() found, restart program at main */
           } else {
             check_stopped(&source_execfile, &source_execline);
             source_cursorfile = source_execfile;
             source_cursorline = source_execline;
-            curstate = STATE_STOPPED; /* main() not found, stay stopped */
+            curstate = STATE_STOPPED;   /* main() not found, stay stopped */
             cont_is_run = 1;            /* but when "Cont" is pressed, "run" is performed */
           }
         }
@@ -3111,12 +3375,12 @@ int main(int argc, char *argv[])
         if (nk_group_begin(ctx, "filebrowser", NK_WINDOW_NO_SCROLLBAR|NK_WINDOW_BORDER)) {
           float combo_width;
           nk_layout_row_begin(ctx, NK_STATIC, ROW_HEIGHT, 7);
-          nk_layout_row_push(ctx, 45);
+          nk_layout_row_push(ctx, BUTTON_WIDTH);
           bounds = nk_widget_bounds(ctx);
           if (nk_button_label(ctx, "reset"))
             curstate = STATE_FILE;
           tooltip(ctx, bounds, " Reload and restart the program", &rc_canvas);
-          nk_layout_row_push(ctx, 45);
+          nk_layout_row_push(ctx, BUTTON_WIDTH);
           bounds = nk_widget_bounds(ctx);
           if (curstate == STATE_RUNNING) {
             if (nk_button_label(ctx, "stop") || nk_input_is_key_pressed(&ctx->input, NK_KEY_CTRL_F5)) {
@@ -3132,28 +3396,28 @@ int main(int argc, char *argv[])
             }
             tooltip(ctx, bounds, " Continue running (F5)", &rc_canvas);
           }
-          nk_layout_row_push(ctx, 45);
+          nk_layout_row_push(ctx, BUTTON_WIDTH);
           bounds = nk_widget_bounds(ctx);
           if (nk_button_label(ctx, "next") || nk_input_is_key_pressed(&ctx->input, NK_KEY_F10)) {
             curstate = STATE_EXEC_CMD;
             stateparam[0] = STATEPARAM_EXEC_NEXT;
           }
           tooltip(ctx, bounds, " Step over (F10)", &rc_canvas);
-          nk_layout_row_push(ctx, 45);
+          nk_layout_row_push(ctx, BUTTON_WIDTH);
           bounds = nk_widget_bounds(ctx);
           if (nk_button_label(ctx, "step") || nk_input_is_key_pressed(&ctx->input, NK_KEY_F11)) {
             curstate = STATE_EXEC_CMD;
             stateparam[0] = STATEPARAM_EXEC_STEP;
           }
           tooltip(ctx, bounds, " Step into (F11)", &rc_canvas);
-          nk_layout_row_push(ctx, 45);
+          nk_layout_row_push(ctx, BUTTON_WIDTH);
           bounds = nk_widget_bounds(ctx);
           if (nk_button_label(ctx, "finish") || nk_input_is_key_pressed(&ctx->input, NK_KEY_SHIFT_F11)) {
             curstate = STATE_EXEC_CMD;
             stateparam[0] = STATEPARAM_EXEC_FINISH;
           }
           tooltip(ctx, bounds, " Step out of function (Shift+F11)", &rc_canvas);
-          nk_layout_row_push(ctx, 45);
+          nk_layout_row_push(ctx, BUTTON_WIDTH);
           bounds = nk_widget_bounds(ctx);
           if (nk_button_label(ctx, "until") || nk_input_is_key_pressed(&ctx->input, NK_KEY_F7)) {
             curstate = STATE_EXEC_CMD;
@@ -3161,7 +3425,7 @@ int main(int argc, char *argv[])
             stateparam[1] = source_cursorline;
           }
           tooltip(ctx, bounds, " Run until cursor (F7)", &rc_canvas);
-          combo_width = splitter_columns[0] - 6 * (45 + 5);
+          combo_width = splitter_columns[0] - 6 * (BUTTON_WIDTH + 5);
           nk_layout_row_push(ctx, combo_width);
           if (sources_count > 0) {
             int curfile = source_cursorfile;
@@ -3248,13 +3512,13 @@ int main(int argc, char *argv[])
         /* vertical splitter */
         nk_layout_row_dynamic(ctx, SEPARATOR_VER, 1);
         bounds = nk_widget_bounds(ctx);
-        nk_label(ctx, "\xe2\x80\xa2 \xe2\x80\xa2 \xe2\x80\xa2", NK_TEXT_ALIGN_CENTERED | NK_TEXT_ALIGN_MIDDLE); /* \xe2\x88\x99\xe2\x88\x99\xe2\x88\x99 */
+        nk_symbol(ctx, NK_SYMBOL_CIRCLE_SOLID, NK_TEXT_ALIGN_CENTERED | NK_TEXT_ALIGN_MIDDLE | NK_SYMBOL_REPEAT(3));
         if (nk_input_is_mouse_hovering_rect(&ctx->input, bounds) && nk_input_is_mouse_pressed(&ctx->input, NK_BUTTON_LEFT))
           insplitter = SPLITTER_VERTICAL; /* in vertical splitter */
         else if (insplitter != SPLITTER_NONE && !nk_input_is_mouse_down(&ctx->input, NK_BUTTON_LEFT))
           insplitter = SPLITTER_NONE;
         if (insplitter == SPLITTER_VERTICAL)
-          splitter_ver = (splitter_rows[0] + ctx->input.mouse.delta.y) / (canvas_height - SEPARATOR_HOR - 4 * SPACING);
+          splitter_ver = (splitter_rows[0] + ctx->input.mouse.delta.y) / (canvas_height - SEPARATOR_VER - 4 * SPACING);
 
         /* console space */
         nk_layout_row_dynamic(ctx, splitter_rows[1], 1);
@@ -3262,7 +3526,7 @@ int main(int argc, char *argv[])
           nk_layout_row_dynamic(ctx, splitter_rows[1] - ROW_HEIGHT - SPACING, 1);
           console_widget(ctx, "console-out", FONT_HEIGHT);
           nk_layout_row_dynamic(ctx, ROW_HEIGHT, 1);
-          if (curstate < STATE_START && curstate != STATE_SCAN_BMP) {
+          if (curstate < STATE_START && !atprompt) {
             /* while initializing, say "please wait" */
             strlcpy(console_edit, "Please wait...", sizearray(console_edit));
             nk_edit_string_zero_terminated(ctx, NK_EDIT_FIELD | NK_EDIT_READ_ONLY, console_edit, sizearray(console_edit), nk_filter_ascii);
@@ -3276,6 +3540,7 @@ int main(int argc, char *argv[])
             result = nk_edit_string_zero_terminated(ctx, NK_EDIT_FIELD | NK_EDIT_SIG_ENTER, console_edit, sizearray(console_edit), nk_filter_ascii);
             if (result & NK_EDIT_COMMITED) {
               /* some commands are handled internally */
+              //??? handle "file" command, set txtFilename, drop back to STATE_FILE
               if (handle_display_cmd(console_edit, stateparam, statesymbol, sizearray(statesymbol))) {
                 curstate = STATE_WATCH_TOGGLE;
                 tab_states[TAB_WATCHES] = nk_true; /* make sure the watch view to open */
@@ -3293,7 +3558,9 @@ int main(int argc, char *argv[])
                   }
                 }
                 tab_states[TAB_SWO] = nk_true;  /* make sure the SWO tracing view is open */
-              } else if (!handle_list_cmd(console_edit) && !handle_find_cmd(console_edit)) {
+              } else if (!handle_list_cmd(console_edit, &symboltable, &filetable)
+                         && !handle_find_cmd(console_edit))
+              {
                 strlcat(console_edit, "\n", sizearray(console_edit));
                 if (task_stdin(&task, console_edit))
                   console_input(console_edit);
@@ -3322,7 +3589,7 @@ int main(int argc, char *argv[])
 
       /* column splitter */
       bounds = nk_widget_bounds(ctx);
-      nk_label(ctx, "\xe2\x8b\xae", NK_TEXT_ALIGN_CENTERED | NK_TEXT_ALIGN_MIDDLE);
+      nk_symbol(ctx, NK_SYMBOL_CIRCLE_SOLID, NK_TEXT_ALIGN_CENTERED | NK_TEXT_ALIGN_MIDDLE | NK_SYMBOL_VERTICAL | NK_SYMBOL_REPEAT(3));
       if (nk_input_is_mouse_hovering_rect(&ctx->input, bounds) && nk_input_is_mouse_pressed(&ctx->input, NK_BUTTON_LEFT))
         insplitter = SPLITTER_HORIZONTAL; /* in horizontal splitter */
       else if (insplitter != SPLITTER_NONE && !nk_input_is_mouse_down(&ctx->input, NK_BUTTON_LEFT))
@@ -3334,7 +3601,7 @@ int main(int argc, char *argv[])
       if (nk_group_begin(ctx, "right", NK_WINDOW_BORDER)) {
         if (nk_tree_state_push(ctx, NK_TREE_TAB, "Configuration", &tab_states[TAB_CONFIGURATION])) {
           float edtwidth;
-          char basename[256], *p;
+          char basename[_MAX_PATH], *p;
           bounds = nk_widget_bounds(ctx);
           edtwidth = bounds.w - 65;
           /* GDB */
@@ -3348,7 +3615,7 @@ int main(int argc, char *argv[])
           nk_edit_string_zero_terminated(ctx, NK_EDIT_FIELD | NK_EDIT_READ_ONLY, basename, sizearray(basename), nk_filter_ascii);
           tooltip(ctx, bounds, txtGDBpath, &rc_canvas);
           nk_layout_row_push(ctx, 25);
-          if (nk_button_image(ctx, btn_folder)) {
+          if (nk_button_symbol(ctx, NK_SYMBOL_TRIPLE_DOT)) {
             const char *s;
             s = noc_file_dialog_open(NOC_FILE_DIALOG_OPEN,
                                      "ELF Executables\0*.elf;*.bin;*.\0All files\0*.*\0",
@@ -3373,7 +3640,7 @@ int main(int argc, char *argv[])
           nk_edit_string_zero_terminated(ctx, NK_EDIT_FIELD | NK_EDIT_READ_ONLY, basename, sizearray(basename), nk_filter_ascii);
           tooltip(ctx, bounds, txtFilename, &rc_canvas);
           nk_layout_row_push(ctx, 25);
-          if (nk_button_image(ctx, btn_folder)) {
+          if (nk_button_symbol(ctx, NK_SYMBOL_TRIPLE_DOT)) {
             const char *s;
             translate_path(txtFilename, 1);
             s = noc_file_dialog_open(NOC_FILE_DIALOG_OPEN,
@@ -3534,7 +3801,7 @@ int main(int argc, char *argv[])
         if (nk_tree_state_push(ctx, NK_TREE_TAB, "Semihosting output", &tab_states[TAB_SEMIHOSTING])) {
           nk_layout_row_dynamic(ctx, tab_heights[TAB_SEMIHOSTING], 1);
           nk_style_push_color(ctx, &ctx->style.window.fixed_background.data.color, nk_rgba(20, 29, 38, 225));
-          if (nk_group_begin_titled(ctx, "semihosting", "", 0)) {
+          if (nk_group_begin(ctx, "semihosting", 0)) {
             STRINGLIST *item;
             for (item = semihosting_root.next; item != NULL; item = item->next) {
               nk_layout_row_dynamic(ctx, FONT_HEIGHT, 1);
@@ -3546,7 +3813,7 @@ int main(int argc, char *argv[])
           /* make view height resizeable */
           nk_layout_row_dynamic(ctx, SEPARATOR_VER, 1);
           bounds = nk_widget_bounds(ctx);
-          nk_label(ctx, "\xe2\x80\xa2 \xe2\x80\xa2 \xe2\x80\xa2", NK_TEXT_ALIGN_CENTERED | NK_TEXT_ALIGN_MIDDLE); /* \xe2\x88\x99\xe2\x88\x99\xe2\x88\x99 */
+          nk_symbol(ctx, NK_SYMBOL_CIRCLE_SOLID, NK_TEXT_ALIGN_CENTERED | NK_TEXT_ALIGN_MIDDLE | NK_SYMBOL_REPEAT(3));
           if (nk_input_is_mouse_hovering_rect(&ctx->input, bounds) && nk_input_is_mouse_pressed(&ctx->input, NK_BUTTON_LEFT))
             insplitter = SIZER_SEMIHOSTING; /* in semihosting sizer */
           else if (insplitter != SPLITTER_NONE && !nk_input_is_mouse_down(&ctx->input, NK_BUTTON_LEFT))
@@ -3566,7 +3833,7 @@ int main(int argc, char *argv[])
           /* make view height resizeable */
           nk_layout_row_dynamic(ctx, SEPARATOR_VER, 1);
           bounds = nk_widget_bounds(ctx);
-          nk_label(ctx, "\xe2\x80\xa2 \xe2\x80\xa2 \xe2\x80\xa2", NK_TEXT_ALIGN_CENTERED | NK_TEXT_ALIGN_MIDDLE); /* \xe2\x88\x99\xe2\x88\x99\xe2\x88\x99 */
+          nk_symbol(ctx, NK_SYMBOL_CIRCLE_SOLID, NK_TEXT_ALIGN_CENTERED | NK_TEXT_ALIGN_MIDDLE | NK_SYMBOL_REPEAT(3));
           if (nk_input_is_mouse_hovering_rect(&ctx->input, bounds) && nk_input_is_mouse_pressed(&ctx->input, NK_BUTTON_LEFT))
             insplitter = SIZER_SWO; /* in swo sizer */
           else if (insplitter != SPLITTER_NONE && !nk_input_is_mouse_down(&ctx->input, NK_BUTTON_LEFT))
@@ -3604,12 +3871,18 @@ int main(int argc, char *argv[])
         console_activate = 2;
       } else if (nk_input_is_key_pressed(&ctx->input, NK_KEY_F3)) {
         handle_find_cmd("find");  /* find next */
+      } else if (nk_input_is_key_pressed(&ctx->input, NK_KEY_GOTO)) {
+        strlcpy(console_edit, "list ", sizearray(console_edit));
+        console_activate = 2;
       } else if (nk_input_is_key_pressed(&ctx->input, NK_KEY_REFRESH)) {
         consoleedit_next = (consoleedit_next == NULL || consoleedit_next->next == NULL) ? consoleedit_root.next : consoleedit_next->next;
         if (consoleedit_next != NULL) {
           strlcpy(console_edit, consoleedit_next->text, sizearray(console_edit));
           console_activate = 2;
         }
+      } else if (nk_input_is_key_pressed(&ctx->input, NK_KEY_TAB)) {
+        if (console_autocomplete(console_edit, sizearray(console_edit), &symboltable))
+          console_activate = 2;
       }
 
     } /* window */
@@ -3649,6 +3922,7 @@ int main(int argc, char *argv[])
             channel_getname(idx, NULL, 0));
     ini_puts("SWO trace", key, cmd, txtConfigFile);
   }
+  //??? save history of commands
 
   guidriver_close();
   stringlist_clear(&consolestring_root);
@@ -3656,5 +3930,6 @@ int main(int argc, char *argv[])
   console_clear();
   sources_clear(1);
   source_clear();
+  dwarf_cleanup(&linetable,&symboltable,&filetable);
   return exitcode;
 }

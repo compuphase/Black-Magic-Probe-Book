@@ -312,6 +312,7 @@ nk_glfw3_new_frame(void)
         nk_input_key(ctx, NK_KEY_OPEN, glfwGetKey(win, GLFW_KEY_O) == GLFW_PRESS);
         nk_input_key(ctx, NK_KEY_SAVE, glfwGetKey(win, GLFW_KEY_S) == GLFW_PRESS);
         nk_input_key(ctx, NK_KEY_FIND, glfwGetKey(win, GLFW_KEY_F) == GLFW_PRESS);
+        nk_input_key(ctx, NK_KEY_GOTO, glfwGetKey(win, GLFW_KEY_G) == GLFW_PRESS);
         nk_input_key(ctx, NK_KEY_REPLACE, glfwGetKey(win, GLFW_KEY_H) == GLFW_PRESS);
         nk_input_key(ctx, NK_KEY_COPY, glfwGetKey(win, GLFW_KEY_C) == GLFW_PRESS);
         nk_input_key(ctx, NK_KEY_PASTE, glfwGetKey(win, GLFW_KEY_V) == GLFW_PRESS);
@@ -369,6 +370,7 @@ nk_glfw3_new_frame(void)
         nk_input_key(ctx, NK_KEY_OPEN, 0);
         nk_input_key(ctx, NK_KEY_SAVE, 0);
         nk_input_key(ctx, NK_KEY_FIND, 0);
+        nk_input_key(ctx, NK_KEY_GOTO, 0);
         nk_input_key(ctx, NK_KEY_REPLACE, 0);
         nk_input_key(ctx, NK_KEY_COPY, 0);
         nk_input_key(ctx, NK_KEY_PASTE, 0);

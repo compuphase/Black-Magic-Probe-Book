@@ -35,6 +35,10 @@
 
 #include "parsetsdl.h"
 
+#if !defined _MAX_PATH
+  #define _MAX_PATH 260
+#endif
+
 #if !defined sizearray
   #define sizearray(a)  (sizeof(a) / sizeof((a)[0]))
 #endif
@@ -343,7 +347,7 @@ static void usage(void)
 
 int main(int argc, char *argv[])
 {
-  char infile[256], outfile[256], *ptr;
+  char infile[_MAX_PATH], outfile[_MAX_PATH], *ptr;
   unsigned opt_flags;
   int idx;
 

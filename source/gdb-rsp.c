@@ -26,6 +26,7 @@
 #include <ctype.h>
 #include <stdlib.h>
 #include <string.h>
+#include "gdb-rsp.h"
 #include "rs232.h"
 
 #define TIMEOUT       500

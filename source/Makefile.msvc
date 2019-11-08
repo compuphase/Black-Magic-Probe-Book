@@ -63,7 +63,7 @@ LFLAGS_C  = $(L_DEBUG) /NOLOGO /SUBSYSTEM:console
 #               Project
 # -------------------------------------------------------------
 
-OBJLIST_BMDEBUG = bmdebug.obj bmscan.obj bmp-script.obj elf.obj \
+OBJLIST_BMDEBUG = bmdebug.obj bmscan.obj bmp-script.obj dwarf.obj elf.obj \
                   guidriver.obj minini.obj rs232.obj \
                   specialfolder.obj strlcpy.obj \
                   decodectf.obj parsetsdl.obj swotrace.obj \
@@ -107,6 +107,8 @@ bmp-script.obj : bmp-script.c
 bmp-support.obj : bmp-support.c
 
 crc32.obj : crc32.c
+
+dwarf.obj : dwarf.c
 
 elf.obj : elf.c
 

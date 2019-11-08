@@ -401,15 +401,18 @@ nk_sin(float x)
 NK_LIB float
 nk_cos(float x)
 {
-    NK_STORAGE const float a0 = +1.00238601909309722f;
-    NK_STORAGE const float a1 = -3.81919947353040024e-2f;
-    NK_STORAGE const float a2 = -3.94382342128062756e-1f;
-    NK_STORAGE const float a3 = -1.18134036025221444e-1f;
-    NK_STORAGE const float a4 = +1.07123798512170878e-1f;
-    NK_STORAGE const float a5 = -1.86637164165180873e-2f;
-    NK_STORAGE const float a6 = +9.90140908664079833e-4f;
-    NK_STORAGE const float a7 = -5.23022132118824778e-14f;
-    return a0 + x*(a1 + x*(a2 + x*(a3 + x*(a4 + x*(a5 + x*(a6 + x*a7))))));
+    /* New implementation. Also generated using lolremez. */
+    /* Old version significantly deviated from expected results. */
+    NK_STORAGE const float a0 = 9.9995999154986614e-1f;
+    NK_STORAGE const float a1 = 1.2548995793001028e-3f;
+    NK_STORAGE const float a2 = -5.0648546280678015e-1f;
+    NK_STORAGE const float a3 = 1.2942246466519995e-2f;
+    NK_STORAGE const float a4 = 2.8668384702547972e-2f;
+    NK_STORAGE const float a5 = 7.3726485210586547e-3f;
+    NK_STORAGE const float a6 = -3.8510875386947414e-3f;
+    NK_STORAGE const float a7 = 4.7196604604366623e-4f;
+    NK_STORAGE const float a8 = -1.8776444013090451e-5f;
+    return a0 + x*(a1 + x*(a2 + x*(a3 + x*(a4 + x*(a5 + x*(a6 + x*(a7 + x*a8)))))));
 }
 NK_LIB nk_uint
 nk_round_up_pow2(nk_uint v)
@@ -7209,6 +7212,9 @@ nk_font_bake(struct nk_font_baker *baker, void *image_memory, int width, int hei
                 dst_font->ascent = ((float)unscaled_ascent * font_scale);
                 dst_font->descent = ((float)unscaled_descent * font_scale);
                 dst_font->glyph_offset = glyph_n;
+                // Need to zero this, or it will carry over from a previous
+                // bake, and cause a segfault when accessing glyphs[].
+                dst_font->glyph_count = 0;
             }
 
             /* fill own baked font glyph array */
@@ -11236,7 +11242,11 @@ nk_nonblock_begin(struct nk_context *ctx,
     } else {
         /* close the popup if user pressed outside or in the header */
         int pressed, in_body, in_header;
+#ifdef NK_BUTTON_TRIGGER_ON_RELEASE
+        pressed = nk_input_is_mouse_released(&ctx->input, NK_BUTTON_LEFT);
+#else
         pressed = nk_input_is_mouse_pressed(&ctx->input, NK_BUTTON_LEFT);
+#endif
         in_body = nk_input_is_mouse_hovering_rect(&ctx->input, body);
         in_header = nk_input_is_mouse_hovering_rect(&ctx->input, header);
         if (pressed && (!in_body || in_header))
@@ -13717,6 +13727,77 @@ nk_text_wrap_colored(struct nk_context *ctx, const char *str,
     text.text = color;
     nk_widget_text_wrap(&win->buffer, bounds, str, len, &text, style->font);
 }
+NK_API void
+nk_symbol_colored(struct nk_context *ctx, enum nk_symbol_type type,
+                  nk_flags alignment, struct nk_color color)
+{
+    struct nk_window *win;
+    const struct nk_style *style;
+    const struct nk_user_font *font;
+    struct nk_rect bounds;
+    struct nk_vec2 padding;
+    float size, width, height;
+    int repeat;
+
+    NK_ASSERT(ctx);
+    NK_ASSERT(ctx->current);
+    NK_ASSERT(ctx->current->layout);
+    if (!ctx || !ctx->current || !ctx->current->layout) return;
+
+    win = ctx->current;
+    style = &ctx->style;
+    font = style->font;
+    nk_panel_alloc_space(&bounds, ctx);
+    padding = style->text.padding;
+
+    size = NK_MIN(bounds.w - 2 * padding.x, bounds.h - 2 * padding.y);
+    size = NK_MIN(size, font->height);
+    repeat = (alignment >> 24) & 0xff;
+    width = height = size;
+    if (repeat > 0) {
+        if (alignment & NK_SYMBOL_VERTICAL)
+            height = (2 * repeat - 1) * size;
+        else
+            width = (2 * repeat - 1) * size;
+    }
+
+    /* align in x-axis */
+    if (alignment & NK_TEXT_ALIGN_CENTERED)
+        bounds.x += (bounds.w - width) / 2.0f;
+    else if (alignment & NK_TEXT_ALIGN_RIGHT)
+        bounds.x = NK_MAX(bounds.x + padding.x, (bounds.x + bounds.w) - (2 * padding.x + width));
+    else
+        bounds.x += padding.x;
+    bounds.w = width;
+
+    /* align in y-axis */
+    if (alignment & NK_TEXT_ALIGN_MIDDLE)
+        bounds.y += (bounds.h - height) / 2.0f;
+    else if (alignment & NK_TEXT_ALIGN_BOTTOM)
+        bounds.y += bounds.h - height;
+    bounds.h = height;
+
+    if (repeat == 0) {
+        nk_draw_symbol(&win->buffer, type, bounds, style->window.background, color, 0, font);
+    } else {
+        struct nk_rect b;
+        int i;
+        b = bounds;
+        b.w = b.h = size;
+        for (i = 0; i < repeat; i++) {
+            nk_draw_symbol(&win->buffer, type, b, style->window.background, color, 0, font);
+            if (alignment & NK_SYMBOL_VERTICAL)
+                b.y += 2 * size;
+            else
+                b.x += 2 * size;
+        }
+    }
+}
+NK_API void
+nk_symbol(struct nk_context *ctx, enum nk_symbol_type type, nk_flags alignment)
+{
+    nk_symbol_colored(ctx, type, alignment, ctx->style.text.color);
+}
 #ifdef NK_INCLUDE_STANDARD_VARARGS
 NK_API void
 nk_labelf_colored(struct nk_context *ctx, nk_flags flags,
@@ -14032,6 +14113,7 @@ nk_draw_symbol(struct nk_command_buffer *out, enum nk_symbol_type type,
         text.background = background;
         text.text = foreground;
         nk_widget_text(out, content, X, 1, &text, NK_TEXT_CENTERED, font);
+        //??? use nk_fill_polygon to create fatter shapes
     } break;
     case NK_SYMBOL_CIRCLE_SOLID:
     case NK_SYMBOL_CIRCLE_OUTLINE:
@@ -14043,6 +14125,13 @@ nk_draw_symbol(struct nk_command_buffer *out, enum nk_symbol_type type,
             if (type == NK_SYMBOL_RECT_OUTLINE)
                 nk_fill_rect(out, nk_shrink_rect(content, border_width), 0, background);
         } else {
+            if (content.w > content.h) {
+                content.x += (content.w - content.h) / 2.0f;
+                content.w = content.h;
+            } else {
+                content.y += (content.h - content.w) / 2.0f;
+                content.h = content.w;
+            }
             nk_fill_circle(out, content, foreground);
             if (type == NK_SYMBOL_CIRCLE_OUTLINE)
                 nk_fill_circle(out, nk_shrink_rect(content, 1), background);
@@ -14064,6 +14153,17 @@ nk_draw_symbol(struct nk_command_buffer *out, enum nk_symbol_type type,
           nk_triangle_from_direction(points, content, 0, 0, heading);
         nk_fill_triangle(out, points[0].x, points[0].y, points[1].x, points[1].y,
             points[2].x, points[2].y, foreground);
+    } break;
+    case NK_SYMBOL_TRIPLE_DOT: {
+        struct nk_rect rcdot;
+        int idx;
+        rcdot.w = rcdot.h = content.w / 5.0f;
+        rcdot.x = content.x;
+        rcdot.y = content.y + (content.h - rcdot.h) / 2.0f;
+        for (idx = 0; idx < 3; idx++) {
+            nk_fill_circle(out, rcdot, foreground);
+            rcdot.x += 2 * rcdot.w;
+        }
     } break;
     default:
     case NK_SYMBOL_NONE:

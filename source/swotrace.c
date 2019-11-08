@@ -139,7 +139,7 @@ void channel_setcolor(int index, struct nk_color color)
 
 
 #define PACKET_SIZE 64
-#define PACKET_NUM  16
+#define PACKET_NUM  32
 typedef struct tagPACKET {
   unsigned char data[PACKET_SIZE];
   size_t length;
@@ -152,12 +152,12 @@ static int tracequeue_head = 0, tracequeue_tail = 0;
 typedef struct tagTRACESTRING {
   struct tagTRACESTRING *next;
   char *text;
-  double timestamp;       /* in micro-seconds */
+  double timestamp;       /* in seconds */
   char timefmt[15];       /* formatted string with time stamp */
   unsigned short timefmt_len;
-  unsigned short length, size;
+  unsigned short length, size;  /* text length & text buffer size (length <= size) */
   unsigned char channel;
-  unsigned char flags;
+  unsigned char flags;    /* used to keep state while decoding plain trace messages */
 } TRACESTRING;
 
 #define TRACESTRING_MAXLENGTH 256
@@ -397,6 +397,19 @@ int tracestring_find(const char *text, int curline)
   return -1;  /* not found */
 }
 
+/** tracestring_findtimestamp() finds the line closest to the given
+ *  timestamp. Note that it can return -1 when there are not strings in the
+ *  list.
+ */
+int tracestring_findtimestamp(double timestamp)
+{
+  TRACESTRING *item;
+  int line = 0;
+  for (item = tracestring_root.next; item != NULL && item->timestamp < timestamp; item = item->next)
+    line += 1;
+  return line - 1;
+}
+
 int trace_save(const char *filename)
 {
   FILE *fp;
@@ -424,7 +437,7 @@ int trace_save(const char *filename)
     memcpy(buffer, item->text, item->length);
     buffer[item->length] = '\0';
     fprintf(fp, "%d,\"%s\",%.6f,\"%s\"\n", item->channel, channels[item->channel].name,
-            item->timestamp / 1000000.0, buffer);
+            item->timestamp, buffer);
   }
 
   free((void*)buffer);
@@ -615,13 +628,12 @@ static double get_timestamp(void)
 
 static DWORD __stdcall trace_read(LPVOID arg)
 {
-  #define PACKETSIZE  64
-  unsigned char buffer[PACKETSIZE];
+  unsigned char buffer[PACKET_SIZE];
   unsigned long numread = 0;
 
   (void)arg;
   for ( ;; ) {
-    if (WinUsb_ReadPipe(hUSB, BMP_EP_TRACE, buffer, sizearray(buffer),&numread, NULL)) {
+    if (WinUsb_ReadPipe(hUSB, BMP_EP_TRACE, buffer, sizearray(buffer), &numread, NULL)) {
       /* add the packet to the queue */
       int next = (tracequeue_tail + 1) % PACKET_NUM;
       if (numread > 0 && next != tracequeue_head) {
@@ -698,7 +710,7 @@ static double timestamp(void)
 
 static void *trace_read(void *arg)
 {
-  unsigned char buffer[64];
+  unsigned char buffer[PACKET_SIZE];
   int numread = 0;
 
   (void)arg;
@@ -814,6 +826,18 @@ void tracelog_statusmsg(int type, const char *msg, int code)
   }
 }
 
+float tracelog_labelwidth(float rowheight)
+{
+  int idx;
+  float labelwidth = 0;
+  for (idx = 0; idx < NUM_CHANNELS; idx++) {
+    int len = strlen(channels[idx].name);
+    if (channels[idx].enabled && labelwidth < len)
+      labelwidth = len;
+  }
+  return labelwidth * (rowheight / 2);
+}
+
 /* tracelog_widget() draws the text in the log window and scrolls to the last line
    if new text was added */
 void tracelog_widget(struct nk_context *ctx, const char *id, float rowheight, int markline, nk_flags widget_flags)
@@ -822,9 +846,9 @@ void tracelog_widget(struct nk_context *ctx, const char *id, float rowheight, in
   static int linecount = 0;
   static int recent_markline = -1;
   TRACESTRING *item;
-  int idx, labelwidth, tstampwidth;
+  int labelwidth, tstampwidth;
   struct nk_rect rcwidget = nk_layout_widget_bounds(ctx);
-  struct nk_style_window const *stwin = &ctx->style.window;
+  struct nk_style_window *stwin = &ctx->style.window;
   struct nk_style_button stbtn = ctx->style.button;
   struct nk_user_font const *font = ctx->style.font;
 
@@ -834,13 +858,7 @@ void tracelog_widget(struct nk_context *ctx, const char *id, float rowheight, in
   stbtn.padding.x = stbtn.padding.y = 0;
 
   /* check the length of the longest channel name, and the longest timestamp */
-  labelwidth = 0;
-  for (idx = 0; idx < NUM_CHANNELS; idx++) {
-    int len = strlen(channels[idx].name);
-    if (channels[idx].enabled && labelwidth < len)
-      labelwidth = len;
-  }
-  labelwidth = (int)((labelwidth * rowheight) / 2) + 10;
+  labelwidth = (int)tracelog_labelwidth(rowheight) + 10;
   tstampwidth = 0;
   for (item = tracestring_root.next; item != NULL; item = item->next)
     if (tstampwidth < item->timefmt_len)
@@ -848,8 +866,8 @@ void tracelog_widget(struct nk_context *ctx, const char *id, float rowheight, in
   tstampwidth = (int)((tstampwidth * rowheight) / 2) + 10;
 
   /* black background on group */
-  nk_style_push_color(ctx, &ctx->style.window.fixed_background.data.color, nk_rgba(20, 29, 38, 225));
-  if (nk_group_begin_titled(ctx, id, "", widget_flags)) {
+  nk_style_push_color(ctx, &stwin->fixed_background.data.color, nk_rgba(20, 29, 38, 225));
+  if (nk_group_begin(ctx, id, widget_flags)) {
     int lines = 0, widgetlines = 0, ypos;
     float lineheight = 0;
     for (item = tracestring_root.next; item != NULL; item = item->next) {
@@ -941,5 +959,327 @@ void tracelog_widget(struct nk_context *ctx, const char *id, float rowheight, in
     }
   }
   nk_style_pop_color(ctx);
+}
+
+
+typedef struct tagTLMARK {
+  float pos;
+  int count;
+} TLMARK;
+typedef struct tagTIMELINE {
+  TLMARK *marks;
+  size_t length, size;  /* number of entries & max. number of entries */
+} TIMELINE;
+
+#define EPSILON     0.001
+#define FLTEQ(a,b)  ((a)-EPSILON<(b) && (a)+EPSILON>(b))  /* test whether floating-point values are equal within a small margin */
+#define MARK_SECOND   1000000
+static double mark_spacing = 100.0;             /* spacing between two mark_deltatime positions */
+static unsigned long mark_scale = MARK_SECOND;  /* 1 -> us, 1000 -> ms, 1000000 -> s, 60000000 -> min, etc. */
+static unsigned long mark_deltatime = 1;        /* in seconds / mark_scale */
+static TRACESTRING *tracestring_tail_prev = NULL;
+static TIMELINE timeline[NUM_CHANNELS];
+static float timeline_maxpos = 0.0;
+static double timeoffset = 0.0;
+static int timeline_maxcount = 1;
+
+void timeline_getconfig(double *spacing, unsigned long *scale, unsigned long *delta)
+{
+  assert(spacing != NULL);
+  *spacing = mark_spacing;
+  assert(scale != NULL);
+  *scale = mark_scale;
+  assert(delta != NULL);
+  *delta = mark_deltatime;
+}
+
+void timeline_setconfig(double spacing, unsigned long scale, unsigned long delta)
+{
+  if (spacing > 10.0 && scale > 0 && delta > 0 && delta <= 100) {
+    mark_spacing = spacing;
+    mark_scale = scale;
+    mark_deltatime = delta;
+  }
+}
+
+void timeline_rebuild(void)
+{
+  timeline_maxpos = 0.0;  /* this variable is recalculated */
+  timeoffset = 0.0;
+  timeline_maxcount = 1;
+
+  /* marks only get added, until the list is cleared completely */
+  if (tracestring_root.next == NULL) {
+    int chan;
+    for (chan = 0; chan < NUM_CHANNELS; chan++) {
+      if (timeline[chan].marks != NULL) {
+        free((void*)timeline[chan].marks);
+        timeline[chan].marks = NULL;
+        timeline[chan].length = timeline[chan].size = 0;
+      }
+    }
+  } else {
+    TRACESTRING *item;
+    int chan;
+    assert(tracestring_root.next != NULL);
+    timeoffset = tracestring_root.next->timestamp;
+    for (chan = 0; chan < NUM_CHANNELS; chan++)
+      timeline[chan].length = 0;
+    for (item = tracestring_root.next; item != NULL; item = item->next) {
+      int idx;
+      float pos;
+      chan = item->channel;
+      if (!channels[chan].enabled)
+        continue;
+      /* make sure array is big enough for another mark */
+      assert(timeline[chan].length <= timeline[chan].size);
+      if (timeline[chan].length == timeline[chan].size) {
+        size_t newsize;
+        if (timeline[chan].marks == NULL) {
+          assert(timeline[chan].size == 0);
+          newsize = 32;
+          timeline[chan].marks = malloc(newsize * sizeof(TLMARK));
+          if (timeline[chan].marks != NULL)
+            timeline[chan].size = newsize;
+        } else {
+          TLMARK *curptr = timeline[chan].marks; /* save, for special case of realloc fail */
+          newsize = timeline[chan].size * 2;
+          timeline[chan].marks = realloc(timeline[chan].marks, newsize * sizeof(TLMARK));
+          if (timeline[chan].marks != NULL)
+            timeline[chan].size = newsize;
+          else
+            timeline[chan].marks = curptr;  /* restore old pointer on realloc fail */
+        }
+      }
+      if (timeline[chan].length == timeline[chan].size)
+        continue; /* no space for another mark (growing the array failed) */
+      /* convert timestamp to position */
+      pos = (item->timestamp - timeoffset) * mark_spacing * MARK_SECOND / (mark_scale * mark_deltatime);
+      idx = timeline[chan].length;
+      /* check collapsing marks */
+      assert(idx == 0 || pos >= timeline[chan].marks[idx - 1].pos);
+      if (idx > 0 && (pos - timeline[chan].marks[idx - 1].pos) < 0.5) {
+        idx -= 1;
+        timeline[chan].marks[idx].count += 1;
+        if (timeline[chan].marks[idx].count > timeline_maxcount)
+          timeline_maxcount = timeline[chan].marks[idx].count;
+      } else {
+        timeline[chan].marks[idx].pos = pos;
+        timeline[chan].marks[idx].count = 1;
+        timeline[chan].length = idx + 1;
+      }
+      if (pos > timeline_maxpos)
+        timeline_maxpos = pos;
+    }
+  }
+}
+
+double timeline_widget(struct nk_context *ctx, const char *id, float rowheight, nk_flags widget_flags)
+{
+  int labelwidth;
+  double click_time = -1.0;
+  struct nk_rect rcwidget;
+  struct nk_style_button stbtn;
+
+  NK_ASSERT(ctx != NULL);
+  NK_ASSERT(ctx->current != NULL);
+  NK_ASSERT(ctx->current->layout != NULL);
+  if (ctx == NULL || ctx->current == NULL || ctx->current->layout == NULL)
+    return click_time;
+
+  if (tracestring_tail != tracestring_tail_prev) {
+    timeline_rebuild();         /* rebuild the "trace marks" data */
+    tracestring_tail_prev = tracestring_tail;
+  }
+
+  /* preset common parts of the new button style */
+  stbtn = ctx->style.button;
+  // stbtn.border = 0;
+  // stbtn.rounding = 0;
+  stbtn.padding.x = stbtn.padding.y = 0;
+
+  /* check the length of the longest channel name */
+  labelwidth = (int)tracelog_labelwidth(rowheight) + 10;
+  rcwidget = nk_layout_widget_bounds(ctx);
+
+  /* no spacing & black background on group */
+  nk_style_push_vec2(ctx, &ctx->style.window.spacing, nk_vec2(0, 0));
+  nk_style_push_color(ctx, &ctx->style.window.fixed_background.data.color, nk_rgba(20, 29, 38, 225));
+  if (nk_group_begin(ctx, id, widget_flags | NK_WINDOW_NO_SCROLLBAR)) {
+    struct nk_window *win = ctx->current;
+    struct nk_user_font const *font = ctx->style.font;
+    struct nk_rect rc;
+    long mark_stamp, mark_inv_scale;
+    int submark_count, submark_iter;
+    int len, chan;
+    char valstr[60];
+    float x1, x2;
+    const char *unit;
+    nk_uint xscroll, yscroll;
+
+    submark_count = 10;
+    if (mark_spacing / submark_count < 20)
+      submark_count = 5;
+    if (mark_spacing / submark_count < 20)
+      submark_count = 2;
+
+    #define HORPADDING  4
+    #define VERPADDING  1
+
+    /* get the scroll position of the graph, because scrolling is manual */
+    sprintf(valstr, "%s_graph", id);
+    nk_group_get_scroll(ctx, valstr, &xscroll, &yscroll);
+
+    /* first row: timer ticks, may not scroll vertically */
+    switch (mark_scale) {
+      case 1: unit = "\xC2\xB5s"; break; /* us */
+      case 1000: unit = "ms";     break;
+      case 1000000: unit = "s";  break;
+      case 60000000: unit = "min"; break;
+      default: assert(0);
+    }
+    nk_layout_row_begin(ctx, NK_STATIC, rowheight + VERPADDING, 3);
+    nk_layout_row_push(ctx, rcwidget.w - 2 * (1.5 * rowheight));
+    rc = nk_layout_widget_bounds(ctx);
+    nk_fill_rect(&win->buffer, rc, 0.0f, nk_rgb(35, 52, 71));
+    x2 = rc.x + rc.w;
+    mark_stamp = submark_iter = 0;
+    mark_inv_scale = MARK_SECOND / mark_scale;
+    for (x1 = rc.x + labelwidth + HORPADDING - xscroll; x1 < x2; x1 += mark_spacing / submark_count) {
+      if (submark_iter == 0) {
+        struct nk_color clr;
+        if (mark_stamp % mark_inv_scale == 0) {
+          sprintf(valstr, "%ld s", mark_stamp / mark_inv_scale);
+          clr = nk_rgb(255, 255, 220);
+        } else {
+          sprintf(valstr, "+%ld %s", mark_stamp, unit);
+          clr = nk_rgb(144, 144, 128);
+        }
+        nk_stroke_line(&win->buffer, x1, rc.y, x1, rc.y + rowheight - 2, 1, clr);
+        rc.x = x1 + 2;
+        rc.w = x2 - rc.x;
+        nk_draw_text(&win->buffer, rc, valstr, strlen(valstr), font, nk_rgb(35, 52, 71), clr);
+        mark_stamp += mark_deltatime;
+      } else {
+        nk_stroke_line(&win->buffer, x1, rc.y, x1, rc.y + rowheight / 2 - 2, 1, nk_rgb(144, 144, 128));
+      }
+      if (++submark_iter == submark_count)
+        submark_iter = 0;
+    }
+    rc = nk_layout_widget_bounds(ctx);
+    nk_stroke_line(&win->buffer, rc.x, rc.y + rc.h, rc.x + rc.w - labelwidth - HORPADDING, rc.y + rc.h, 1, nk_rgb(80, 80, 80));
+    rc.w = labelwidth;
+    rc.h -= 1;
+    nk_fill_rect(&win->buffer, rc, 0.0f, nk_rgb(20, 29, 38));
+    nk_spacing(ctx, 1);
+    nk_layout_row_push(ctx, 1.5 * rowheight);
+    if (nk_button_symbol_styled(ctx, &stbtn, NK_SYMBOL_PLUS)) {
+      mark_spacing *= 1.5;
+      if (mark_spacing > 700.0 && (mark_deltatime > 1 || mark_scale > 1)) {
+        mark_deltatime /= 10;
+        mark_spacing /= 10.0;
+        if (mark_deltatime == 0 && mark_scale >= 1000) {
+          mark_scale /= 1000;
+          mark_deltatime = 100;
+        }
+      }
+      timeline_rebuild();
+    }
+    nk_layout_row_push(ctx, 1.5 * rowheight);
+    if (nk_button_symbol_styled(ctx, &stbtn, NK_SYMBOL_MINUS)) {
+      if (mark_spacing > 45.0 || mark_scale < 60000000 || mark_deltatime == 1)
+        mark_spacing /= 1.5;
+      if (mark_spacing < 70.0) {
+        mark_deltatime *= 10;
+        mark_spacing *= 10.0;
+        if (mark_scale < MARK_SECOND && mark_deltatime >= 1000) {
+          mark_scale *= 1000;
+          mark_deltatime /= 1000;
+        }
+      }
+      timeline_rebuild();
+    }
+    nk_layout_row_end(ctx);
+
+    /* extra (small) spacing between timeline and top of the graphs */
+    nk_layout_row_dynamic(ctx, VERPADDING, 1);
+    nk_spacing(ctx, 1);
+
+    /* remaining rows collected in two groups: labels and graph */
+    nk_layout_row_begin(ctx, NK_STATIC, rcwidget.h - rowheight - 2 * VERPADDING, 2);
+    nk_layout_row_push(ctx, labelwidth + HORPADDING);
+    sprintf(valstr, "%s_label", id);
+    if (nk_group_begin(ctx, valstr, NK_WINDOW_NO_SCROLLBAR)) {
+      /* labels */
+      for (chan = 0; chan < NUM_CHANNELS; chan++) {
+        struct nk_color clrtxt;
+        float textwidth;
+        if (!channels[chan].enabled)
+          continue; /* only draw enable channels */
+        nk_layout_row_dynamic(ctx, rowheight + VERPADDING, 1);
+        rc = nk_layout_widget_bounds(ctx);
+        rc.x += HORPADDING;
+        rc.y -= yscroll;
+        rc.w -= HORPADDING;
+        rc.h -= 1;
+        nk_fill_rect(&win->buffer, rc, 0.0f, channels[chan].color);
+        if (channels[chan].color.r + 2 * channels[chan].color.g + channels[chan].color.b < 700)
+          clrtxt = nk_rgb(255,255,255);
+        else
+          clrtxt = nk_rgb(20,29,38);
+        /* center the text in the rect */
+        len = strlen(channels[chan].name);
+        textwidth = font->width(font->userdata, font->height, channels[chan].name, len);
+        rc.x += (rc.w - textwidth) / 2;
+        nk_draw_text(&win->buffer, rc, channels[chan].name, len, font, channels[chan].color, clrtxt);
+      }
+      nk_group_end(ctx);
+    }
+    nk_layout_row_push(ctx, rcwidget.w - labelwidth - HORPADDING);
+    sprintf(valstr, "%s_graph", id);
+    if (nk_group_begin(ctx, valstr, 0)) {
+      /* graphs */
+      int row = 0;
+      for (chan = 0; chan < NUM_CHANNELS; chan++) {
+        int idx;
+        if (!channels[chan].enabled)
+          continue; /* only draw enabled channels */
+        nk_layout_row_begin(ctx, NK_STATIC, rowheight + VERPADDING, 2);
+        nk_layout_row_push(ctx, timeline_maxpos);
+        rc = nk_layout_widget_bounds(ctx);
+        rc.y -= yscroll;
+        if (row & 1)
+          nk_fill_rect(&win->buffer, rc, 0.0f, nk_rgb(30, 40, 50));
+        row++;
+        /* draw marks for each active channel */
+        for (idx = 0; idx < timeline[chan].length; idx++) {
+          float x = timeline[chan].marks[idx].pos + labelwidth + 2 * HORPADDING - xscroll;
+          float y = 0.75 * rowheight * (1 - (float)timeline[chan].marks[idx].count / (float)timeline_maxcount);
+          nk_stroke_line(&win->buffer, x, rc.y + y, x, rc.y + rowheight, 1, nk_rgb(144, 144, 128));
+        }
+        nk_spacing(ctx, 1);
+        nk_layout_row_end(ctx);
+        /* handle mouse click in timeline, to scroll the trace view */
+        if (nk_input_mouse_clicked(&ctx->input, NK_BUTTON_LEFT, rc)) {
+          float pos;
+          struct nk_mouse *mouse = &ctx->input.mouse;
+          NK_ASSERT(mouse != NULL);
+          NK_ASSERT(NK_INBOX(mouse->pos.x, mouse->pos.y, rc.x, rc.y, rc.w, rc.h));
+          pos = mouse->pos.x - labelwidth - 2 * HORPADDING + xscroll;
+          if (pos >= 0.0)
+            click_time = pos * (mark_scale * mark_deltatime) / (mark_spacing * MARK_SECOND) + timeoffset;
+        }
+      }
+      nk_group_end(ctx);
+    }
+    nk_layout_row_end(ctx);
+    nk_group_end(ctx);
+  }
+
+  /* restore locally modified styles */
+  nk_style_pop_color(ctx);
+  nk_style_pop_vec2(ctx);
+
+  return click_time;
 }
 
