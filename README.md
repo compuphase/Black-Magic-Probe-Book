@@ -10,6 +10,8 @@ Several makefiles are provided for various compilers. Use the one that is approp
 Most makefiles include a file called "makefile.cfg" for configuration. Each makefile has a short section near the top to document which macros you can put in makefile.cfg. The file makefile.cfg is not in this repository; it should be written by you (unless the defaults are fine for your workstation setup).
 
 The makefiles also include a dependencies file (if it exists), called "makefile.dep". A basic cross-platform dependencies file is provided. If you start tinkering with the code, and especially if you add new files, you will want to rebuild the dependencies by running `make depend`. This in turn requires that you have the utility [makedepend](https://github.com/compuphase/makedepend) installed.
+### Nuklear GUI
+The larger utilities (with a user interface) use the [Nuklear](https://github.com/vurtun/nuklear) toolkit. This library presents an "immediate mode" GUI. It is cross-platform and supports several back-ends. I have chosen GDI+ for Windows and OpenGL with GLFW for Linux.
 ### Linux
 Prerequisites are
 * libusb-1.0
