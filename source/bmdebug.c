@@ -57,7 +57,7 @@
 #include <string.h>
 #include <time.h>
 
-#include "bmscan.h"
+#include "bmp-scan.h"
 #include "bmp-script.h"
 #include "dwarf.h"
 #include "guidriver.h"

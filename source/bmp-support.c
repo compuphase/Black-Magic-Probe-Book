@@ -32,7 +32,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-#include "bmscan.h"
+#include "bmp-scan.h"
 #include "bmp-script.h"
 #include "bmp-support.h"
 #include "crc32.h"

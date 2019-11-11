@@ -66,24 +66,26 @@ endif
 #               Project
 # -------------------------------------------------------------
 
-OBJLIST_BMDEBUG = bmdebug.o bmscan.o bmp-script.o dwarf.o elf.o \
+OBJLIST_BMDEBUG = bmdebug.o bmp-scan.o bmp-script.o dwarf.o elf.o \
                   guidriver.o minIni.o rs232.o specialfolder.o \
                   decodectf.o parsetsdl.o swotrace.o \
                   nuklear.o nuklear_glfw_gl2.o noc_file_dialog.o \
                   findfont.o lodepng.o
 
-OBJLIST_BMFLASH = bmflash.o bmscan.o bmp-script.o bmp-support.o crc32.o \
+OBJLIST_BMFLASH = bmflash.o bmp-scan.o bmp-script.o bmp-support.o crc32.o \
                   elf.o gdb-rsp.o guidriver.o minIni.o rs232.o \
                   specialfolder.o xmltractor.o \
                   nuklear.o nuklear_glfw_gl2.o noc_file_dialog.o \
                   findfont.o lodepng.o
 
-OBJLIST_BMTRACE = bmtrace.o bmscan.o bmp-script.o bmp-support.o crc32.o \
+OBJLIST_BMTRACE = bmtrace.o bmp-scan.o bmp-script.o bmp-support.o crc32.o \
                   elf.o gdb-rsp.o guidriver.o minIni.o rs232.o \
                   specialfolder.o xmltractor.o \
                   decodectf.o parsetsdl.o swotrace.o \
                   nuklear.o nuklear_glfw_gl2.o noc_file_dialog.o \
                   findfont.o lodepng.o
+
+OBJLIST_BMSCAN = bmscan.o bmp-scan.o
 
 OBJLIST_POSTLINK = elf-postlink.o elf.o
 
@@ -94,7 +96,8 @@ project: bmdebug bmflash bmtrace bmscan elf-postlink tracegen
 
 depend :
 	makedepend -b -fmakefile.dep $(OBJLIST_BMDEBUG:.o=.c) $(OBJLIST_BMFLASH:.o=.c) \
-                   $(OBJLIST_BMTRACE:.o=.c) $(OBJLIST_POSTLINK:.o=.c) $(OBJLIST_TRACEGEN:.o=.c)
+                   $(OBJLIST_BMTRACE:.o=.c) $(OBJLIST_BMSCAN:.o=.c) $(OBJLIST_POSTLINK:.o=.c) \
+                   $(OBJLIST_TRACEGEN:.o=.c)
 
 
 ##### C files #####
@@ -106,6 +109,8 @@ bmflash.o : bmflash.c
 bmscan.o : bmscan.c
 
 bmtrace.o : bmtrace.c
+
+bmp-scan.o : bmp-scan.c
 
 bmp-script.o : bmp-script.c
 
@@ -163,8 +168,8 @@ bmflash : $(OBJLIST_BMFLASH)
 bmtrace : $(OBJLIST_BMTRACE)
 	$(LNK) $(LFLAGS) -o$@ $^ -lfontconfig -lglfw3 -lGL -lm -lbsd -ldl -lpthread -lX11 -lxcb -lXau -lXdmcp `pkg-config --libs gtk+-3.0` -lusb-1.0
 
-bmscan : bmscan.c
-	$(CL) $(INCLUDE) $(CFLAGS) -DSTANDALONE -o$@ $^ -lbsd
+bmscan : $(OBJLIST_BMSCAN)
+	$(LNK) $(LFLAGS) -o$@ $^ -lbsd
 
 elf-postlink : $(OBJLIST_POSTLINK)
 	$(LNK) $(LFLAGS) -o$@ $^

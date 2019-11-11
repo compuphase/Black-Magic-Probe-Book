@@ -44,7 +44,7 @@
   #include <libusb-1.0/libusb.h>
 #endif
 
-#include "bmscan.h"
+#include "bmp-scan.h"
 #include "guidriver.h"
 #include "parsetsdl.h"
 #include "decodectf.h"

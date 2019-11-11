@@ -49,7 +49,7 @@
 #include "guidriver.h"
 #include "bmp-script.h"
 #include "bmp-support.h"
-#include "bmscan.h"
+#include "bmp-scan.h"
 #include "gdb-rsp.h"
 #include "minIni.h"
 #include "noc_file_dialog.h"
