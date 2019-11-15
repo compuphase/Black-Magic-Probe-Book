@@ -14,7 +14,8 @@ The makefiles also include a dependencies file (if it exists), called "makefile.
 The larger utilities (with a user interface) use the [Nuklear](https://github.com/vurtun/nuklear) toolkit. This library presents an "immediate mode" GUI. It is cross-platform and supports several back-ends. I have chosen GDI+ for Windows and OpenGL with GLFW for Linux.
 ### Linux
 Prerequisites are
-* libusb-1.0
+* libbsd-dev
+* libusb-1.0-dev
 * glfw-3.3
 
 The development packages for these modules must be present. If you build glfw from source (as a static library), you can configure the path to the include files and the library in makefile.cfg.
