@@ -14,9 +14,16 @@
 #                   including the -I option;
 #                   for exampe: -I~/develop/glfw-3.3/inc
 #  o  GLFW_LIB      the path where the library for GLFW 3.3 can be found,
-#                   including the -L option
+#                   including the -L option;
 #                   for exampe: -L~/develop/glfw-3.3/lib
+#  o  GLFW_LIBNAME  the base name for the library; the default is glfw3;
+#                   depending on your distribution, you may need to set it to
+#                   glfw
 -include makefile.cfg
+
+ifndef GLFW_LIBNAME
+    GLFW_LIBNAME := glfw3
+endif
 
 
 # -------------------------------------------------------------
@@ -34,15 +41,14 @@
 # -------------------------------------------------------------
 
 ####### C compiler
-CL        = gcc
-CC        = gcc -c
-CFLAGS    = -Wall
-INCLUDE   = $(GLFW_INC)
+CL        := gcc
+CC        := gcc -c
+CFLAGS    := -Wall
+INCLUDE   := $(GLFW_INC)
 
 ####### Linker
-LNK       = gcc
-LFLAGS    = $(GLFW_LIB)
-
+LNK       := gcc
+LFLAGS    := $(GLFW_LIB)
 
 ifdef NDEBUG
     # retail version
@@ -53,6 +59,7 @@ else
     CFLAGS += -g
     LFLAGS += -g
 endif
+
 
 # -------------------------------------------------------------
 #               Inference rules
@@ -160,13 +167,13 @@ nuklear_glfw_gl2.o : nuklear_glfw_gl2.c
 ##### Executables #####
 
 bmdebug : $(OBJLIST_BMDEBUG)
-	$(LNK) $(LFLAGS) -o$@ $^ -lfontconfig -lglfw3 -lGL -lm -lbsd -ldl -lpthread -lX11 -lxcb -lXau -lXdmcp `pkg-config --libs gtk+-3.0` -lusb-1.0
+	$(LNK) $(LFLAGS) -o$@ $^ -lfontconfig -l$(GLFW_LIBNAME) -lGL -lm -lbsd -ldl -lpthread -lX11 -lxcb -lXau -lXdmcp `pkg-config --libs gtk+-3.0` -lusb-1.0
 
 bmflash : $(OBJLIST_BMFLASH)
-	$(LNK) $(LFLAGS) -o$@ $^ -lfontconfig -lglfw3 -lGL -lm -lbsd -ldl -lpthread -lX11 -lxcb -lXau -lXdmcp `pkg-config --libs gtk+-3.0`
+	$(LNK) $(LFLAGS) -o$@ $^ -lfontconfig -l$(GLFW_LIBNAME) -lGL -lm -lbsd -ldl -lpthread -lX11 -lxcb -lXau -lXdmcp `pkg-config --libs gtk+-3.0`
 
 bmtrace : $(OBJLIST_BMTRACE)
-	$(LNK) $(LFLAGS) -o$@ $^ -lfontconfig -lglfw3 -lGL -lm -lbsd -ldl -lpthread -lX11 -lxcb -lXau -lXdmcp `pkg-config --libs gtk+-3.0` -lusb-1.0
+	$(LNK) $(LFLAGS) -o$@ $^ -lfontconfig -l$(GLFW_LIBNAME) -lGL -lm -lbsd -ldl -lpthread -lX11 -lxcb -lXau -lXdmcp `pkg-config --libs gtk+-3.0` -lusb-1.0
 
 bmscan : $(OBJLIST_BMSCAN)
 	$(LNK) $(LFLAGS) -o$@ $^ -lbsd

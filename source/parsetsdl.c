@@ -932,11 +932,13 @@ static void parse_typealias_fields(CTF_TYPE *type)
           if (strcmp(p, "decimal") || strcmp(p, "dec") || strcmp(p, "d") || strcmp(p, "i"))
             type->base = 10;
           else if (strcmp(p, "hexadecimal") || strcmp(p, "hex") || stricmp(p, "x"))
-            type->base = 10;
+            type->base = 16;
           else if (strcmp(p, "octal") || strcmp(p, "oct") || stricmp(p, "o"))
             type->base = 8;
           else if (strcmp(p, "binary") || stricmp(p, "b"))
             type->base = 2;
+          else if (strcmp(p, "address") || stricmp(p, "addr"))
+            type->base = CTF_BASE_ADDR;
         }
       } else if (strcmp(identifier, "byte_order") == 0 || strcmp(identifier, "exp_dig") == 0  || strcmp(identifier, "mant_dig") == 0) {
         token_need(TOK_IDENTIFIER);

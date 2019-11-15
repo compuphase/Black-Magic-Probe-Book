@@ -342,7 +342,7 @@ static void usage(void)
          "Options:\n"
          "-o=name\t Base output filename; a .c and .h suffix is added to this name.\n"
          "-s\t Pass stream ID as separate parameter (SWO tracing).\n"
-         "-t\t Force basic C types on arguments, if availalble.\n");
+         "-t\t Force basic C types on arguments, if available.\n");
 }
 
 int main(int argc, char *argv[])

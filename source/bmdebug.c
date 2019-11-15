@@ -1771,12 +1771,14 @@ static int is_idle(void)
   return 1;
 }
 
-#define WINDOW_WIDTH  750   /* default window size (window is resizable) */
-#define WINDOW_HEIGHT 500
-#define FONT_HEIGHT   14
-#define ROW_HEIGHT    (1.6 * FONT_HEIGHT)
-#define COMBOROW_CY   (0.8 * ROW_HEIGHT)
-#define BUTTON_WIDTH  (3 * FONT_HEIGHT)
+#define WINDOW_WIDTH    750     /* default window size (window is resizable) */
+#define WINDOW_HEIGHT   500
+#define FONT_HEIGHT     14
+#define ROW_HEIGHT      (1.6 * opt_fontsize)
+#define COMBOROW_CY     (0.8 * opt_fontsize)
+#define BUTTON_WIDTH    (3 * opt_fontsize)
+#define BROWSEBTN_WIDTH (1.85 * opt_fontsize)
+
 
 static void set_style(struct nk_context *ctx)
 {
@@ -2292,6 +2294,22 @@ static int handle_display_cmd(const char *command, int *param, char *symbol, siz
   return 0;
 }
 
+static int handle_file_cmd(const char *command, char *filename, size_t namelength)
+{
+  const char *ptr;
+
+  assert(command != NULL);
+  assert(filename != NULL && namelength > 0);
+  command = skipwhite(command);
+  if (strncmp(command, "file ", 5) == 0) {
+    ptr = strchr(command, ' ');
+    assert(ptr != NULL);
+    strlcpy(filename, skipwhite(ptr), namelength);
+    return 1;
+  }
+  return 0;
+}
+
 static int handle_find_cmd(const char *command)
 {
   static char pattern[50] = "";
@@ -2502,6 +2520,16 @@ static int handle_trace_cmd(const char *command, unsigned *mode, unsigned *clock
   return 1; /* assume entire protocol changed */
 }
 
+static void usage(void)
+{
+  printf("bmdebug - GDB front-end for the Black Magic Probe.\n\n"
+         "Usage: bmdebug [options] elf-file\n\n"
+         "Options:\n"
+         "-f=value\t Font size to use (value must be 8 or larger).\n"
+         "-g=path\t path to the GDB executable to use.\n"
+         "-h\t This help.\n");
+}
+
 int main(int argc, char *argv[])
 {
   enum { TAB_CONFIGURATION, TAB_BREAKPOINTS, TAB_WATCHES, TAB_SEMIHOSTING, TAB_SWO, /* --- */ TAB_COUNT };
@@ -2517,6 +2545,7 @@ int main(int argc, char *argv[])
   int opt_tpwr = nk_false;
   int opt_allmsg = nk_false;
   int opt_autodownload = nk_true;
+  int opt_fontsize = FONT_HEIGHT;
   unsigned opt_swomode = SWOMODE_NONE, opt_swobaud = 100000, opt_swoclock = 48000000;
   float splitter_hor = 0.75, splitter_ver = 0.75;
   char console_edit[128] = "", watch_edit[128] = "";
@@ -2560,7 +2589,7 @@ int main(int argc, char *argv[])
     splitter_ver = 0.75;
   }
   for (idx = 0; idx < TAB_COUNT; idx++) {
-    char key[40];
+    char key[32];
     int opened, size;
     tab_states[idx] = (idx == TAB_SEMIHOSTING || idx == TAB_SWO) ? NK_MINIMIZED : NK_MAXIMIZED;
     tab_heights[idx] = 5 * ROW_HEIGHT;
@@ -2575,12 +2604,13 @@ int main(int argc, char *argv[])
   opt_tpwr =(int)ini_getl("Settings", "tpwr", 0, txtConfigFile);
   opt_allmsg = (int)ini_getl("Settings", "allmessages", 0, txtConfigFile);
   opt_autodownload = (int)ini_getl("Settings", "auto-download", 1, txtConfigFile);
+  opt_fontsize = (int)ini_getl("Settings", "fontsize", FONT_HEIGHT, txtConfigFile);
   /* read SWO tracing & channel configuration */
   opt_swomode = (unsigned)ini_getl("SWO trace", "mode", SWOMODE_NONE, txtConfigFile);
   opt_swobaud = (unsigned)ini_getl("SWO trace", "bitrate", 100000, txtConfigFile);
   opt_swoclock = (unsigned)ini_getl("SWO trace", "clock", 48000000, txtConfigFile);
   for (idx = 0; idx < NUM_CHANNELS; idx++) {
-    char key[40];
+    char key[32];
     unsigned clr;
     int enabled;
     channel_set(idx, (idx == 0), NULL, nk_rgb(190, 190, 190)); /* preset: port 0 is enabled by default, others disabled by default */
@@ -2590,12 +2620,51 @@ int main(int argc, char *argv[])
     if (result >= 2)
       channel_set(idx, enabled, (result >= 3) ? key : NULL, nk_rgb(clr >> 16,(clr >> 8) & 0xff, clr & 0xff));
   }
+  /* read saved recent commands */
+  for (idx = 1; ; idx++) {
+    char key[32];
+    sprintf(key, "cmd%d", idx);
+    ini_gets("Commands", key, "", console_edit, sizearray(console_edit), txtConfigFile);
+    if (strlen(console_edit) == 0)
+      break;
+    stringlist_add(&consoleedit_root, console_edit, 0);
+  }
 
   txtFilename[0] = '\0';
-  if (argc >= 2 && access(argv[1], 0) == 0) {
-    strlcpy(txtFilename, argv[1], sizearray(txtFilename));
-    translate_path(txtFilename, 0);
-  } else {
+  for (idx = 0; idx < argc; idx++) {
+    const char *ptr;
+    if (argv[idx][0] == '-' || argv[idx][0] == '/') {
+      switch (argv[idx][1]) {
+      case '?':
+      case 'h':
+        usage();
+        return 0;
+      case 'f':
+        ptr = &argv[idx][2];
+        if (*ptr == '=' || *ptr == ':')
+          ptr++;
+        result = (int)strtol(ptr, NULL, 10);
+        if (result >= 8)
+          opt_fontsize = result;
+        break;
+      case 'g':
+        ptr = &argv[idx][2];
+        if (*ptr == '=' || *ptr == ':')
+          ptr++;
+        strlcpy(txtGDBpath, ptr, sizearray(txtGDBpath));
+        break;
+      default:
+        fprintf(stderr, "Unknown option %s; use option -h for help.\n", argv[idx]);
+        return 1;
+      }
+    } else {
+      if (access(argv[idx], 0) == 0) {
+        strlcpy(txtFilename, argv[idx], sizearray(txtFilename));
+        translate_path(txtFilename, 0);
+      }
+    }
+  }
+  if (strlen(txtFilename) == 0) {
     ini_gets("Session", "recent", "", txtFilename, sizearray(txtFilename), txtConfigFile);
     if (access(txtFilename, 0) != 0)
       txtFilename[0] = '\0';
@@ -3539,11 +3608,15 @@ int main(int argc, char *argv[])
             }
             result = nk_edit_string_zero_terminated(ctx, NK_EDIT_FIELD | NK_EDIT_SIG_ENTER, console_edit, sizearray(console_edit), nk_filter_ascii);
             if (result & NK_EDIT_COMMITED) {
+              char *ptr;
+              for (ptr = strchr(console_edit, '\0'); ptr > console_edit && *(ptr - 1) <= ' '; )
+                *--ptr = '\0'; /* strip trailing whitespace */
               /* some commands are handled internally */
-              //??? handle "file" command, set txtFilename, drop back to STATE_FILE
               if (handle_display_cmd(console_edit, stateparam, statesymbol, sizearray(statesymbol))) {
                 curstate = STATE_WATCH_TOGGLE;
                 tab_states[TAB_WATCHES] = nk_true; /* make sure the watch view to open */
+              } else if (handle_file_cmd(console_edit, txtFilename, sizearray(txtFilename))) {
+                curstate = STATE_FILE;
               } else if ((result = handle_trace_cmd(console_edit, &opt_swomode, &opt_swoclock, &opt_swobaud)) != 0) {
                 if (result == 1) {
                   curstate = STATE_SWOTRACE;
@@ -3600,21 +3673,22 @@ int main(int argc, char *argv[])
       /* right column */
       if (nk_group_begin(ctx, "right", NK_WINDOW_BORDER)) {
         if (nk_tree_state_push(ctx, NK_TREE_TAB, "Configuration", &tab_states[TAB_CONFIGURATION])) {
+          #define LABEL_WIDTH (2.15 * FONT_HEIGHT)
           float edtwidth;
           char basename[_MAX_PATH], *p;
           bounds = nk_widget_bounds(ctx);
-          edtwidth = bounds.w - 65;
+          edtwidth = bounds.w - LABEL_WIDTH - BROWSEBTN_WIDTH - (2 * 5);
           /* GDB */
           p = strrchr(txtGDBpath, DIRSEP_CHAR);
           strlcpy(basename,(p == NULL)? txtGDBpath : p + 1, sizearray(basename));
           nk_layout_row_begin(ctx, NK_STATIC, ROW_HEIGHT, 3);
-          nk_layout_row_push(ctx, 30);
+          nk_layout_row_push(ctx, LABEL_WIDTH);
           nk_label(ctx, "GDB", NK_TEXT_LEFT);
           nk_layout_row_push(ctx, edtwidth);
           bounds = nk_widget_bounds(ctx);
           nk_edit_string_zero_terminated(ctx, NK_EDIT_FIELD | NK_EDIT_READ_ONLY, basename, sizearray(basename), nk_filter_ascii);
           tooltip(ctx, bounds, txtGDBpath, &rc_canvas);
-          nk_layout_row_push(ctx, 25);
+          nk_layout_row_push(ctx, BROWSEBTN_WIDTH);
           if (nk_button_symbol(ctx, NK_SYMBOL_TRIPLE_DOT)) {
             const char *s;
             s = noc_file_dialog_open(NOC_FILE_DIALOG_OPEN,
@@ -3633,13 +3707,13 @@ int main(int argc, char *argv[])
           p = strrchr(txtFilename, '/');
           strlcpy(basename, (p == NULL) ? txtFilename : p + 1, sizearray(basename));
           nk_layout_row_begin(ctx, NK_STATIC, ROW_HEIGHT, 3);
-          nk_layout_row_push(ctx, 30);
+          nk_layout_row_push(ctx, LABEL_WIDTH);
           nk_label(ctx, "File", NK_TEXT_LEFT);
           nk_layout_row_push(ctx, edtwidth);
           bounds = nk_widget_bounds(ctx);
           nk_edit_string_zero_terminated(ctx, NK_EDIT_FIELD | NK_EDIT_READ_ONLY, basename, sizearray(basename), nk_filter_ascii);
           tooltip(ctx, bounds, txtFilename, &rc_canvas);
-          nk_layout_row_push(ctx, 25);
+          nk_layout_row_push(ctx, BROWSEBTN_WIDTH);
           if (nk_button_symbol(ctx, NK_SYMBOL_TRIPLE_DOT)) {
             const char *s;
             translate_path(txtFilename, 1);
@@ -3700,7 +3774,7 @@ int main(int argc, char *argv[])
           for (bp = breakpoint_root.next; bp != NULL; bp = bp->next) {
             int en;
             nk_layout_row_begin(ctx, NK_STATIC, ROW_HEIGHT, 3);
-            nk_layout_row_push(ctx, 30);
+            nk_layout_row_push(ctx, LABEL_WIDTH);
             sprintf(label, "%d", bp->number);
             en = bp->enabled;
             if (nk_checkbox_label(ctx, label, &en)) {
@@ -3753,7 +3827,7 @@ int main(int argc, char *argv[])
           }
           for (watch = watch_root.next; watch != NULL; watch = watch->next) {
             nk_layout_row_begin(ctx, NK_STATIC, ROW_HEIGHT, 4);
-            nk_layout_row_push(ctx, 30);
+            nk_layout_row_push(ctx, LABEL_WIDTH);
             sprintf(label, "%u", watch->seqnr); /* print sequence number for undisplay command */
             nk_label(ctx, label, NK_TEXT_LEFT);
             nk_layout_row_push(ctx, namewidth);
@@ -3780,7 +3854,7 @@ int main(int argc, char *argv[])
             nk_label(ctx, "No watches", NK_TEXT_ALIGN_CENTERED | NK_TEXT_ALIGN_MIDDLE);
           }
           nk_layout_row_begin(ctx, NK_STATIC, ROW_HEIGHT, 3);
-          nk_layout_row_push(ctx, 30);
+          nk_layout_row_push(ctx, LABEL_WIDTH);
           w = namewidth + valwidth + ctx->style.window.spacing.x;
           if (w < 150)
             w = 150;
@@ -3901,7 +3975,7 @@ int main(int argc, char *argv[])
   sprintf(valstr, "%.2f %.2f", splitter_hor, splitter_ver);
   ini_puts("Settings", "splitter", valstr, txtConfigFile);
   for (idx = 0; idx < TAB_COUNT; idx++) {
-    char key[40];
+    char key[32];
     sprintf(key, "view%d", idx);
     sprintf(valstr, "%d %d", tab_states[idx], (int)tab_heights[idx]);
     ini_puts("Settings", key, valstr, txtConfigFile);
@@ -3909,7 +3983,9 @@ int main(int argc, char *argv[])
   ini_putl("Settings", "tpwr", opt_tpwr, txtConfigFile);
   ini_putl("Settings", "allmessages", opt_allmsg, txtConfigFile);
   ini_putl("Settings", "auto-download", opt_autodownload, txtConfigFile);
+  ini_putl("Settings", "fontsize", opt_fontsize, txtConfigFile);
   ini_puts("Session", "recent", txtFilename, txtConfigFile);
+  /* trace settings */
   ini_putl("SWO trace", "mode", opt_swomode, txtConfigFile);
   ini_putl("SWO trace", "bitrate", opt_swobaud, txtConfigFile);
   ini_putl("SWO trace", "clock", opt_swoclock, txtConfigFile);
@@ -3922,7 +3998,15 @@ int main(int argc, char *argv[])
             channel_getname(idx, NULL, 0));
     ini_puts("SWO trace", key, cmd, txtConfigFile);
   }
-  //??? save history of commands
+  /* save history of commands */
+  idx = 1;
+  for (consoleedit_next = consoleedit_root.next; consoleedit_next != NULL; consoleedit_next = consoleedit_next->next) {
+    char key[32];
+    sprintf(key, "cmd%d", idx);
+    ini_puts("Commands", key, consoleedit_next->text, txtConfigFile);
+    if (idx++ > 50)
+      break;  /* limit the number of memorized commands */
+  }
 
   guidriver_close();
   stringlist_clear(&consolestring_root);

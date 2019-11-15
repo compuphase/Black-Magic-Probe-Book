@@ -729,7 +729,7 @@ static void *trace_read(void *arg)
   return 0;
 }
 
-static int usb_OpenDevice(libusb_device_handle **hUSB)
+static int usb_OpenDevice(libusb_device_handle **hUSB, const char *path)
 {
   libusb_device **devs;
   libusb_device_handle *handle;
@@ -741,14 +741,20 @@ static int usb_OpenDevice(libusb_device_handle **hUSB)
   if (cnt < 0)
     return TRACESTAT_INIT_FAILED;
 
-  /* find the BMP */
+  /* find the BMP (this always opens the first device with the matching VID:PID) */
   devidx = -1;
   for (i = 0; devs[i] != NULL; i++) {
     struct libusb_device_descriptor desc;
     res = libusb_get_device_descriptor(devs[i], &desc);
     if (res >= 0 && desc.idVendor == BMP_VID && desc.idProduct == BMP_PID) {
-      devidx = i;
-      break;
+      uint8_t bus = libusb_get_bus_number(devs[i]);
+      uint8_t port = libusb_get_port_number(devs[i]);
+      char *dash;
+      assert(path != NULL);
+      if (bus == strtol(path, &dash, 10) && *dash == '-' && port == strtol(dash + 1, NULL, 10)) {
+        devidx = i;
+        break;
+      }
     }
   }
   if (devidx < 0) {
@@ -775,16 +781,20 @@ static int usb_OpenDevice(libusb_device_handle **hUSB)
 
 int trace_init(void)
 {
+  char dev_id[50];
   int result;
 
   hUSB = NULL;
   hThread = 0;
 
+  if (!find_bmp(0, BMP_IF_TRACE, dev_id, sizearray(dev_id)))
+    return TRACESTAT_NO_INTERFACE;  /* Black Magic Probe not found (trace interface not found) */
+
   result = libusb_init(0);
   if (result < 0)
     return TRACESTAT_INIT_FAILED;
 
-  result = usb_OpenDevice(&hUSB);
+  result = usb_OpenDevice(&hUSB, dev_id);
   if (result != TRACESTAT_OK)
     return result;
 

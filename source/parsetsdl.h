@@ -66,6 +66,7 @@ enum {
 
 #define CTF_NAME_LENGTH   64
 #define CTF_UUID_LENGTH   16
+#define CTF_BASE_ADDR     255
 
 typedef struct tagCTF_KEYVALUE {
   struct tagCTF_KEYVALUE *next;

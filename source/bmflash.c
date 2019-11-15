@@ -75,11 +75,12 @@
 #endif
 
 
-#define WINDOW_WIDTH  400
-#define WINDOW_HEIGHT 300
-#define FONT_HEIGHT   14
-#define ROW_HEIGHT    (2 * FONT_HEIGHT)
-#define COMBOROW_CY   (0.65 * ROW_HEIGHT)
+#define FONT_HEIGHT     14
+#define WINDOW_WIDTH    (30 * opt_fontsize)
+#define WINDOW_HEIGHT   (21 * opt_fontsize)
+#define ROW_HEIGHT      (2 * opt_fontsize)
+#define COMBOROW_CY     (0.65 * opt_fontsize)
+#define BROWSEBTN_WIDTH (1.85 * opt_fontsize)
 
 
 static float *nk_ratio(int count, ...)
@@ -479,6 +480,16 @@ static int serialize_match(FILE *fp, const char *match, unsigned long offset,
   return 1;
 }
 
+static void usage(void)
+{
+  printf("bmflash - Firmware Programming utility for the Black Magic Probe.\n\n"
+         "Usage: bmflash [options] elf-file\n\n"
+         "Options:\n"
+         "-f=value\t Font size to use (value must be 8 or larger).\n"
+         "-h\t This help.\n");
+}
+
+
 enum {
   STATE_IDLE,
   STATE_SAVE,
@@ -543,6 +554,7 @@ int main(int argc, char *argv[])
   struct nk_context *ctx;
   struct nk_rect rcwidget;
   enum nk_collapse_states tab_states[TAB_COUNT];
+  int idx;
   int running = 1;
   int curstate = STATE_IDLE;
   char txtFilename[_MAX_PATH] = "", txtCfgFile[_MAX_PATH];
@@ -557,6 +569,7 @@ int main(int argc, char *argv[])
   int opt_format = FMT_BIN;
   int help_active = 0;
   int load_options = 0;
+  int opt_fontsize = FONT_HEIGHT;
 
   /* locate the configuration file */
   if (folder_AppConfig(txtConfigFile, sizearray(txtConfigFile))) {
@@ -569,17 +582,45 @@ int main(int argc, char *argv[])
     strlcat(txtConfigFile, DIR_SEPARATOR "bmflash.ini", sizearray(txtConfigFile));
   }
 
+  opt_fontsize = (int)ini_getl("Settings", "fontsize", FONT_HEIGHT, txtConfigFile);
+
   txtFilename[0] = '\0';
-  if (argc >= 2 && access(argv[1], 0) == 0) {
-    strlcpy(txtFilename, argv[1], sizearray(txtFilename));
-    load_options = 1;
-  } else {
+  for (idx = 0; idx < argc; idx++) {
+    const char *ptr;
+    int value;
+    if (argv[idx][0] == '-' || argv[idx][0] == '/') {
+      switch (argv[idx][1]) {
+      case '?':
+      case 'h':
+        usage();
+        return 0;
+      case 'f':
+        ptr = &argv[idx][2];
+        if (*ptr == '=' || *ptr == ':')
+          ptr++;
+        value = (int)strtol(ptr, NULL, 10);
+        if (value >= 8)
+          opt_fontsize = value;
+        break;
+      default:
+        fprintf(stderr, "Unknown option %s; use option -h for help.\n", argv[idx]);
+        return 1;
+      }
+    } else {
+      if (access(argv[idx], 0) == 0) {
+        strlcpy(txtFilename, argv[idx], sizearray(txtFilename));
+        load_options = 1;
+      }
+    }
+  }
+  if (strlen(txtFilename) == 0) {
     ini_gets("Session", "recent", "", txtFilename, sizearray(txtFilename), txtConfigFile);
     if (access(txtFilename, 0) == 0)
       load_options = 1;
     else
       txtFilename[0] = '\0';
   }
+
   strcpy(txtCfgFile, txtFilename);
   strcpy(txtSection, ".text");
   strcpy(txtAddress, "0");
@@ -757,13 +798,13 @@ int main(int argc, char *argv[])
     /* GUI */
     if (nk_begin(ctx, "MainPanel", nk_rect(0, 0, WINDOW_WIDTH, WINDOW_HEIGHT), 0)) {
       nk_layout_row_begin(ctx, NK_STATIC, ROW_HEIGHT, 2);
-      nk_layout_row_push(ctx, WINDOW_WIDTH - 57);
+      nk_layout_row_push(ctx, WINDOW_WIDTH - 4 * FONT_HEIGHT);
       result = nk_edit_string_zero_terminated(ctx, NK_EDIT_FIELD | NK_EDIT_SIG_ENTER, txtFilename, sizearray(txtFilename), nk_filter_ascii);
       if (result & NK_EDIT_COMMITED)
         load_options = 2;
       else if ((result & NK_EDIT_DEACTIVATED) != 0 && strncmp(txtFilename, txtCfgFile, strlen(txtFilename)) != 0)
         load_options = 2;
-      nk_layout_row_push(ctx, 26);
+      nk_layout_row_push(ctx, BROWSEBTN_WIDTH);
       if (nk_button_symbol(ctx, NK_SYMBOL_TRIPLE_DOT) || nk_input_is_key_pressed(&ctx->input, NK_KEY_OPEN)) {
         const char *s = noc_file_dialog_open(NOC_FILE_DIALOG_OPEN,
                                              "ELF Executables\0*.elf;*.bin;*.\0All files\0*.*\0",
@@ -895,7 +936,7 @@ int main(int argc, char *argv[])
         curstate = STATE_SAVE;  /* start the download sequence */
 
       if (help_active) {
-        static struct nk_rect rc = {10, 10, WINDOW_WIDTH - 20, WINDOW_HEIGHT - 20};
+        struct nk_rect rc = nk_rect(10, 10, WINDOW_WIDTH - 20, WINDOW_HEIGHT - 20);
         if (nk_popup_begin(ctx, NK_POPUP_STATIC, "Help", NK_WINDOW_NO_SCROLLBAR, rc)) {
           nk_layout_row_dynamic(ctx, 8*ROW_HEIGHT, 1);
           log_widget(ctx, "help", helptext, FONT_HEIGHT, NULL);
@@ -918,6 +959,7 @@ int main(int argc, char *argv[])
     guidriver_render(nk_rgb(30,30,30));
   }
 
+  ini_putl("Settings", "fontsize", opt_fontsize, txtConfigFile);
   if (strlen(txtConfigFile) > 0)
     ini_puts("Session", "recent", txtFilename, txtConfigFile);
 

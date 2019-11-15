@@ -111,10 +111,11 @@ static int bmp_callback(int code, const char *message)
 }
 
 
-#define WINDOW_WIDTH  700   /* default window size (window is resizable) */
-#define WINDOW_HEIGHT 400
-#define FONT_HEIGHT   14
-#define ROW_HEIGHT    (1.6 * FONT_HEIGHT)
+#define WINDOW_WIDTH    700     /* default window size (window is resizable) */
+#define WINDOW_HEIGHT   400
+#define FONT_HEIGHT     14
+#define ROW_HEIGHT      (1.6 * opt_fontsize)
+#define BROWSEBTN_WIDTH (1.85 * opt_fontsize)
 
 
 static float *nk_ratio(int count, ...)
@@ -167,7 +168,17 @@ static void set_style(struct nk_context *ctx)
   nk_style_from_table(ctx, table);
 }
 
-int main(void)
+static void usage(void)
+{
+  printf("bmtrace - SWO Trace Viewer for the Black Magic Probe.\n\n"
+         "Usage: bmtrace [options]\n\n"
+         "Options:\n"
+         "-f=value\t Font size to use (value must be 8 or larger).\n"
+         "-h\t This help.\n"
+         "-t=path\t path to the TSDL metadata file to use.\n");
+}
+
+int main(int argc, char *argv[])
 {
   enum { TAB_CONFIGURATION, TAB_CHANNELS, /* --- */ TAB_COUNT };
   enum { SPLITTER_NONE, SPLITTER_VERTICAL, SPLITTER_HORIZONTAL };
@@ -188,6 +199,7 @@ int main(void)
   unsigned long channelmask = 0;
   enum { MODE_PASSIVE, MODE_MANCHESTER, MODE_ASYNC } opt_mode = MODE_MANCHESTER;
   int opt_format = 0;
+  int opt_fontsize = FONT_HEIGHT;
   int trace_status = 0;
   int trace_running = 1;
   int reinitialize =  1;
@@ -225,6 +237,7 @@ int main(void)
   ini_gets("Settings", "mcu-freq", "48000000", cpuclock_str, sizearray(cpuclock_str), txtConfigFile);
   ini_gets("Settings", "bitrate", "100000", bitrate_str, sizearray(bitrate_str), txtConfigFile);
   ini_gets("Settings", "size", "", valstr, sizearray(valstr), txtConfigFile);
+  opt_fontsize = (int)ini_getl("Settings", "fontsize", FONT_HEIGHT, txtConfigFile);
   if (sscanf(valstr, "%d %d", &canvas_width, &canvas_height) != 2 || canvas_width < 100 || canvas_height < 50) {
     canvas_width = WINDOW_WIDTH;
     canvas_height = WINDOW_HEIGHT;
@@ -254,6 +267,37 @@ int main(void)
       tab_states[idx] = opened;
   }
 
+  for (idx = 0; idx < argc; idx++) {
+    const char *ptr;
+    int value;
+    if (argv[idx][0] == '-' || argv[idx][0] == '/') {
+      switch (argv[idx][1]) {
+      case '?':
+      case 'h':
+        usage();
+        return 0;
+      case 'f':
+        ptr = &argv[idx][2];
+        if (*ptr == '=' || *ptr == ':')
+          ptr++;
+        value = (int)strtol(ptr, NULL, 10);
+        if (value >= 8)
+          opt_fontsize = value;
+        break;
+      case 't':
+        ptr = &argv[idx][2];
+        if (*ptr == '=' || *ptr == ':')
+          ptr++;
+        if (access(ptr, 0) == 0)
+          strlcpy(txtTSDLfile, ptr, sizearray(txtTSDLfile));
+        break;
+      default:
+        fprintf(stderr, "Unknown option %s; use option -h for help.\n", argv[idx]);
+        return 1;
+      }
+    }
+  }
+
   trace_status = trace_init();
   if (trace_status != TRACESTAT_OK)
     trace_running = 0;
@@ -280,7 +324,7 @@ int main(void)
       } else {
         int result = bmp_connect();
         if (result)
-          result = bmp_attach(2, mcu_driver, sizearray(mcu_driver), NULL, 0); //??? can check architecture: no SWO on Cortex-M0
+          result = bmp_attach(2, mcu_driver, sizearray(mcu_driver), NULL, 0);
         if (result) {
           unsigned long params[2];
           bmp_enabletrace((opt_mode == MODE_ASYNC) ? bitrate : 0);
@@ -413,7 +457,6 @@ int main(void)
         nk_layout_row_dynamic(ctx, splitter_rows[1], 1);
         click_time = timeline_widget(ctx, "timeline", FONT_HEIGHT, NK_WINDOW_BORDER);
         cur_match_line = (click_time >= 0.0) ? tracestring_findtimestamp(click_time) : -1;
-        //??? show numeric traces in a graph
 
         nk_layout_row_dynamic(ctx, SEPARATOR_VER, 1);
         nk_layout_row(ctx, NK_DYNAMIC, ROW_HEIGHT, 7, nk_ratio(7, 0.19, 0.08, 0.19, 0.08, 0.19, 0.08, 0.19));
@@ -501,11 +544,11 @@ int main(void)
           nk_layout_row_begin(ctx, NK_STATIC, ROW_HEIGHT, 3);
           nk_layout_row_push(ctx, LABEL_WIDTH);
           nk_label(ctx, "TSDL file", NK_TEXT_ALIGN_LEFT | NK_TEXT_ALIGN_MIDDLE);
-          nk_layout_row_push(ctx, VALUE_WIDTH - 30);
+          nk_layout_row_push(ctx, VALUE_WIDTH - BROWSEBTN_WIDTH - 5);
           result = nk_edit_string_zero_terminated(ctx, NK_EDIT_FIELD | NK_EDIT_SIG_ENTER, txtTSDLfile, sizearray(txtTSDLfile), nk_filter_ascii);
           if (result & (NK_EDIT_COMMITED | NK_EDIT_DEACTIVATED))
             reload_format = 1;
-          nk_layout_row_push(ctx, 25);
+          nk_layout_row_push(ctx, BROWSEBTN_WIDTH);
           if (nk_button_symbol(ctx, NK_SYMBOL_TRIPLE_DOT)) {
             const char *s = noc_file_dialog_open(NOC_FILE_DIALOG_OPEN,
                                                  "TSDL files\0*.tsdl;*.ctf\0All files\0*.*\0",
@@ -662,6 +705,7 @@ int main(void)
     sprintf(valstr, "%d", tab_states[idx]);
     ini_puts("Settings", key, valstr, txtConfigFile);
   }
+  ini_putl("Settings", "fontsize", opt_fontsize, txtConfigFile);
   ini_putl("Settings", "mode", opt_mode, txtConfigFile);
   ini_putl("Settings", "format", opt_format, txtConfigFile);
   ini_puts("Settings", "tsdl", txtTSDLfile, txtConfigFile);

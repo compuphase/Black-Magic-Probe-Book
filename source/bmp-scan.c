@@ -286,22 +286,36 @@ int find_bmp(int seqnr, int iface, char *name, size_t namelen)
             }
             if (strlen(name) > 0 && iface != BMP_IF_GDB) {
               /* GDB server was found for the requested sequence number,
-                 but the requested interface is the UART -> patch the directory
-                 name and search again */
+                 but the requested interface is the UART or the SWO trace
+                 interface -> patch the directory name and search again */
               char *ptr = path + strlen(path) - 5;  /* -4 for "/tty", -1 to get to the last character before "/tty" */
               assert(strlen(path) > 5);
               assert(*ptr == '0' && *(ptr-1) == '.' && *(ptr + 1) == '/');
               *ptr = iface + '0';
               *name = '\0'; /* clear device name for GDB-server (we want the name for the UART) */
-              ddev = opendir(path);
-              if (ddev != NULL) {
-                while (strlen(name) == 0 && (dir = readdir(ddev)) != NULL) {
-                  if (dir->d_type == DT_LNK || (dir->d_type == DT_DIR && dir->d_name[0] != '.')) {
-                    strlcpy(name, "/dev/", namelen);
-                    strlcat(name, dir->d_name, namelen);
+              if (iface == BMP_IF_UART) {
+                ddev = opendir(path);
+                if (ddev != NULL) {
+                  while (strlen(name) == 0 && (dir = readdir(ddev)) != NULL) {
+                    if (dir->d_type == DT_LNK || (dir->d_type == DT_DIR && dir->d_name[0] != '.')) {
+                      strlcpy(name, "/dev/", namelen);
+                      strlcat(name, dir->d_name, namelen);
+                    }
                   }
+                  closedir(ddev);
                 }
-                closedir(ddev);
+              } else {
+                char *ptr = path + strlen(path) - 4;  /* -4 for "/tty" */
+                assert(strlen(path) > 4);
+                assert(*ptr == '/' && *(ptr - 1) == (iface + '0'));
+                *ptr = '\0';  /* remove "/tty" */
+                strlcat(path, "/modalias", sizearray(path));
+                if (access(path, 0) == 0) {
+                  /* file exists, so interface exists */
+                  *ptr = '\0';  /* erase "/modalias" again */
+                  ptr = path + strlen(SYSFS_ROOT) + 1;  /* skip root */
+                  strlcpy(name, ptr, namelen);  /* return <bus> '-' <port> ':' <???> '.' <iface> */
+                }
               }
             }
           }

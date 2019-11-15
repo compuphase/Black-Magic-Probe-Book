@@ -48,38 +48,49 @@ static void usage(int flags)
            "\tlpc43xx - NXP LPC4300 Cortex-M4/M0 series\n");
 }
 
-int main(int argc,char *argv[])
+int main(int argc, char *argv[])
 {
   uint32_t chksum;
-  int result;
+  int result, idx_file, idx_type;
   FILE *fp;
 
-  if (argc!=3) {
+  if (argc != 3) {
     usage(FLAG_ALLINFO);
     return 1;
   }
 
-  fp=fopen(argv[2],"rb+");
-  if (fp==NULL) {
-    printf("File \"%s\" could not be opened.\n",argv[2]);
-    return 0;
+  idx_type = 1; /* assume correct order of command-line options */
+  idx_file = 2;
+  fp = fopen(argv[idx_file], "rb+");
+  if (fp == NULL) {
+    /* test for inverted order of options */
+    fp = fopen(argv[idx_type], "rb+");
+    if (fp == NULL) {
+      /* failed too, this must be some error */
+      printf("File \"%s\" could not be opened.\n\n", argv[idx_file]);
+      usage(FLAG_ALLINFO);
+      return 0;
+    }
+    /* file open worked at inverted order, assume inverted order then */
+    idx_type = 2;
+    idx_file = 1;
   }
 
-  result=elf_patch_vecttable(fp,argv[1],&chksum);
+  result=elf_patch_vecttable(fp, argv[idx_type], &chksum);
   fclose(fp);
   switch (result) {
   case ELFERR_NONE:
-    printf("Checksum set to 0x%08x\n",chksum);
+    printf("Checksum set to 0x%08x\n", chksum);
     break;
   case ELFERR_CHKSUMSET:
-    printf("Checksum already correct (0x%08x)\n",chksum);
+    printf("Checksum already correct (0x%08x)\n", chksum);
     break;
   case ELFERR_UNKNOWNDRIVER:
-    printf("Unsupported MCU type \"%s\".\n",argv[1]);
+    printf("Unsupported MCU type \"%s\".\n", argv[idx_type]);
     usage(FLAG_MCU_LIST);
     break;
   case ELFERR_FILEFORMAT:
-    printf("File \"%s\" has an unsupported format. A 32-bit ELF file is required\n",argv[2]);
+    printf("File \"%s\" has an unsupported format. A 32-bit ELF file is required\n", argv[idx_file]);
     usage(FLAG_HEADER);
     break;
   }
