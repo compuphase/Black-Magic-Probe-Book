@@ -9,9 +9,13 @@ Several makefiles are provided for various compilers. Use the one that is approp
 
 Most makefiles include a file called "makefile.cfg" for configuration. Each makefile has a short section near the top to document which macros you can put in makefile.cfg. The file makefile.cfg is not in this repository; it should be written by you (unless the defaults are fine for your workstation setup).
 
-The makefiles also include a dependencies file (if it exists), called "makefile.dep". A basic cross-platform dependencies file is provided. If you start tinkering with the code, and especially if you add new files, you will want to rebuild the dependencies by running `make depend`. This in turn requires that you have the utility [makedepend](https://github.com/compuphase/makedepend) installed.
+The makefiles also include a dependencies file, called "makefile.dep". A basic cross-platform dependencies file is provided. If you start tinkering with the code, and especially if you add new files, you will want to rebuild the dependencies by running `make depend`. This in turn requires that you have the utility [makedepend](https://github.com/compuphase/makedepend) installed.
 ### Nuklear GUI
 The larger utilities (with a user interface) use the [Nuklear](https://github.com/vurtun/nuklear) toolkit. This library presents an "immediate mode" GUI. It is cross-platform and supports several back-ends. I have chosen GDI+ for Windows and OpenGL with GLFW for Linux.
+
+All GUI utilities have a `-f` command line option to set the font size in pixels (excluding leading). The default size is 14. If that is too small for ease of reading, you can use `-f=16` (or simply `-f16`). The font size that you set is saved, so it is used on any next run of the utility too (without you needing to add the command line parameter every time). The font size must be set for each GUI utility individually, though.
+
+As an aside: the utilities have more command line options that just `-f`. The `-f` option is common to all GUI utilities.
 ### Linux
 Prerequisites are
 * libbsd-dev
