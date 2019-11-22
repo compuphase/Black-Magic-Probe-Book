@@ -24,7 +24,7 @@ Prerequisites are
 
 The development packages for these modules must be present. If you build glfw from source (as a static library), you can configure the path to the include files and the library in makefile.cfg.
 ### Windows with MingW
-A common stumbling block with the MingW compiler is that it lacks the header and library files for WinUSB. The header files are in the Microsoft WDK (and they may come with Visual Studio too). These files have the typical "All rights reserved" copyright banner in the header comment, so I cannot distribute them. You will have to get them from the WDK or another source.
+A common stumbling block with the MingW compiler is that it lacks the header and library files for WinUSB. However the [MingW-w64](https://mingw-w64.org) fork should come with these files. The original header files are in the Microsoft WDK (and they may come with Visual Studio too). These files have the typical "All rights reserved" copyright banner in the header comment, so I cannot distribute them. If your installation lackas these files, you will have to get them from the WDK or another source.
 
 The files that it concerns are:
 * usb.h
