@@ -154,7 +154,7 @@ static const REG_SCRIPT scripts[] = {
   { "swo-generic", "*",
     "SCB_DEMCR = 0x1000000 \n"   /* 1 << 24 */
     "TPIU_CSPSR = 1 \n"          /* protocol width = 1 bit */
-    "TPIU_SSPSR = $0 \n"         /* 1 = Manchester, 2 = Asynchronous */
+    "TPIU_SPPR = $0 \n"          /* 1 = Manchester, 2 = Asynchronous */
     "TPIU_ACPR = $1 \n"          /* CPU clock divider */
     "TPIU_FFCR = 0 \n"           /* turn off formatter, discard ETM output */
     "ITM_LAR = 0xC5ACCE55 \n"    /* unlock access to ITM registers */

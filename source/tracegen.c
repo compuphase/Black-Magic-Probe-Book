@@ -360,7 +360,7 @@ int main(int argc, char *argv[])
   infile[0] = '\0';
   outfile[0] = '\0';
   opt_flags = 0;
-  for (idx = 0; idx < argc; idx++) {
+  for (idx = 1; idx < argc; idx++) {
     if (argv[idx][0] == '-' || argv[idx][0] == '/') {
       switch (argv[idx][1]) {
       case '?':

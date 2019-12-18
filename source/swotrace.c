@@ -164,101 +164,82 @@ typedef struct tagTRACESTRING {
 #define TRACESTRING_INITSIZE  32
 static TRACESTRING tracestring_root = { NULL, NULL };
 static TRACESTRING *tracestring_tail = NULL;
-static int trace_decodectf = 0;
 
-void tracestring_add(const unsigned char *buffer, size_t length, double timestamp)
+static unsigned char itm_cache[5]; /* we may need to cache an ITM data packet that does
+                                      not fit completely in an USB packet; ITM data
+                                      packets are 5 bytes max. */
+static size_t itm_cachefilled = 0;
+static short itm_datasize = 8;
+static short itm_datasz_auto = 0;
+
+#define ITM_VALIDHDR(b)   (((b) & 0x07) >= 1 && ((b) & 0x07) <= 3)
+#define ITM_CHANNEL(b)    (((b) >> 3) & 0x1f) /* get channel number from ITM packet header */
+#define ITM_LENGTH(b)     (((b) & 0x07) == 3 ? 4 : (b) & 0x07)
+
+void tracestring_add(unsigned channel, const unsigned char *buffer, size_t length, double timestamp)
 {
-  unsigned idx, chan;
-
   NK_ASSERT(buffer != NULL);
   NK_ASSERT(length > 0);
-  NK_ASSERT((length & 1) == 0);
 
-  if (trace_decodectf) {
+  /* check whether the channel is enabled (in passive mode, the target that
+     sends the trace messages is oblivious of the settings in this viewer,
+     so it may send trace messages for disabled channels) */
+  if (!channels[channel].enabled)
+    return;
+
+  if (stream_by_id(channel) != NULL) {
     /* CTF mode */
-    unsigned char *bytestream = alloca(length);
-    int pos;
-    idx = 0;
-    while (idx < length) {
-      if ((buffer[idx] & 0x07) != 0x01) {
-        ctf_decode_reset();
-        idx += 2;
-        continue; /* this is not an ITM packet */
-      }
-      chan = (buffer[idx] >> 3) & 0x1f;
-      /* collect packets from the same channel in a separate buffer */
-      pos = 0;
-      bytestream[pos++] = buffer[idx + 1];
-      idx += 2;
-      while (idx < length && ((buffer[idx] >> 3) & 0x1f) == chan) {
-        bytestream[pos++] = buffer[idx + 1];
-        idx += 2;
-      }
-      /* check whether the channel is enabled (in passive mode, the target that
-         sends the trace messages is oblivious of the settings in this viewer,
-         so it may send trace messages for disabled channels) */
-      if (channels[chan].enabled) {
-        int count = ctf_decode(bytestream, pos, chan);
-        if (count > 0) {
-          uint16_t streamid;
-          double tstamp;
-          const char *message;
-          while (msgstack_peek(&streamid, &tstamp, &message)) {
-            TRACESTRING *item = malloc(sizeof(TRACESTRING));
-            if (item != NULL) {
-              memset(item, 0, sizeof(TRACESTRING));
-              item->length = (unsigned short)strlen(message);
-              item->size = item->length + 1;
-              item->text = malloc(item->size * sizeof(unsigned char));
-              if (item->text != NULL) {
-                strcpy(item->text, message);
-                item->length = item->size - 1;
-                item->channel = (unsigned char)streamid;
-                if (tstamp > 0.001)
-                  timestamp = tstamp; /* use precision timestamp from remote host */
-                item->timestamp = timestamp;
-                if (tracestring_root.next != NULL)
-                  timestamp -= tracestring_root.next->timestamp;
-                else
-                  timestamp = 0.0;
-                /* create formatted timestamp */
-                if (tstamp > 0.001)
-                  sprintf(item->timefmt, "%.6f", timestamp);
-                else
-                  sprintf(item->timefmt, "%.3f", timestamp);
-                item->timefmt_len = (unsigned short)strlen(item->timefmt);
-                assert(item->timefmt_len < sizearray(item->timefmt));
-                /* append to tail */
-                if (tracestring_tail != NULL)
-                  tracestring_tail->next = item;
-                else
-                  tracestring_root.next = item;
-                tracestring_tail = item;
-              }
-            }
-            msgstack_pop(NULL, NULL, NULL, 0);
+    int count = ctf_decode(buffer, length, channel);
+    if (count > 0) {
+      uint16_t streamid;
+      double tstamp;
+      const char *message;
+      while (msgstack_peek(&streamid, &tstamp, &message)) {
+        TRACESTRING *item = malloc(sizeof(TRACESTRING));
+        if (item != NULL) {
+          memset(item, 0, sizeof(TRACESTRING));
+          item->length = (unsigned short)strlen(message);
+          item->size = item->length + 1;
+          item->text = malloc(item->size * sizeof(unsigned char));
+          if (item->text != NULL) {
+            strcpy(item->text, message);
+            item->length = item->size - 1;
+            item->channel = (unsigned char)streamid;
+            if (tstamp > 0.001)
+              timestamp = tstamp; /* use precision timestamp from remote host */
+            item->timestamp = timestamp;
+            if (tracestring_root.next != NULL)
+              timestamp -= tracestring_root.next->timestamp;
+            else
+              timestamp = 0.0;
+            /* create formatted timestamp */
+            if (tstamp > 0.001)
+              sprintf(item->timefmt, "%.6f", timestamp);
+            else
+              sprintf(item->timefmt, "%.3f", timestamp);
+            item->timefmt_len = (unsigned short)strlen(item->timefmt);
+            assert(item->timefmt_len < sizearray(item->timefmt));
+            /* append to tail */
+            if (tracestring_tail != NULL)
+              tracestring_tail->next = item;
+            else
+              tracestring_root.next = item;
+            tracestring_tail = item;
           }
         }
+        msgstack_pop(NULL, NULL, NULL, 0);
       }
     }
   } else {
     /* plain text mode */
-    for (idx = 0; idx < length; idx += 2) {
-      if ((buffer[idx] & 0x07) != 0x01)
-        continue; /* this is not an ITM packet */
-      chan = (buffer[idx] >> 3) & 0x1f;
-      /* check whether the channel is enabled (in passive mode, the target that
-         sends the trace messages is oblivious of the settings in this viewer,
-         so it may send trace messages for disabled channels) */
-      if (!channels[chan].enabled)
-        continue;
-
+    unsigned idx;
+    for (idx = 0; idx < length; idx++) {
       /* see whether to append to the recent string, or to add a new string */
       if (tracestring_tail != NULL) {
         if (buffer[idx + 1] == '\r' || buffer[idx + 1] == '\n') {
           tracestring_tail->flags |= 0x01;  /* on newline, create a new string */
           continue;
-        } else if (tracestring_tail->channel != chan) {
+        } else if (tracestring_tail->channel != channel) {
           tracestring_tail->flags |= 0x01;  /* different channel, terminate previous string */
         } else if (tracestring_tail->length >= TRACESTRING_MAXLENGTH) {
           tracestring_tail->flags |= 0x01;  /* line length limit */
@@ -294,7 +275,7 @@ void tracestring_add(const unsigned char *buffer, size_t length, double timestam
           item->size = TRACESTRING_INITSIZE;
           item->text = malloc(item->size * sizeof(unsigned char));
           if (item->text != NULL) {
-            item->channel = (unsigned char)chan;
+            item->channel = (unsigned char)channel;
             item->timestamp = timestamp;
             if (tracestring_root.next != NULL)
               timestamp -= tracestring_root.next->timestamp;
@@ -341,9 +322,86 @@ int tracestring_isempty(void)
 void tracestring_process(int enabled)
 {
   while (tracequeue_head != tracequeue_tail) {
-    if (enabled)
-      tracestring_add(trace_queue[tracequeue_head].data, trace_queue[tracequeue_head].length,
-                      trace_queue[tracequeue_head].timestamp);
+    if (enabled) {
+      const unsigned char *pktdata = trace_queue[tracequeue_head].data;
+      size_t pktlen = trace_queue[tracequeue_head].length;
+      unsigned chan;
+      unsigned char buffer[PACKET_SIZE];
+      size_t buflen = 0;
+      unsigned len;
+
+      if (itm_cachefilled>0) {
+        int skip = 0;
+        chan = ITM_CHANNEL(itm_cache[0]);
+        len = ITM_LENGTH(itm_cache[0]);
+        if (len < itm_datasize) {
+          memset(buffer, 0, itm_datasize - len);
+          buflen += itm_datasize - len;
+        } else if (len > itm_datasize) {
+          if (itm_datasz_auto) {
+            itm_datasize = len; /* if larger data word is found, datasize must be adjusted */
+          } else {
+            ctf_decode_reset();
+            goto skip_packet;   /* not a valid ITM packet, ignore it */
+          }
+        }
+        assert(itm_cachefilled <= 4);
+        if (itm_cachefilled > 1) {
+          /* copy data bytes still in the cache */
+          memcpy(buffer + buflen, itm_cache + 1, itm_cachefilled - 1);
+          buflen += itm_cachefilled - 1;
+        }
+        skip = len - (itm_cachefilled - 1);
+        assert(skip > 0);       /* there must be data left to copy (otherwise nothing would be cached) */
+        memcpy(buffer + buflen, pktdata, skip);
+        buflen += skip;
+        pktdata += skip;
+        pktlen -= skip;
+        itm_cachefilled = 0;
+      } else {
+        assert(pktlen > 0);
+        chan = ITM_CHANNEL(*pktdata);
+      }
+
+      while (pktlen > 0) {
+        /* if the channel changes in the middle of a packet, add a string and
+           restart */
+        if (chan != ITM_CHANNEL(*pktdata)) {
+          tracestring_add(chan, buffer, buflen, trace_queue[tracequeue_head].timestamp);
+          chan = ITM_CHANNEL(*pktdata);
+          buflen = 0;
+        }
+        if (!ITM_VALIDHDR(*pktdata)) {
+          ctf_decode_reset();
+          goto skip_packet;     /* not a valid ITM packet, ignore it */
+        }
+        len = ITM_LENGTH(*pktdata);
+        if (pktlen < len + 1) {
+          /* store remaining data in the packet in the cache and quit */
+          memcpy(itm_cache, pktdata, pktlen);
+          itm_cachefilled = pktlen;
+          break;
+        }
+        if (len < itm_datasize) {
+          memset(buffer, 0, itm_datasize - len);
+          buflen += itm_datasize - len;
+        } else if (len > itm_datasize) {
+          if (itm_datasz_auto) {
+            itm_datasize = len; /* if larger data word is found, datasize must be adjusted */
+          } else {
+            ctf_decode_reset();
+            goto skip_packet;   /* not a valid ITM packet, ignore it */
+          }
+        }
+        memcpy(buffer + buflen, pktdata + 1, len);
+        buflen += len;
+        pktdata += len + 1;
+        pktlen -= len + 1;
+      }
+      if (buflen)
+        tracestring_add(chan, buffer, buflen, trace_queue[tracequeue_head].timestamp);
+    }
+  skip_packet:
     tracequeue_head = (tracequeue_head + 1) % PACKET_NUM;
   }
 }
@@ -445,19 +503,21 @@ int trace_save(const char *filename)
   return 1;
 }
 
-/** trace_enablectf() sets or queries the CTF decoding mode. A TSDL file must
- *  have been parsed for the mode to become active. Set parameter "enable" to
- *  -1 to query the current mode (without changing it).
+
+/** trace_setdatasize() sets the data size in an ITM packet, in bytes. Valid
+ *  values are 1, 2 and 4. For automatic detection, set "size" to 0.
  */
-int trace_enablectf(int enable)
+void trace_setdatasize(short size)
 {
-  int curval = trace_decodectf;
-  if (enable == 0 || enable == 1) {
-    if (enable && event_count() == 0)
-      enable = 0;
-    trace_decodectf = enable;
-  }
-  return curval;
+  assert(size == 0 || size == 1 || size == 2 || size == 4);
+  itm_datasize = (size == 0) ? 8 : size;
+  itm_datasz_auto = (size == 0);
+}
+
+/** trace_getdatasize() returns the datasize currently set. */
+short trace_getdatasize(void)
+{
+  return itm_datasize;
 }
 
 

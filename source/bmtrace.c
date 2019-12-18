@@ -183,8 +183,8 @@ int main(int argc, char *argv[])
   enum { TAB_CONFIGURATION, TAB_CHANNELS, /* --- */ TAB_COUNT };
   enum { SPLITTER_NONE, SPLITTER_VERTICAL, SPLITTER_HORIZONTAL };
 
-  static const char *mode_strings[] = { "Passive listener", "Manchester", "Async." };
-  static const char *format_strings[] = { "Plain text", "CTF" };
+  static const char *mode_strings[] = { "Passive listener", "Manchester", "NRZ/async." };
+  static const char *datasize_strings[] = { "auto", "8 bit", "16 bit", "32 bit" };
   struct nk_context *ctx;
   int canvas_width, canvas_height;
   int idx, insplitter;
@@ -198,7 +198,7 @@ int main(int argc, char *argv[])
   int chan, cur_chan_edit = -1;
   unsigned long channelmask = 0;
   enum { MODE_PASSIVE, MODE_MANCHESTER, MODE_ASYNC } opt_mode = MODE_MANCHESTER;
-  int opt_format = 0;
+  int opt_datasize = 0;
   int opt_fontsize = FONT_HEIGHT;
   int trace_status = 0;
   int trace_running = 1;
@@ -232,7 +232,7 @@ int main(int argc, char *argv[])
   }
   /* other configuration */
   opt_mode = (int)ini_getl("Settings", "mode", MODE_MANCHESTER, txtConfigFile);
-  opt_format = (int)ini_getl("Settings", "format", 0, txtConfigFile);
+  opt_datasize = (int)ini_getl("Settings", "datasize", 1, txtConfigFile);
   ini_gets("Settings", "tsdl", "", txtTSDLfile, sizearray(txtTSDLfile), txtConfigFile);
   ini_gets("Settings", "mcu-freq", "48000000", cpuclock_str, sizearray(cpuclock_str), txtConfigFile);
   ini_gets("Settings", "bitrate", "100000", bitrate_str, sizearray(bitrate_str), txtConfigFile);
@@ -267,7 +267,7 @@ int main(int argc, char *argv[])
       tab_states[idx] = opened;
   }
 
-  for (idx = 0; idx < argc; idx++) {
+  for (idx = 1; idx < argc; idx++) {
     const char *ptr;
     int value;
     if (argv[idx][0] == '-' || argv[idx][0] == '/') {
@@ -301,6 +301,7 @@ int main(int argc, char *argv[])
   trace_status = trace_init();
   if (trace_status != TRACESTAT_OK)
     trace_running = 0;
+  trace_setdatasize((opt_datasize == 3) ? 4 : opt_datasize);
   bmp_setcallback(bmp_callback);
   reinitialize = 2; /* skip first iteration, so window is updated */
   recent_statuscode = BMPSTAT_SUCCESS;  /* must be a non-zero code to display anything */
@@ -311,40 +312,33 @@ int main(int argc, char *argv[])
 
   for ( ;; ) {
     if (reinitialize == 1) {
+      int result;
+      if ((cpuclock = strtol(cpuclock_str, NULL, 10)) == 0)
+        cpuclock = 48000000;
+      if ((bitrate = strtol(bitrate_str, NULL, 10)) == 0)
+        bitrate = 100000;
       if (rs232_isopen())
         bmp_break();
-      if (opt_mode == MODE_PASSIVE) {
-        gdbrsp_packetsize(0);
-        if (rs232_isopen()) {
-          bmp_detach(1);
-          rs232_dtr(0);
-          rs232_rts(0);
-          rs232_close();
-        }
-      } else {
-        int result = bmp_connect();
-        if (result)
-          result = bmp_attach(2, mcu_driver, sizearray(mcu_driver), NULL, 0);
-        if (result) {
-          unsigned long params[2];
-          bmp_enabletrace((opt_mode == MODE_ASYNC) ? bitrate : 0);
-          bmp_runscript("swo-device", mcu_driver, NULL);
-          if ((cpuclock = strtol(cpuclock_str, NULL, 10)) == 0)
-            cpuclock = 48000000;
-          if ((bitrate = strtol(bitrate_str, NULL, 10)) == 0)
-            bitrate = 100000;
-          params[0] = opt_mode;
-          params[1] = cpuclock / bitrate - 1;
-          bmp_runscript("swo-generic", mcu_driver, params);
-          /* enable active channels in the target (disable inactive channels) */
-          channelmask = 0;
-          for (chan = 0; chan < NUM_CHANNELS; chan++)
-            if (channel_getenabled(chan))
-              channelmask |= (1 << chan);
-          params[0] = channelmask;
-          bmp_runscript("swo-channels", mcu_driver, params);
-          bmp_restart();
-        }
+      result = bmp_connect();
+      if (result)
+        result = bmp_attach(2, mcu_driver, sizearray(mcu_driver), NULL, 0);
+      if (result && opt_mode != MODE_PASSIVE) {
+        unsigned long params[2];
+        bmp_runscript("swo-device", mcu_driver, NULL);
+        params[0] = opt_mode;
+        params[1] = cpuclock / bitrate - 1;
+        bmp_runscript("swo-generic", mcu_driver, params);
+        /* enable active channels in the target (disable inactive channels) */
+        channelmask = 0;
+        for (chan = 0; chan < NUM_CHANNELS; chan++)
+          if (channel_getenabled(chan))
+            channelmask |= (1 << chan);
+        params[0] = channelmask;
+        bmp_runscript("swo-channels", mcu_driver, params);
+      }
+      if (result) {
+        bmp_enabletrace((opt_mode == MODE_ASYNC)? bitrate : 0);
+        bmp_restart();
       }
       tracestring_clear();
       switch (trace_status) {
@@ -385,14 +379,12 @@ int main(int argc, char *argv[])
       ctf_decode_cleanup();
       tracestring_clear();
       cur_match_line = -1;
-      trace_enablectf(0);
       tracelog_statusmsg(TRACESTATMSG_CTF, NULL, 0);
       ctf_error_notify(CTFERR_NONE, 0, NULL);
-      if (opt_format == 1 && strlen(txtTSDLfile)> 0 && access(txtTSDLfile, 0) == 0) {
+      if (strlen(txtTSDLfile)> 0 && access(txtTSDLfile, 0) == 0) {
         if (ctf_parse_init(txtTSDLfile) && ctf_parse_run()) {
           const CTF_STREAM *stream;
           int seqnr;
-          trace_enablectf(1);
           /* stream names overrule configured channel names */
           for (seqnr = 0; (stream = stream_by_seqnr(seqnr)) != NULL; seqnr++)
             if (stream->name != NULL && strlen(stream->name) > 0)
@@ -532,15 +524,6 @@ int main(int argc, char *argv[])
             reinitialize = 1;
           nk_layout_row_end(ctx);
 
-          nk_layout_row_begin(ctx, NK_STATIC, ROW_HEIGHT, 2);
-          nk_layout_row_push(ctx, LABEL_WIDTH);
-          nk_label(ctx, "Format", NK_TEXT_ALIGN_LEFT | NK_TEXT_ALIGN_MIDDLE);
-          nk_layout_row_push(ctx, VALUE_WIDTH);
-          result = opt_format;
-          opt_format = nk_combo(ctx, format_strings, NK_LEN(format_strings), opt_format, FONT_HEIGHT, nk_vec2(VALUE_WIDTH,3*FONT_HEIGHT));
-          if (opt_format != result)
-            reload_format = 1;
-          nk_layout_row_end(ctx);
           nk_layout_row_begin(ctx, NK_STATIC, ROW_HEIGHT, 3);
           nk_layout_row_push(ctx, LABEL_WIDTH);
           nk_label(ctx, "TSDL file", NK_TEXT_ALIGN_LEFT | NK_TEXT_ALIGN_MIDDLE);
@@ -559,6 +542,15 @@ int main(int argc, char *argv[])
               free((void*)s);
             }
           }
+          nk_layout_row_end(ctx);
+          nk_layout_row_begin(ctx, NK_STATIC, ROW_HEIGHT, 2);
+          nk_layout_row_push(ctx, LABEL_WIDTH);
+          nk_label(ctx, "Data size", NK_TEXT_ALIGN_LEFT | NK_TEXT_ALIGN_MIDDLE);
+          nk_layout_row_push(ctx, VALUE_WIDTH);
+          result = opt_datasize;
+          opt_datasize = nk_combo(ctx, datasize_strings, NK_LEN(datasize_strings), opt_datasize, FONT_HEIGHT, nk_vec2(VALUE_WIDTH,5.5*FONT_HEIGHT));
+          if (opt_datasize != result)
+            trace_setdatasize((opt_datasize == 3) ? 4 : opt_datasize);
           nk_layout_row_end(ctx);
           nk_tree_state_pop(ctx);
         }
@@ -707,10 +699,10 @@ int main(int argc, char *argv[])
   }
   ini_putl("Settings", "fontsize", opt_fontsize, txtConfigFile);
   ini_putl("Settings", "mode", opt_mode, txtConfigFile);
-  ini_putl("Settings", "format", opt_format, txtConfigFile);
+  ini_putl("Settings", "datasize", opt_datasize, txtConfigFile);
   ini_puts("Settings", "tsdl", txtTSDLfile, txtConfigFile);
-  ini_puts("Settings", "mcu-freq", cpuclock_str, txtConfigFile);
-  ini_puts("Settings", "bitrate", bitrate_str, txtConfigFile);
+  ini_putl("Settings", "mcu-freq", cpuclock, txtConfigFile);
+  ini_putl("Settings", "bitrate", bitrate, txtConfigFile);
   sprintf(valstr, "%d %d", canvas_width, canvas_height);
   ini_puts("Settings", "size", valstr, txtConfigFile);
   {

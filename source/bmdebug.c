@@ -96,7 +96,7 @@
   #define DIRSEP_CHAR '/'
 #endif
 
-static char *translate_path(char *path, int todos);
+static char *translate_path(char *path, int native);
 static const char *source_getname(unsigned idx);
 
 
@@ -109,6 +109,7 @@ static const char *source_getname(unsigned idx);
 #define STRFLG_LOG      0x0040  /* '&' */
 #define STRFLG_TARGET   0x0080  /* '@' */
 #define STRFLG_MI_INPUT 0x0100  /* '-' */
+#define STRFLG_MON_OUT  0x0200  /* monitor echo */
 #define STRFLG_STARTUP  0x4000
 #define STRFLG_HANDLED  0x8000
 
@@ -385,6 +386,8 @@ static int console_add(const char *text, int flags)
     char *tok;
     assert(curflags >= 0);
     ptr = gdbmi_leader(console_buffer, &xtraflags);
+    if ((curflags & STRFLG_MON_OUT) != 0 && (xtraflags & STRFLG_TARGET) != 0)
+      xtraflags = (xtraflags & ~STRFLG_TARGET) | STRFLG_STATUS;
     /* after gdbmi_leader(), there may again be \n in the resulting string */
     for (tok = strtok((char*)ptr, "\n"); tok != NULL; tok = strtok(NULL, "\n")) {
       stringlist_add(&consolestring_root, tok, curflags | xtraflags);
@@ -419,6 +422,8 @@ static int console_add(const char *text, int flags)
     if (addstring) {
       int xtraflags, prompt;
       ptr = gdbmi_leader(console_buffer, &xtraflags);
+      if ((curflags & STRFLG_MON_OUT) != 0 && (xtraflags & STRFLG_TARGET) != 0)
+        xtraflags = (xtraflags & ~STRFLG_TARGET) | STRFLG_STATUS;
       prompt = is_gdb_prompt(ptr) && (xtraflags & STRFLG_TARGET) == 0;
       if (prompt) {
         foundprompt = 1;  /* don't add prompt to the output console, but mark that we've seen it */
@@ -489,7 +494,7 @@ static int console_autocomplete(char *text, size_t textsize, const DWARF_SYMBOLL
     { "step", "s", NULL },
     { "target", NULL, "extended-remote remote" },
     { "tbreak", NULL, "%func %file" },
-    { "trace", NULL, "async channel disable info passive" },
+    { "trace", NULL, "async auto channel disable enable info passive" },
     { "undisplay", NULL, NULL },
     { "until", "u", NULL },
     { "up", NULL, NULL },
@@ -655,23 +660,36 @@ static int console_autocomplete(char *text, size_t textsize, const DWARF_SYMBOLL
 }
 
 
-static char **sources_namelist = NULL;
-static char **sources_pathlist = NULL;
-static unsigned sources_size = 0;
-static unsigned sources_count = 0;
+typedef struct tagSOURCEFILE {
+  char *basename;
+  char *path;
+  STRINGLIST root; /* base of text lines */
+} SOURCEFILE;
 
+static SOURCEFILE *sources = NULL;
+static unsigned sources_size = 0;   /* size of the sources array (max. files that the array can contain) */
+static unsigned sources_count = 0;  /* number of entries in the sources array */
+
+/** sources_add() adds a source file unless it already exists in the list.
+ *  \param filename   The base name of the source file (including extension but
+ *                    excluding the path).
+ *  \param filepath   The (full or partial) path to the file. This parameter
+ *                    may be NULL (in which case the path is assumed the same
+ *                    as the base name).
+ */
 static void sources_add(const char *filename, const char *filepath)
 {
-  assert((sources_namelist == NULL && sources_pathlist == NULL && sources_size == 0)
-         || (sources_namelist != NULL && sources_pathlist != NULL));
+  FILE *fp;
+
+  assert((sources == NULL && sources_size == 0) || (sources != NULL && sources_size > 0));
   assert(filename != NULL);
 
   /* check whether the source already exists */
-  if (sources_namelist != NULL) {
+  if (sources != NULL) {
     unsigned idx;
     for (idx = 0; idx < sources_count; idx++) {
-      if (strcmp(sources_namelist[idx], filename) == 0) {
-        const char *p1 = (sources_pathlist[idx] != NULL) ? sources_pathlist[idx] : "";
+      if (strcmp(sources[idx].basename, filename)== 0) {
+        const char *p1 = (sources[idx].path != NULL) ? sources[idx].path : "";
         const char *p2 = (filepath != NULL) ? filepath : "";
         if (strcmp(p1, p2) == 0)
           return; /* both base name and full path are the same -> do not add duplicate */
@@ -683,23 +701,33 @@ static void sources_add(const char *filename, const char *filepath)
   if (sources_size == 0) {
     assert(sources_count == 0);
     sources_size = 16;
-    sources_namelist = (char**)malloc(sources_size * sizeof(char*));
-    sources_pathlist = (char**)malloc(sources_size * sizeof(char*));
+    sources = (SOURCEFILE*)malloc(sources_size * sizeof(SOURCEFILE));
   } else if (sources_count >= sources_size) {
     sources_size *= 2;
-    sources_namelist = (char**)realloc(sources_namelist, sources_size * sizeof(char*));
-    sources_pathlist = (char**)realloc(sources_pathlist, sources_size * sizeof(char*));
+    sources = (SOURCEFILE*)realloc(sources, sources_size * sizeof(SOURCEFILE));
   }
-  if (sources_namelist == NULL || sources_pathlist == NULL) {
+  if (sources == NULL) {
     fprintf(stderr, "Memory allocation error.\n");
     exit(1);
   }
   assert(filename != NULL && strlen(filename) > 0);
-  sources_namelist[sources_count] = strdup(filename);
-  if (filepath != NULL && strlen(filepath) > 0)
-    sources_pathlist[sources_count] = strdup(filepath);
-  else
-    sources_pathlist[sources_count] = NULL;
+  sources[sources_count].basename = strdup(filename);
+  sources[sources_count].path = (filepath != NULL && strlen(filepath) > 0) ? strdup(filepath) : NULL;
+  memset(&sources[sources_count].root, 0, sizeof(STRINGLIST));
+
+  /* load the source file */
+  fp = fopen(sources[sources_count].path, "rt");
+  if (fp != NULL) {
+    char line[256]; /* source code really should not have lines as long as this */
+    while (fgets(line, sizearray(line), fp) != NULL) {
+      char *ptr = strchr(line, '\n');
+      if (ptr != NULL)
+        *ptr = '\0';
+      stringlist_add(&sources[sources_count].root, line, 0);
+    }
+    fclose(fp);
+  }
+
   sources_count += 1;
 }
 
@@ -713,27 +741,27 @@ static void sources_clear(int freelists)
 
   if (sources_size == 0) {
     assert(sources_count == 0);
-    assert(sources_namelist == NULL && sources_pathlist == NULL);
+    assert(sources == NULL);
     return;
   }
 
   for (idx = 0; idx < sources_count; idx++) {
-    assert(sources_namelist[idx] != NULL);
-    free((void*)sources_namelist[idx]);
-    sources_namelist[idx] = NULL;
-    if (sources_pathlist[idx] != NULL) {
-      free((void*)sources_pathlist[idx]);
-      sources_pathlist[idx] = NULL;
+    assert(sources[idx].basename != NULL);
+    free((void*)sources[idx].basename);
+    sources[idx].basename = NULL;
+    if (sources[idx].path != NULL) {
+      free((void*)sources[idx].path);
+      sources[idx].path = NULL;
     }
+    stringlist_clear(&sources[idx].root);
+    memset(&sources[idx].root, 0, sizeof(STRINGLIST));
   }
   sources_count = 0;
 
   if (freelists) {
-    assert(sources_namelist != NULL && sources_pathlist != NULL);
-    free((void*)sources_namelist);
-    free((void*)sources_pathlist);
-    sources_namelist = NULL;
-    sources_pathlist = NULL;
+    assert(sources != NULL);
+    free((void*)sources);
+    sources = NULL;
     sources_size = 0;
   }
 }
@@ -814,7 +842,7 @@ static int check_sources_tstamps(const char *elffile)
     time_t tstamp_elf = fstat.st_mtime;
     unsigned idx;
     for (idx = 0; idx < sources_count; idx++) {
-      const char *fname = (sources_pathlist[idx] != NULL) ? sources_pathlist[idx] : sources_namelist[idx];
+      const char *fname = (sources[idx].path != NULL) ? sources[idx].path : sources[idx].basename;
       if (stat(fname, &fstat) >= 0 && fstat.st_mtime > tstamp_elf)
         result = 0;
     }
@@ -827,7 +855,7 @@ static int source_lookup(const char *filename)
   unsigned idx;
   const char *base;
 
-  if (sources_namelist == NULL)
+  if (sources == NULL)
     return -1;
 
   if ((base = strrchr(filename, '/')) != NULL)
@@ -838,7 +866,7 @@ static int source_lookup(const char *filename)
   #endif
 
   for (idx = 0; idx < sources_count; idx++)
-    if (strcmp(filename, sources_namelist[idx]) == 0)
+    if (strcmp(filename, sources[idx].basename)== 0)
       return idx;
 
   return -1;
@@ -847,54 +875,42 @@ static int source_lookup(const char *filename)
 static const char *source_getname(unsigned idx)
 {
   if (idx < sources_count)
-    return sources_namelist[idx];
+    return sources[idx].basename;
   return NULL;
 }
 
-
-static STRINGLIST sourcefile_root = { NULL, NULL, 0 };
-static int sourcefile_index = -1;
-
-static void source_clear(void)
+static const char **sources_getnames(void)
 {
-  stringlist_clear(&sourcefile_root);
-  sourcefile_index = -1;
-}
+  const char **namelist;
 
-static int source_load(int srcindex)
-{
-  FILE *fp;
-  char line[256];
-
-  if (srcindex == sourcefile_index)
-    return 0;           /* file does not change */
-
-  source_clear();
-  assert(srcindex >= 0);
-  if (srcindex >= (int)sources_count)
-    return 0;           /* new file index is invalid */
-
-  fp = fopen(sources_pathlist[srcindex], "rt");
-  if (fp == NULL)
-    return 0;           /* source file could not be opened */
-  while (fgets(line, sizearray(line), fp) != NULL) {
-    char *ptr = strchr(line, '\n');
-    if (ptr != NULL)
-      *ptr = '\0';
-    stringlist_add(&sourcefile_root, line, 0);
+  if (sources_count == 0)
+    return NULL;
+  assert(sources != NULL);
+  namelist = (const char**)malloc(sources_count * sizeof(char*));
+  if (namelist != NULL) {
+    int idx;
+    for (idx = 0; idx < sources_count; idx++)
+      namelist[idx] = source_getname(idx);
   }
-  fclose(fp);
-  return 1;
+
+  return namelist;
 }
 
-static int source_linecount(void)
+static int source_linecount(int srcindex)
 {
   int count = 0;
   STRINGLIST *item;
-  for (item = sourcefile_root.next; item != NULL; item = item->next)
-    count++;
+  if (srcindex >= 0 && srcindex < sources_count)
+    for (item = sources[srcindex].root.next; item != NULL; item = item->next)
+      count++;
   return count;
 }
+
+static STRINGLIST *source_firstline(int srcindex)
+{
+  return (srcindex >= 0 && srcindex < sources_count) ? sources[srcindex].root.next : NULL;
+}
+
 
 typedef struct tagBREAKPOINT {
   struct tagBREAKPOINT *next;
@@ -1270,12 +1286,18 @@ static int ctf_findmetadata(const char *target, char *metadata, size_t metadata_
   char basename[_MAX_PATH], path[_MAX_PATH], *ptr;
   unsigned len, idx;
 
-  /* create the base name (without path) from the target name; add a .tsdl extension */
-  ptr = (char*)lastdirsep(target);
-  strlcpy(basename, (ptr == NULL) ? target : ptr + 1, sizearray(basename));
-  if ((ptr = strrchr(basename, '.')) != NULL)
-    *ptr = '\0';
-  strlcat(basename, ".tsdl", sizearray(basename));
+  assert(target != NULL);
+  assert(metadata != NULL);
+
+  /* if no metadata filename was set, create the base name (without path) from
+     the target name; add a .tsdl extension */
+  if (strlen(metadata) == 0) {
+    ptr =(char*)lastdirsep(target);
+    strlcpy(basename, (ptr == NULL) ? target : ptr + 1, sizearray(basename));
+    if ((ptr = strrchr(basename, '.')) != NULL)
+      *ptr = '\0';
+    strlcat(basename, ".tsdl", sizearray(basename));
+  }
 
   /* try current directory */
   if (access(basename, 0) == 0) {
@@ -1300,10 +1322,10 @@ static int ctf_findmetadata(const char *target, char *metadata, size_t metadata_
 
   /* try directories in the sources array */
   for (idx = 0; idx < sources_count; idx++) {
-    ptr = (char*)lastdirsep(sources_pathlist[idx]);
+    ptr =(char*)lastdirsep(sources[idx].path);
     if (ptr != NULL) {
-      len = min(ptr - sources_pathlist[idx], sizearray(path) - 2);
-      strncpy(path, sources_pathlist[idx], len);
+      len = min(ptr - sources[idx].path, sizearray(path) - 2);
+      strncpy(path, sources[idx].path, len);
       path[len] = DIRSEP_CHAR;
       path[len + 1] = '\0';
       strlcat(path, basename, sizearray(path));
@@ -1365,7 +1387,7 @@ static int check_stopped(int *filenr, int *linenr)
           strncpy(filename, head, len);
           filename[len] = '\0';
           /* look up the file */
-          assert(sources_namelist != NULL);
+          assert(sources != NULL);
           assert(filenr != NULL);
           *filenr = source_lookup(filename);
         }
@@ -1571,10 +1593,18 @@ int task_stderr(TASK *task, char *text, size_t maxlength)
   return dwRead;
 }
 
-static char *translate_path(char *path, int todos)
+/** translate_path()
+ *  \param path     The path name
+ *  \param native   Set to 1 to convert slashes to backslashes (required by C
+ *                  library); set to 0 to convert backslashes to slashes
+ *                  (required by GDB)
+ *  \return A pointer to the translated name (parameter "path").
+ */
+static char *translate_path(char *path, int native)
 {
   char *p;
-  if (todos) {
+  assert(path != NULL);
+  if (native) {
     while ((p = strchr(path, '/')) != NULL)
       *p = '\\';
   } else {
@@ -1735,9 +1765,9 @@ unsigned long GetTickCount(void)
   return tv.tv_sec * 1000 + tv.tv_usec / 1000;
 }
 
-static char *translate_path(char *path, int todos)
+static char *translate_path(char *path, int native)
 {
-  (void)todos;
+  (void)native;
   return path;
 }
 
@@ -1922,7 +1952,7 @@ static void source_widget(struct nk_context *ctx, const char *id, float rowheigh
   if (nk_group_begin(ctx, id, NK_WINDOW_BORDER)) {
     int lines = 0, maxlen = 0;
     float maxwidth = 0;
-    for (item = sourcefile_root.next; item != NULL; item = item->next) {
+    for (item = source_firstline(source_cursorfile); item != NULL; item = item->next) {
       float textwidth;
       BREAKPOINT *bkpt;
       lines++;
@@ -2065,7 +2095,7 @@ static int source_getsymbol(char *symname, size_t symlen, int row, int col)
   *symname = '\0';
   if (row < 1 || col < 1)
     return 0;
-  for (item = sourcefile_root.next; item != NULL && row > 1; item = item->next)
+  for (item = source_firstline(source_cursorfile); item != NULL && row > 1; item = item->next)
     row--;
   if (item == NULL)
     return 0;
@@ -2151,8 +2181,8 @@ enum {
   STATE_FILE_TEST,
   STATE_MEMACCESS_1,
   STATE_MEMACCESS_2,
-  STATE_DOWNLOAD,
   STATE_VERIFY,
+  STATE_DOWNLOAD,
   STATE_CHECK_MAIN,
   STATE_START,
   STATE_EXEC_CMD,
@@ -2199,6 +2229,78 @@ enum {
 
 #define TERM_END(s, i)  ((s)[i] == ' ' || (s)[i] == '\0')
 
+typedef struct tagSWOSETTINGS {
+  unsigned mode;
+  unsigned bitrate;
+  unsigned clock;
+  unsigned datasize;
+  char metadata[_MAX_PATH];
+} SWOSETTINGS;
+
+enum { SWOMODE_NONE, SWOMODE_MANCHESTER, SWOMODE_ASYNC, SWOMODE_PASSIVE };
+
+static int save_settings(const char *filename, int tpwr, int autodownload,
+                         const SWOSETTINGS *swo)
+{
+  int idx;
+
+  if (filename == NULL || strlen(filename) == 0)
+    return 0;
+
+  ini_putl("Flash", "tpwr", tpwr, filename);
+  ini_putl("Flash", "auto-download", autodownload, filename);
+
+  ini_putl("SWO trace", "mode", swo->mode, filename);
+  ini_putl("SWO trace", "bitrate", swo->bitrate, filename);
+  ini_putl("SWO trace", "clock", swo->clock, filename);
+  ini_putl("SWO trace", "datasize", swo->datasize, filename);
+  ini_puts("SWO trace", "ctf", swo->metadata, filename);
+  for (idx = 0; idx < NUM_CHANNELS; idx++) {
+    char key[32], value[128];
+    struct nk_color color = channel_getcolor(idx);
+    sprintf(key, "chan%d", idx);
+    sprintf(value, "%d #%06x %s", channel_getenabled(idx),
+            ((int)color.r << 16) | ((int)color.g << 8) | color.b,
+            channel_getname(idx, NULL, 0));
+    ini_puts("SWO trace", key, value, filename);
+  }
+
+  return access(filename, 0) == 0;
+}
+
+static int load_settings(const char *filename, int *tpwr, int *autodownload,
+                         SWOSETTINGS *swo)
+{
+  int idx;
+
+  if (filename == NULL || strlen(filename) == 0 || access(filename, 0) != 0)
+    return 0;
+
+  assert(tpwr != NULL);
+  *tpwr =(int)ini_getl("Flash", "tpwr", 0, filename);
+  assert(autodownload != NULL);
+  *autodownload = (int)ini_getl("Flash", "auto-download", 1, filename);
+
+  swo->mode = (unsigned)ini_getl("SWO trace", "mode", SWOMODE_NONE, filename);
+  swo->bitrate = (unsigned)ini_getl("SWO trace", "bitrate", 100000, filename);
+  swo->clock = (unsigned)ini_getl("SWO trace", "clock", 48000000, filename);
+  swo->datasize = (unsigned)ini_getl("SWO trace", "datasize", 8, filename);
+  ini_gets("SWO trace", "ctf", "", swo->metadata, sizearray(swo->metadata), filename);
+  for (idx = 0; idx < NUM_CHANNELS; idx++) {
+    char key[32], value[128];
+    unsigned clr;
+    int enabled, result;
+    channel_set(idx, (idx == 0), NULL, nk_rgb(190, 190, 190)); /* preset: port 0 is enabled by default, others disabled by default */
+    sprintf(key, "chan%d", idx);
+    ini_gets("SWO trace", key, "", value, sizearray(value), filename);
+    result = sscanf(value, "%d #%x %s", &enabled, &clr, key);
+    if (result >= 2)
+      channel_set(idx, enabled, (result >= 3) ? key : NULL, nk_rgb(clr >> 16,(clr >> 8) & 0xff, clr & 0xff));
+  }
+
+  return 1;
+}
+
 static int handle_list_cmd(const char *command, const DWARF_SYMBOLLIST *symboltable,
                            const DWARF_PATHLIST *filetable)
 {
@@ -2206,9 +2308,10 @@ static int handle_list_cmd(const char *command, const DWARF_SYMBOLLIST *symbolta
   if (strncmp(command, "list", 4) == 0 && TERM_END(command, 4)) {
     const char *p1 = skipwhite(command + 4);
     if (*p1 == '+' || *p1 == '\0') {
+      int linecount = source_linecount(source_cursorfile);
       source_cursorline += source_vp_rows;      /* "list" & "list +" */
-      if (source_cursorline > source_linecount())
-        source_cursorline = source_linecount();
+      if (source_cursorline > linecount)
+        source_cursorline = linecount;
       return 1;
     } else if (*p1 == '-') {
       source_cursorline -= source_vp_rows;      /* "list -" */
@@ -2217,7 +2320,7 @@ static int handle_list_cmd(const char *command, const DWARF_SYMBOLLIST *symbolta
       return 1;
     } else if (isdigit(*p1)) {
       int line = (int)strtol(p1, NULL, 10);     /* "list #" (where # is a line number) */
-      if (line >= 1 && line <= source_linecount()) {
+      if (line >= 1 && line <= source_linecount(source_cursorfile)) {
         source_cursorline = line;
         return 1;
       }
@@ -2244,9 +2347,12 @@ static int handle_list_cmd(const char *command, const DWARF_SYMBOLLIST *symbolta
         } else {
           /* no extension, ignore extension on match */
           unsigned len = strlen(p1);
-          for (idx = 0; idx < sources_count; idx++)
-            if (strncmp(sources_namelist[idx], p1, len) == 0 && sources_namelist[idx][len] == '.')
+          for (idx = 0; idx < sources_count; idx++) {
+            const char *basename = source_getname(idx);
+            assert(basename != NULL);
+            if (strncmp(basename, p1, len) == 0 && basename[len] == '.')
               break;
+          }
         }
       }
       if (idx < sources_count && line >= 1) {
@@ -2305,6 +2411,7 @@ static int handle_file_cmd(const char *command, char *filename, size_t namelengt
     ptr = strchr(command, ' ');
     assert(ptr != NULL);
     strlcpy(filename, skipwhite(ptr), namelength);
+    translate_path(filename, 1);
     return 1;
   }
   return 0;
@@ -2317,7 +2424,7 @@ static int handle_find_cmd(const char *command)
   assert(command != NULL);
   command = skipwhite(command);
   if (strncmp(command, "find", 4) == 0 && TERM_END(command, 4)) {
-    STRINGLIST *item = sourcefile_root.next;
+    STRINGLIST *item = source_firstline(source_cursorfile);
     int linenr, patlen;
     const char *ptr;
     if ((ptr = strchr(command, ' ')) != NULL) {
@@ -2335,7 +2442,7 @@ static int handle_find_cmd(const char *command)
       item = item->next;
     }
     if (item == NULL || source_cursorline <= 0) {
-      item = sourcefile_root.next;
+      item = source_firstline(source_cursorfile);
       linenr = 1;
     } else {
       item = item->next;
@@ -2362,7 +2469,7 @@ static int handle_find_cmd(const char *command)
       item = item->next;
       linenr++;
       if (item == NULL) {
-        item = sourcefile_root.next;
+        item = source_firstline(source_cursorfile);
         linenr = 1;
         if (source_cursorline == 0)
           source_cursorline = 1;
@@ -2375,7 +2482,15 @@ static int handle_find_cmd(const char *command)
   return 0;
 }
 
-enum { SWOMODE_NONE, SWOMODE_MANCHESTER, SWOMODE_ASYNC, SWOMODE_PASSIVE };
+static int is_monitor_cmd(const char *command)
+{
+  assert(command != NULL);
+  if (strncmp(command, "mon", 3) == 0 && TERM_END(command, 3))
+    return 1;
+  if (strncmp(command, "monitor", 7) == 0 && TERM_END(command, 7))
+    return 1;
+  return 0;
+}
 
 static void trace_info_channel(int chan, int enabled_only)
 {
@@ -2404,40 +2519,71 @@ static void trace_info_channel(int chan, int enabled_only)
   console_add(msg, STRFLG_STATUS);
 }
 
-static void trace_info_mode(unsigned mode, unsigned clock, unsigned bitrate)
+static void trace_info_mode(const SWOSETTINGS *swo)
 {
   char msg[200];
 
-  strcpy(msg, "Active configuration: ");
-  switch (mode) {
+  strlcpy(msg, "Active configuration: ", sizearray(msg));
+  switch (swo->mode) {
   case SWOMODE_NONE:
-    strcat(msg, "disabled");
+    strlcat(msg, "disabled", sizearray(msg));
     break;
   case SWOMODE_MANCHESTER:
-    sprintf(msg + strlen(msg), "Manchester encoding, clock = %u, bitrate = %u", clock, bitrate);
+    sprintf(msg + strlen(msg), "Manchester encoding, clock = %u, bitrate = %u", swo->clock, swo->bitrate);
     break;
   case SWOMODE_ASYNC:
-    sprintf(msg + strlen(msg), "Asynchronous encoding, clock = %u, bitrate = %u", clock, bitrate);
+    sprintf(msg + strlen(msg), "Asynchronous encoding, clock = %u, bitrate = %u", swo->clock, swo->bitrate);
     break;
   case SWOMODE_PASSIVE:
-    strcat(msg, "Manchester encoding, passive");
+    strlcat(msg, "Manchester encoding, passive", sizearray(msg));
     break;
   }
+
+  strlcat(msg, ", data width = ", sizearray(msg));
+  if (swo->datasize == 0)
+    strlcat(msg, "auto", sizearray(msg));
+  else
+    sprintf(msg + strlen(msg), "%u-bit", swo->datasize);
+
   strlcat(msg, "\n", sizearray(msg));
   console_add(msg, STRFLG_STATUS);
+
+  if (swo->metadata != NULL && strlen(swo->metadata) > 0) {
+    const char *basename = lastdirsep(swo->metadata);
+    sprintf(msg, "CTF / TSDL = %s\n", (basename != NULL) ? basename + 1 : swo->metadata);
+    console_add(msg, STRFLG_STATUS);
+  }
 }
 
-static int handle_trace_cmd(const char *command, unsigned *mode, unsigned *clock, unsigned *bitrate)
+/** handle_trace_cmd()
+ *  \param command    [in] command string.
+ *  \param mode       [out] SWOMODE_NONE, SWOMODE_ASYNC or SWOMODE_MANCHESTER.
+ *  \param clock      [out] target clock rate.
+ *  \param bitrate    [out] transmission speed.
+ *  \param datasize   [out] payload data size.
+ *  \param tsdlfile   [out] definition file for CTF.
+ *  \return 0=unchanged, 1=protocol settings changed, 2=channels changed,
+ *          3="info"
+ */
+static int handle_trace_cmd(const char *command, SWOSETTINGS *swo)
 {
-  const char *ptr;
+  char *ptr, *cmdcopy;
+  unsigned newmode = SWOMODE_NONE;
+  int tsdl_set = 0;
 
   assert(command != NULL);
-  if (strncmp(command, "trace ", 6) != 0)
+  if (strncmp(command, "trace", 5) != 0 || !TERM_END(command, 5))
     return 0;
-  ptr = skipwhite(command + 6);
+
+  /* make a copy of the command string, to be able to clear parts of it */
+  cmdcopy = alloca(strlen(command) + 1);
+  strcpy(cmdcopy, command);
+  ptr = (char*)skipwhite(cmdcopy + 5);
 
   if (*ptr == '\0' || (strncmp(ptr, "info", 4) == 0 && TERM_END(ptr, 4)))
     return 3; /* if only "trace" is typed, interpret it as "trace info" */
+
+  assert(swo != NULL);
 
   if (strncmp(ptr, "channel ", 7) == 0 || strncmp(ptr, "chan ", 5) == 0 || strncmp(ptr, "ch ", 3) == 0) {
     int chan;
@@ -2445,7 +2591,7 @@ static int handle_trace_cmd(const char *command, unsigned *mode, unsigned *clock
     ptr = strchr(ptr, ' ');
     assert(ptr != NULL);
     chan = (int)strtol(skipwhite(ptr), (char**)ptr, 10);
-    ptr = skipwhite(ptr);
+    ptr = (char*)skipwhite(ptr);
     opts = alloca(strlen(ptr) + 1);
     strcpy(opts, ptr);
     for (ptr = strtok(opts, " "); ptr != NULL; ptr = strtok(NULL, " ")) {
@@ -2474,21 +2620,60 @@ static int handle_trace_cmd(const char *command, unsigned *mode, unsigned *clock
     return 2; /* only channel set changed */
   }
 
-  /* mode */
-  assert(mode != NULL);
+  /* key terms like "8-bit", "16-bit", "32-bit" or "auto" may be combined on
+     a mode set command */
+  if ((ptr = strstr(cmdcopy, "bit")) != 0 && TERM_END(ptr, 3) && (*(ptr - 1) == ' ' || *(ptr - 1) == '-' || isdigit(*(ptr - 1)))) {
+    char *endptr = ptr + 3;
+    ptr--;
+    if (!isdigit(*ptr))
+      ptr--;
+    while (isdigit(*ptr))
+      ptr--;
+    assert(ptr > cmdcopy);  /* the command string started with "trace", so ptr cannnot overrun the start */
+    ptr++;                  /* reset overrun, point to first digit */
+    if (isdigit(*ptr)) {
+      unsigned v = (unsigned)strtol(ptr, NULL, 10);
+      if (v == 8 || v == 16 || v == 32)
+        swo->datasize = v / 8;
+    }
+    memset(ptr, ' ', (unsigned)(endptr - ptr)); /* erase the datasize setting from the string */
+  } else if ((ptr = strstr(cmdcopy, "auto")) != 0 && TERM_END(ptr, 4) && *(ptr - 1) == ' ') {
+    swo->datasize = 0;
+    memset(ptr, ' ', 4);    /* erase the datasize setting from the string */
+  }
+
+  /* check whether any of the parameters is a TSDL file */
+  ptr = (char*)skipwhite(cmdcopy + 6);  /* reset to start */
+  while (*ptr != '\0' && !tsdl_set) {
+    char *endptr = ptr;
+    /* check the word for '.', '/' or '\' */
+    while (*endptr > ' ') {
+      if (*endptr == '.' || *endptr == '/' || *endptr == '\\')
+        tsdl_set = 1;
+      endptr++;
+    }
+    if (tsdl_set) {
+      unsigned len = (unsigned)(endptr - ptr);
+      strncpy(swo->metadata, ptr, len);
+      swo->metadata[len] = '\0';
+      memset(ptr, ' ', len);    /* erase the filename from the string */
+    }
+    ptr =(char*)skipwhite(endptr);
+  }
+
+  /* mode (explicit or implied) */
+  ptr = (char*)skipwhite(cmdcopy + 6);  /* reset to start */
   if (strncmp(ptr, "disable", 7) == 0 && TERM_END(ptr, 7)) {
-    *mode = SWOMODE_NONE;
+    swo->mode = SWOMODE_NONE;
     return 2; /* special mode, disable all channels when turning tracing off */
   }
+  if ((strncmp(ptr, "enable", 6) == 0 && TERM_END(ptr, 6))) {
+    ptr = (char*)skipwhite(ptr + 6);
+    newmode = (swo->mode == SWOMODE_NONE) ? SWOMODE_PASSIVE : swo->mode;
+  }
   if (strncmp(ptr, "async", 5) == 0 && TERM_END(ptr, 5)) {
-    *mode = SWOMODE_ASYNC;
-    ptr = skipwhite(ptr + 5);
-  } else if ((strncmp(ptr, "passive", 7) == 0 && TERM_END(ptr, 7)) || (strncmp(ptr, "pasv", 4) == 0 && TERM_END(ptr, 4))) {
-    *mode = SWOMODE_PASSIVE;
-    ptr = strchr(ptr, ' ');
-    ptr = (ptr != NULL) ? skipwhite(ptr) : strchr(command, '\0');
-  } else {
-    *mode = SWOMODE_MANCHESTER;
+    newmode = SWOMODE_ASYNC;
+    ptr = (char*)skipwhite(ptr + 5);
   }
   /* clock */
   if (isdigit(*ptr)) {
@@ -2496,10 +2681,11 @@ static int handle_trace_cmd(const char *command, unsigned *mode, unsigned *clock
     if ((strnicmp(ptr, "mhz", 3) == 0 && TERM_END(ptr, 3)) || (strnicmp(ptr, "m", 1) == 0 && TERM_END(ptr, 1))) {
       v *= 1000000;
       ptr = strchr(ptr, ' ');
-      ptr = (ptr != NULL) ? skipwhite(ptr) : strchr(command, '\0');
+      ptr = (ptr != NULL) ? (char*)skipwhite(ptr) : strchr(cmdcopy, '\0');
     }
-    assert(clock != NULL);
-    *clock = (unsigned)(v + 0.5);
+    swo->clock = (unsigned)(v + 0.5);
+    if (swo->mode != SWOMODE_ASYNC)
+      newmode = SWOMODE_MANCHESTER; /* if clock is set, mode must be async or manchester */
   }
   /* bitrate */
   if (isdigit(*ptr)) {
@@ -2507,16 +2693,27 @@ static int handle_trace_cmd(const char *command, unsigned *mode, unsigned *clock
     if ((strnicmp(ptr, "mhz", 3) == 0 && TERM_END(ptr, 3)) || (strnicmp(ptr, "m", 1) == 0 && TERM_END(ptr, 1))) {
       v *= 1000000;
       ptr = strchr(ptr, ' ');
-      ptr = (ptr != NULL) ? skipwhite(ptr) : strchr(command, '\0');
+      ptr = (ptr != NULL) ? (char*)skipwhite(ptr) : strchr(cmdcopy, '\0');
     } else if ((strnicmp(ptr, "khz", 3) == 0 && TERM_END(ptr, 3)) || (strnicmp(ptr, "k", 1) == 0 && TERM_END(ptr, 1))) {
       v *= 1000;
       ptr = strchr(ptr, ' ');
-      ptr = (ptr != NULL) ? skipwhite(ptr) : strchr(command, '\0');
+      ptr = (ptr != NULL) ? (char*)skipwhite(ptr) : strchr(cmdcopy, '\0');
     }
-    assert(bitrate != NULL);
-    *bitrate = (unsigned)(v + 0.5);
+    swo->bitrate = (unsigned)(v + 0.5);
+    if (swo->mode != SWOMODE_ASYNC)
+      newmode = SWOMODE_MANCHESTER; /* if bitrate is set, mode must be async or manchester */
   }
-  trace_info_mode(*mode, *clock, *bitrate);
+  if (newmode != SWOMODE_NONE && swo->bitrate > swo->clock) {
+    /* if bitrate > clock swap the two (this can never happen, so it is likely
+       an error) */
+    unsigned t = swo->bitrate;
+    swo->bitrate = swo->clock;
+    swo->clock = t;
+  }
+  if (newmode != SWOMODE_NONE)
+    swo->mode = newmode;
+
+  trace_info_mode(swo);
   return 1; /* assume entire protocol changed */
 }
 
@@ -2536,7 +2733,8 @@ int main(int argc, char *argv[])
   enum { SPLITTER_NONE, SPLITTER_VERTICAL, SPLITTER_HORIZONTAL, SIZER_SEMIHOSTING, SIZER_SWO };
 
   struct nk_context *ctx;
-  char txtFilename[_MAX_PATH], txtConfigFile[_MAX_PATH], txtGDBpath[_MAX_PATH], txtTSDLfile[_MAX_PATH];
+  char txtFilename[_MAX_PATH], txtConfigFile[_MAX_PATH], txtGDBpath[_MAX_PATH],
+       txtParamFile[_MAX_PATH];
   char port_gdb[64], mcu_family[64], mcu_architecture[64];
   char valstr[128];
   int canvas_width, canvas_height;
@@ -2546,7 +2744,7 @@ int main(int argc, char *argv[])
   int opt_allmsg = nk_false;
   int opt_autodownload = nk_true;
   int opt_fontsize = FONT_HEIGHT;
-  unsigned opt_swomode = SWOMODE_NONE, opt_swobaud = 100000, opt_swoclock = 48000000;
+  SWOSETTINGS opt_swo;
   float splitter_hor = 0.75, splitter_ver = 0.75;
   char console_edit[128] = "", watch_edit[128] = "";
   STRINGLIST consoleedit_root = { NULL, NULL, 0 }, *consoleedit_next;
@@ -2554,11 +2752,12 @@ int main(int argc, char *argv[])
   char cmd[300], statesymbol[64], ttipvalue[256];
   int curstate, prevstate, stateparam[3];
   int refreshflags, trace_status, warn_source_tstamps;
-  int atprompt, insplitter, console_activate, cont_is_run, exitcode;
+  int atprompt, insplitter, console_activate, cont_is_run, exitcode, monitor_cmd_active;
   int idx, result;
   int prev_clicked_line;
   unsigned watchseq;
   unsigned long scriptparams[3];
+  const char **sourcefiles = NULL;
   DWARF_LINELOOKUP linetable = { NULL };
   DWARF_SYMBOLLIST symboltable = { NULL};
   DWARF_PATHLIST filetable = { NULL};
@@ -2601,25 +2800,8 @@ int main(int argc, char *argv[])
     if (result >= 2 && size > ROW_HEIGHT)
       tab_heights[idx] = size;
   }
-  opt_tpwr =(int)ini_getl("Settings", "tpwr", 0, txtConfigFile);
   opt_allmsg = (int)ini_getl("Settings", "allmessages", 0, txtConfigFile);
-  opt_autodownload = (int)ini_getl("Settings", "auto-download", 1, txtConfigFile);
   opt_fontsize = (int)ini_getl("Settings", "fontsize", FONT_HEIGHT, txtConfigFile);
-  /* read SWO tracing & channel configuration */
-  opt_swomode = (unsigned)ini_getl("SWO trace", "mode", SWOMODE_NONE, txtConfigFile);
-  opt_swobaud = (unsigned)ini_getl("SWO trace", "bitrate", 100000, txtConfigFile);
-  opt_swoclock = (unsigned)ini_getl("SWO trace", "clock", 48000000, txtConfigFile);
-  for (idx = 0; idx < NUM_CHANNELS; idx++) {
-    char key[32];
-    unsigned clr;
-    int enabled;
-    channel_set(idx, (idx == 0), NULL, nk_rgb(190, 190, 190)); /* preset: port 0 is enabled by default, others disabled by default */
-    sprintf(key, "chan%d", idx);
-    ini_gets("SWO trace", key, "", cmd, sizearray(cmd), txtConfigFile);
-    result = sscanf(cmd, "%d #%x %s", &enabled, &clr, key);
-    if (result >= 2)
-      channel_set(idx, enabled, (result >= 3) ? key : NULL, nk_rgb(clr >> 16,(clr >> 8) & 0xff, clr & 0xff));
-  }
   /* read saved recent commands */
   for (idx = 1; ; idx++) {
     char key[32];
@@ -2631,7 +2813,8 @@ int main(int argc, char *argv[])
   }
 
   txtFilename[0] = '\0';
-  for (idx = 0; idx < argc; idx++) {
+  txtParamFile[0] = '\0';
+  for (idx = 1; idx < argc; idx++) {
     const char *ptr;
     if (argv[idx][0] == '-' || argv[idx][0] == '/') {
       switch (argv[idx][1]) {
@@ -2658,6 +2841,8 @@ int main(int argc, char *argv[])
         return 1;
       }
     } else {
+      /* filename on the command line must be in native format (using backslashes
+         on Windows) */
       if (access(argv[idx], 0) == 0) {
         strlcpy(txtFilename, argv[idx], sizearray(txtFilename));
         translate_path(txtFilename, 0);
@@ -2666,10 +2851,28 @@ int main(int argc, char *argv[])
   }
   if (strlen(txtFilename) == 0) {
     ini_gets("Session", "recent", "", txtFilename, sizearray(txtFilename), txtConfigFile);
+    /* filename from the configuration file is stored in the GDB format (convert
+       it to native format to test whether it exists) */
+    translate_path(txtFilename, 1);
     if (access(txtFilename, 0) != 0)
       txtFilename[0] = '\0';
+    else
+      translate_path(txtFilename, 0); /* convert back to GDB format */
   }
   assert(strchr(txtFilename, '\\') == 0); /* backslashes should already have been replaced */
+  /* if a target filename is known, create the parameter filename from target
+     filename and read target-specific options */
+  memset(&opt_swo, 0, sizeof(opt_swo));
+  opt_swo.mode = SWOMODE_NONE;
+  opt_swo.clock = 48000000;
+  opt_swo.bitrate = 100000;
+  opt_swo.datasize = 8;
+  if (strlen(txtFilename) > 0) {
+    strlcpy(txtParamFile, txtFilename, sizearray(txtParamFile));
+    strlcat(txtParamFile, ".bmcfg", sizearray(txtParamFile));
+    translate_path(txtParamFile, 1);
+    load_settings(txtParamFile, &opt_tpwr, &opt_autodownload, &opt_swo);
+  }
 
   insplitter = SPLITTER_NONE;
   curstate = STATE_INIT;
@@ -2680,6 +2883,7 @@ int main(int argc, char *argv[])
   console_activate = 1;
   consoleedit_next = NULL;
   cont_is_run = 0;
+  monitor_cmd_active = 0;
   warn_source_tstamps = 0;
   source_cursorline = 0;
   source_execfile = -1;
@@ -2856,7 +3060,14 @@ int main(int argc, char *argv[])
         if (!atprompt)
           break;
         if (prevstate != curstate) {
-          dwarf_cleanup(&linetable,&symboltable,&filetable);
+          dwarf_cleanup(&linetable, &symboltable, &filetable);
+          /* create parameter filename from target filename, then read target-specific settings */
+          strlcpy(txtParamFile, txtFilename, sizearray(txtParamFile));
+          strlcat(txtParamFile, ".bmcfg", sizearray(txtParamFile));
+          load_settings(txtParamFile, &opt_tpwr, &opt_autodownload, &opt_swo);
+          if (opt_tpwr && curstate == STATE_MON_SCAN) /* set power and (re-)attach */
+             curstate = STATE_MON_TPWR;
+          /* load target filename in GDB */
           sprintf(cmd, "-file-exec-and-symbols %s\n", txtFilename);
           if (task_stdin(&task, cmd))
             console_input(cmd);
@@ -2889,10 +3100,15 @@ int main(int argc, char *argv[])
             dwarf_read(fp,&linetable,&symboltable,&filetable,&address_size);
             fclose(fp);
           }
+          /* clear source files (if any were loaded); these will be reloaded
+             after the list of source files is refreshed */
+          sources_clear(0);
+          if (sourcefiles != NULL) {
+            free((void*)sourcefiles);
+            sourcefiles = NULL;
+          }
           /* also get the list of source files from GDB (it might use a different
              order of the file index numbers) */
-          sources_clear(0);
-          source_clear();
           strcpy(cmd, "-file-list-exec-source-files\n");
           if (task_stdin(&task, cmd))
             console_input(cmd);
@@ -2900,7 +3116,8 @@ int main(int argc, char *argv[])
           prevstate = curstate;
         } else if (gdbmi_isresult() != NULL) {
           if (strncmp(gdbmi_isresult(), "done", 4) == 0) {
-            sources_parse(gdbmi_isresult() + 5);  /* skip "done" and comma */
+            sources_parse(gdbmi_isresult() + 5);  /* + 5 to skip "done" and comma */
+            sourcefiles = sources_getnames();     /* create array with names for the dropdown */
             warn_source_tstamps = !check_sources_tstamps(txtFilename); /* check timestamps of sources against elf file */
             curstate = STATE_MEMACCESS_1;
           } else {
@@ -3156,7 +3373,8 @@ int main(int argc, char *argv[])
             sprintf(cmd, "-break-disable %d\n", stateparam[1]);
             break;
           case STATEPARAM_BP_ADD:
-            sprintf(cmd, "-break-insert %s:%d\n", sources_pathlist[stateparam[1]], stateparam[2]);
+            assert(sources != NULL);
+            sprintf(cmd, "-break-insert %s:%d\n", sources[stateparam[1]].path, stateparam[2]);
             break;
           case STATEPARAM_BP_DELETE:
             sprintf(cmd, "-break-delete %d\n", stateparam[1]);
@@ -3224,11 +3442,10 @@ int main(int argc, char *argv[])
           tracestring_clear();
           tracelog_statusmsg(TRACESTATMSG_CTF, NULL, 0);
           ctf_error_notify(CTFERR_NONE, 0, NULL);
-          if (ctf_findmetadata(txtFilename, txtTSDLfile, sizearray(txtTSDLfile))
-              && ctf_parse_init(txtTSDLfile) && ctf_parse_run())
+          if (ctf_findmetadata(txtFilename, opt_swo.metadata, sizearray(opt_swo.metadata))
+              && ctf_parse_init(opt_swo.metadata) && ctf_parse_run())
           {
             const CTF_STREAM *stream;
-            trace_enablectf(1);
             /* stream names overrule configured channel names */
             for (idx = 0; (stream = stream_by_seqnr(idx)) != NULL; idx++)
               if (stream->name != NULL && strlen(stream->name) > 0)
@@ -3236,8 +3453,8 @@ int main(int argc, char *argv[])
           } else {
             ctf_parse_cleanup();
           }
-          if (opt_swomode == SWOMODE_ASYNC)
-            sprintf(cmd, "monitor traceswo %u\n", opt_swobaud); /* automatically select async mode in the BMP */
+          if (opt_swo.mode == SWOMODE_ASYNC)
+            sprintf(cmd, "monitor traceswo %u\n", opt_swo.bitrate); /* automatically select async mode in the BMP */
           else
             strlcpy(cmd, "monitor traceswo\n", sizearray(cmd));
           task_stdin(&task, cmd);
@@ -3249,7 +3466,7 @@ int main(int argc, char *argv[])
         }
         break;
       case STATE_SWODEVICE:
-        if (opt_swomode != SWOMODE_MANCHESTER && opt_swomode != SWOMODE_ASYNC) {
+        if (opt_swo.mode != SWOMODE_MANCHESTER && opt_swo.mode != SWOMODE_ASYNC) {
           curstate = STATE_SWOCHANNELS;
           break;
         }
@@ -3280,16 +3497,16 @@ int main(int argc, char *argv[])
         }
         break;
       case STATE_SWOGENERIC:
-        if (opt_swomode != SWOMODE_MANCHESTER && opt_swomode != SWOMODE_ASYNC) {
+        if (opt_swo.mode != SWOMODE_MANCHESTER && opt_swo.mode != SWOMODE_ASYNC) {
           curstate = STATE_SWOCHANNELS;
           break;
         }
         if (!atprompt)
           break;
         if (prevstate != curstate) {
-          assert(opt_swobaud > 0);
-          scriptparams[0] = (opt_swomode == SWOMODE_MANCHESTER) ? 1 : 2;
-          scriptparams[1] = opt_swoclock / opt_swobaud - 1;
+          assert(opt_swo.bitrate > 0);
+          scriptparams[0] = (opt_swo.mode == SWOMODE_MANCHESTER) ? 1 : 2;
+          scriptparams[1] = opt_swo.clock / opt_swo.bitrate - 1;
           if (bmscript_line_fmt("swo-generic", mcu_family, cmd, scriptparams)) {
             /* run first line from the script */
             task_stdin(&task, cmd);
@@ -3317,9 +3534,9 @@ int main(int argc, char *argv[])
         if (!atprompt)
           break;
         if (prevstate != curstate) {
-          assert(opt_swobaud > 0);
+          assert(opt_swo.bitrate > 0);
           scriptparams[0] = 0;
-          if (opt_swomode != SWOMODE_NONE) {
+          if (opt_swo.mode != SWOMODE_NONE) {
             /* if SWO mode is disabled, simply turn all channels off (so skip testing whether they should be on) */
             for (idx = 0; idx < NUM_CHANNELS; idx++)
               if (channel_getenabled(idx))
@@ -3400,9 +3617,12 @@ int main(int argc, char *argv[])
       int flags = 0;
       if (curstate < STATE_START)
         flags |= STRFLG_STARTUP;
+      if (monitor_cmd_active)
+        flags |= STRFLG_MON_OUT;  /* so output goes to the main console instead of semihosting view */
       if (console_add(cmd, flags)) {
         atprompt = 1;
         console_activate = 1;
+        monitor_cmd_active = 0;
       }
       waitidle = 0;
     }
@@ -3446,9 +3666,9 @@ int main(int argc, char *argv[])
           nk_layout_row_begin(ctx, NK_STATIC, ROW_HEIGHT, 7);
           nk_layout_row_push(ctx, BUTTON_WIDTH);
           bounds = nk_widget_bounds(ctx);
-          if (nk_button_label(ctx, "reset"))
+          if (nk_button_label(ctx, "reset") || nk_input_is_key_pressed(&ctx->input, NK_KEY_CTRL_F2))
             curstate = STATE_FILE;
-          tooltip(ctx, bounds, " Reload and restart the program", &rc_canvas);
+          tooltip(ctx, bounds, " Reload and restart the program (F2)", &rc_canvas);
           nk_layout_row_push(ctx, BUTTON_WIDTH);
           bounds = nk_widget_bounds(ctx);
           if (curstate == STATE_RUNNING) {
@@ -3500,15 +3720,16 @@ int main(int argc, char *argv[])
             int curfile = source_cursorfile;
             if (curfile < 0 || (unsigned)curfile >= sources_count)
               curfile = 0;
-            source_cursorfile = nk_combo(ctx, (const char**)sources_namelist, sources_count, curfile, (int)COMBOROW_CY, nk_vec2(combo_width, 10*ROW_HEIGHT));
+            assert(sourcefiles != NULL);
+            source_cursorfile = nk_combo(ctx, sourcefiles, sources_count, curfile, (int)COMBOROW_CY, nk_vec2(combo_width, 10*ROW_HEIGHT));
             if (source_cursorfile != curfile)
               source_cursorline = 1;  /* reset scroll */
           }
           nk_layout_row_end(ctx);
-          if (source_load(source_cursorfile)) { /* does nothing if the current source file is already loaded */
-            int count = source_linecount();
-            if (source_cursorline > count)
-              source_cursorline = count;
+          if (source_cursorfile >= 0 && source_cursorfile < sources_count) {
+            int linecount = source_linecount(source_cursorfile);
+            if (source_cursorline > linecount)
+              source_cursorline = linecount;
           }
           nk_layout_row_dynamic(ctx, splitter_rows[0] - ROW_HEIGHT - 4, 1);
           bounds = nk_widget_bounds(ctx);
@@ -3525,11 +3746,14 @@ int main(int argc, char *argv[])
                    clicked on; if yes -> delete; if no: -> enable */
               BREAKPOINT *bp = breakpoint_lookup(source_cursorfile, row);
               if (bp == NULL) {
-                /* no breakpoint yet -> add */
-                curstate = STATE_BREAK_TOGGLE;
-                stateparam[0] = STATEPARAM_BP_ADD;
-                stateparam[1] = source_cursorfile;
-                stateparam[2] = row;
+                /* no breakpoint yet -> add (bu check first whether that can
+                   be done) */
+                if (source_cursorfile < sources_count) {
+                  curstate = STATE_BREAK_TOGGLE;
+                  stateparam[0] = STATEPARAM_BP_ADD;
+                  stateparam[1] = source_cursorfile;
+                  stateparam[2] = row;
+                }
               } else if (bp->enabled) {
                 /* enabled breakpoint -> disable */
                 curstate = STATE_BREAK_TOGGLE;
@@ -3548,7 +3772,7 @@ int main(int argc, char *argv[])
               }
             } else {
               /* set the cursor line */
-              if (row > 0 && row <= source_linecount())
+              if (row > 0 && row <= source_linecount(source_cursorfile))
                 source_cursorline = row;
             }
             prev_clicked_line = row;
@@ -3617,14 +3841,20 @@ int main(int argc, char *argv[])
                 tab_states[TAB_WATCHES] = nk_true; /* make sure the watch view to open */
               } else if (handle_file_cmd(console_edit, txtFilename, sizearray(txtFilename))) {
                 curstate = STATE_FILE;
-              } else if ((result = handle_trace_cmd(console_edit, &opt_swomode, &opt_swoclock, &opt_swobaud)) != 0) {
+                /* save target-specific settings in the parameter file before
+                   switching to the new file (new options are loaded in the
+                   STATE_FILE case) */
+                if (strlen(txtFilename) > 0 && access(txtFilename, 0) == 0)
+                  save_settings(txtParamFile, opt_tpwr, opt_autodownload, &opt_swo);
+              } else if ((result = handle_trace_cmd(console_edit, &opt_swo)) != 0) {
                 if (result == 1) {
+                  monitor_cmd_active = 1; /* to silence output of scripts */
                   curstate = STATE_SWOTRACE;
                 } else if (result == 2) {
                   curstate = STATE_SWOCHANNELS;
                 } else if (result == 3) {
-                  trace_info_mode(opt_swomode, opt_swoclock, opt_swobaud);
-                  if (opt_swomode != SWOMODE_NONE) {
+                  trace_info_mode(&opt_swo);
+                  if (opt_swo.mode != SWOMODE_NONE) {
                     int chan;
                     for (chan = 0; chan < NUM_CHANNELS; chan++)
                       trace_info_channel(chan, 1);
@@ -3634,6 +3864,9 @@ int main(int argc, char *argv[])
               } else if (!handle_list_cmd(console_edit, &symboltable, &filetable)
                          && !handle_find_cmd(console_edit))
               {
+                /* check monitor command, to avoid that the output should goes
+                   to the semihosting view */
+                monitor_cmd_active = is_monitor_cmd(console_edit);
                 strlcat(console_edit, "\n", sizearray(console_edit));
                 if (task_stdin(&task, console_edit))
                   console_input(console_edit);
@@ -3764,8 +3997,8 @@ int main(int argc, char *argv[])
               assert(bp->name != NULL);
               strlcpy(label, bp->name, sizearray(label));
             } else {
-              assert((unsigned)bp->filenr < sources_count);
-              sprintf(label, "%s : %d", sources_namelist[bp->filenr], bp->linenr);
+              assert(source_getname(bp->filenr) != NULL);
+              sprintf(label, "%s : %d", source_getname(bp->filenr), bp->linenr);
             }
             w = font->width(font->userdata, font->height, label, strlen(label)) + 10;
             if (w > width)
@@ -3787,8 +4020,8 @@ int main(int argc, char *argv[])
               assert(bp->name != NULL);
               strlcpy(label, bp->name, sizearray(label));
             } else {
-              assert((unsigned)bp->filenr < sources_count);
-              sprintf(label, "%s : %d", sources_namelist[bp->filenr], bp->linenr);
+              assert(source_getname(bp->filenr) != NULL);
+              sprintf(label, "%s : %d", source_getname(bp->filenr), bp->linenr);
             }
             nk_label(ctx, label, NK_TEXT_LEFT);
             nk_layout_row_push(ctx, ROW_HEIGHT);
@@ -3926,20 +4159,21 @@ int main(int argc, char *argv[])
       /* keyboard input */
       if (nk_input_is_key_pressed(&ctx->input, NK_KEY_UP) && source_cursorline > 1) {
         source_cursorline--;
-      } else if (nk_input_is_key_pressed(&ctx->input, NK_KEY_DOWN) && source_cursorline < source_linecount()) {
+      } else if (nk_input_is_key_pressed(&ctx->input, NK_KEY_DOWN) && source_cursorline < source_linecount(source_cursorfile)) {
         source_cursorline++;
       } else if (nk_input_is_key_pressed(&ctx->input, NK_KEY_SCROLL_UP)) {
         source_cursorline -= source_vp_rows;
         if (source_cursorline < 1)
           source_cursorline = 1;
       } else if (nk_input_is_key_pressed(&ctx->input, NK_KEY_SCROLL_DOWN)) {
+        int linecount = source_linecount(source_cursorfile);
         source_cursorline += source_vp_rows;
-        if (source_cursorline > source_linecount())
-          source_cursorline = source_linecount();
+        if (source_cursorline > linecount)
+          source_cursorline = linecount;
       } else if (nk_input_is_key_pressed(&ctx->input, NK_KEY_SCROLL_TOP)) {
         source_cursorline = 1;
       } else if (nk_input_is_key_pressed(&ctx->input, NK_KEY_SCROLL_BOTTOM)) {
-        source_cursorline = source_linecount();
+        source_cursorline = source_linecount(source_cursorfile);
       } else if (nk_input_is_key_pressed(&ctx->input, NK_KEY_FIND)) {
         strlcpy(console_edit, "find ", sizearray(console_edit));
         console_activate = 2;
@@ -3968,6 +4202,10 @@ int main(int argc, char *argv[])
   }
   exitcode = task_close(&task);
 
+  /* save parameter file */
+  if (strlen(txtFilename) > 0 && access(txtFilename, 0) == 0)
+    save_settings(txtParamFile, opt_tpwr, opt_autodownload, &opt_swo);
+
   /* save settings */
   ini_puts("Settings", "gdb", txtGDBpath, txtConfigFile);
   sprintf(valstr, "%d %d", canvas_width, canvas_height);
@@ -3980,24 +4218,9 @@ int main(int argc, char *argv[])
     sprintf(valstr, "%d %d", tab_states[idx], (int)tab_heights[idx]);
     ini_puts("Settings", key, valstr, txtConfigFile);
   }
-  ini_putl("Settings", "tpwr", opt_tpwr, txtConfigFile);
   ini_putl("Settings", "allmessages", opt_allmsg, txtConfigFile);
-  ini_putl("Settings", "auto-download", opt_autodownload, txtConfigFile);
   ini_putl("Settings", "fontsize", opt_fontsize, txtConfigFile);
   ini_puts("Session", "recent", txtFilename, txtConfigFile);
-  /* trace settings */
-  ini_putl("SWO trace", "mode", opt_swomode, txtConfigFile);
-  ini_putl("SWO trace", "bitrate", opt_swobaud, txtConfigFile);
-  ini_putl("SWO trace", "clock", opt_swoclock, txtConfigFile);
-  for (idx = 0; idx < NUM_CHANNELS; idx++) {
-    char key[32];
-    struct nk_color color = channel_getcolor(idx);
-    sprintf(key, "chan%d", idx);
-    sprintf(cmd, "%d #%06x %s", channel_getenabled(idx),
-            ((int)color.r << 16) | ((int)color.g << 8) | color.b,
-            channel_getname(idx, NULL, 0));
-    ini_puts("SWO trace", key, cmd, txtConfigFile);
-  }
   /* save history of commands */
   idx = 1;
   for (consoleedit_next = consoleedit_root.next; consoleedit_next != NULL; consoleedit_next = consoleedit_next->next) {
@@ -4013,7 +4236,6 @@ int main(int argc, char *argv[])
   stringlist_clear(&consoleedit_root);
   console_clear();
   sources_clear(1);
-  source_clear();
   dwarf_cleanup(&linetable,&symboltable,&filetable);
   return exitcode;
 }

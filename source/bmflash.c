@@ -557,10 +557,10 @@ int main(int argc, char *argv[])
   int idx;
   int running = 1;
   int curstate = STATE_IDLE;
-  char txtFilename[_MAX_PATH] = "", txtCfgFile[_MAX_PATH];
+  char txtFilename[_MAX_PATH] = "", txtParamFile[_MAX_PATH];
+  char txtConfigFile[_MAX_PATH];
   char txtSection[32] = "", txtAddress[32] = "", txtMatch[64] = "", txtOffset[32] = "";
   char txtSerial[32] = "", txtSerialSize[32] = "";
-  char txtConfigFile[_MAX_PATH];
   FILE *fpTgt, *fpWork;
   int opt_tpwr = nk_false;
   int opt_fullerase = nk_false;
@@ -585,7 +585,7 @@ int main(int argc, char *argv[])
   opt_fontsize = (int)ini_getl("Settings", "fontsize", FONT_HEIGHT, txtConfigFile);
 
   txtFilename[0] = '\0';
-  for (idx = 0; idx < argc; idx++) {
+  for (idx = 1; idx < argc; idx++) {
     const char *ptr;
     int value;
     if (argv[idx][0] == '-' || argv[idx][0] == '/') {
@@ -621,7 +621,8 @@ int main(int argc, char *argv[])
       txtFilename[0] = '\0';
   }
 
-  strcpy(txtCfgFile, txtFilename);
+  strlcpy(txtParamFile, txtFilename, sizearray(txtParamFile));
+  strlcat(txtParamFile, ".bmcfg", sizearray(txtParamFile));
   strcpy(txtSection, ".text");
   strcpy(txtAddress, "0");
   strcpy(txtMatch, "");
@@ -663,22 +664,22 @@ int main(int argc, char *argv[])
       if (access(txtFilename, 0) == 0) {
         char field[100];
         /* save settings in cache file */
-        strcpy(txtCfgFile, txtFilename);
-        strcat(txtCfgFile, ".prog");
+        strlcpy(txtParamFile, txtFilename, sizearray(txtParamFile));
+        strlcat(txtParamFile, ".bmcfg", sizearray(txtParamFile));
         if (opt_architecture > 0 && opt_architecture < sizearray(architectures))
           strcpy(field, architectures[opt_architecture]);
         else
           field[0] = '\0';
-        ini_puts("Options", "architecture", field, txtCfgFile);
-        ini_putl("Options", "tpwr", opt_tpwr, txtCfgFile);
-        ini_putl("Options", "full-erase", opt_fullerase, txtCfgFile);
-        ini_putl("Serialize", "option", opt_serialize, txtCfgFile);
+        ini_puts("Flash", "architecture", field, txtParamFile);
+        ini_putl("Flash", "tpwr", opt_tpwr, txtParamFile);
+        ini_putl("Flash", "full-erase", opt_fullerase, txtParamFile);
+        ini_putl("Serialize", "option", opt_serialize, txtParamFile);
         sprintf(field, "%s:%s", txtSection, txtAddress);
-        ini_puts("Serialize", "address", field, txtCfgFile);
+        ini_puts("Serialize", "address", field, txtParamFile);
         sprintf(field, "%s:%s", txtMatch, txtOffset);
-        ini_puts("Serialize", "match", field, txtCfgFile);
+        ini_puts("Serialize", "match", field, txtParamFile);
         sprintf(field, "%s:%s:%d", txtSerial, txtSerialSize, opt_format);
-        ini_puts("Serialize", "serial", field, txtCfgFile);
+        ini_puts("Serialize", "serial", field, txtParamFile);
         curstate = STATE_ATTACH;
       } else {
         log_addstring("^1Failed to open the ELF file\n");
@@ -802,7 +803,7 @@ int main(int argc, char *argv[])
       result = nk_edit_string_zero_terminated(ctx, NK_EDIT_FIELD | NK_EDIT_SIG_ENTER, txtFilename, sizearray(txtFilename), nk_filter_ascii);
       if (result & NK_EDIT_COMMITED)
         load_options = 2;
-      else if ((result & NK_EDIT_DEACTIVATED) != 0 && strncmp(txtFilename, txtCfgFile, strlen(txtFilename)) != 0)
+      else if ((result & NK_EDIT_DEACTIVATED) != 0 && strncmp(txtFilename, txtParamFile, strlen(txtFilename)) != 0)
         load_options = 2;
       nk_layout_row_push(ctx, BROWSEBTN_WIDTH);
       if (nk_button_symbol(ctx, NK_SYMBOL_TRIPLE_DOT) || nk_input_is_key_pressed(&ctx->input, NK_KEY_OPEN)) {
@@ -879,32 +880,32 @@ int main(int argc, char *argv[])
       /* the options are best reloaded after handling other settings, but before
          handling the download action */
       if (load_options != 0) {
-        strcpy(txtCfgFile, txtFilename);
-        strcat(txtCfgFile, ".prog");
-        if (access(txtCfgFile, 0) == 0) {
+        strlcpy(txtParamFile, txtFilename, sizearray(txtParamFile));
+        strlcat(txtParamFile, ".bmcfg", sizearray(txtParamFile));
+        if (access(txtParamFile, 0) == 0) {
           char field[80], *ptr;
-          ini_gets("Options", "architecture", "", field, sizearray(field), txtCfgFile);
+          ini_gets("Flash", "architecture", "", field, sizearray(field), txtParamFile);
           for (opt_architecture = 0; opt_architecture < sizearray(architectures); opt_architecture++)
             if (stricmp(architectures[opt_architecture], field) == 0)
               break;
           if (opt_architecture >= sizearray(architectures))
             opt_architecture = 0;
-          opt_tpwr = (int)ini_getl("Options", "tpwr", 0, txtCfgFile);
-          opt_fullerase = (int)ini_getl("Options", "full-erase", 0, txtCfgFile);
-          opt_serialize = (int)ini_getl("Serialize", "option", 0, txtCfgFile);
-          ini_gets("Serialize", "address", ".text:0", field, sizearray(field), txtCfgFile);
+          opt_tpwr = (int)ini_getl("Flash", "tpwr", 0, txtParamFile);
+          opt_fullerase = (int)ini_getl("Flash", "full-erase", 0, txtParamFile);
+          opt_serialize = (int)ini_getl("Serialize", "option", 0, txtParamFile);
+          ini_gets("Serialize", "address", ".text:0", field, sizearray(field), txtParamFile);
           if ((ptr = strchr(field, ':')) != NULL) {
             *ptr++ = '\0';
             strcpy(txtSection, field);
             strcpy(txtAddress, ptr);
           }
-          ini_gets("Serialize", "match", ":0", field, sizearray(field), txtCfgFile);
+          ini_gets("Serialize", "match", ":0", field, sizearray(field), txtParamFile);
           if ((ptr = strchr(field, ':')) != NULL) {
             *ptr++ = '\0';
             strcpy(txtMatch, field);
             strcpy(txtOffset, ptr);
           }
-          ini_gets("Serialize", "serial", "1:4:0", field, sizearray(field), txtCfgFile);
+          ini_gets("Serialize", "serial", "1:4:0", field, sizearray(field), txtParamFile);
           if ((ptr = strchr(field, ':')) != NULL) {
             char *p2;
             *ptr++ = '\0';

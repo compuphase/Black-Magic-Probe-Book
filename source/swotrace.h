@@ -46,9 +46,11 @@ void channel_setcolor(int index, struct nk_color color);
 
 int  trace_init(void);
 void trace_close(void);
-int  trace_enablectf(int enable);
 
-void tracestring_add(const unsigned char *buffer, size_t length, double timestamp);
+void trace_setdatasize(short size);
+short trace_getdatasize();
+
+void tracestring_add(unsigned channel, const unsigned char *buffer, size_t length, double timestamp);
 void tracestring_clear(void);
 int  tracestring_isempty(void);
 void tracestring_process(int enabled);
