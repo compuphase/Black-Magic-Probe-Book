@@ -37,6 +37,7 @@
   #endif
 #elif defined __linux__
   #include <alloca.h>
+  #include <errno.h>
   #include <pthread.h>
   #include <unistd.h>
   #include <bsd/string.h>
@@ -169,7 +170,7 @@ static unsigned char itm_cache[5]; /* we may need to cache an ITM data packet th
                                       not fit completely in an USB packet; ITM data
                                       packets are 5 bytes max. */
 static size_t itm_cachefilled = 0;
-static short itm_datasize = 8;
+static short itm_datasize = 1;    /* size in bytes (not bits) */
 static short itm_datasz_auto = 0;
 
 #define ITM_VALIDHDR(b)   (((b) & 0x07) >= 1 && ((b) & 0x07) <= 3)
@@ -325,7 +326,7 @@ void tracestring_process(int enabled)
     if (enabled) {
       const unsigned char *pktdata = trace_queue[tracequeue_head].data;
       size_t pktlen = trace_queue[tracequeue_head].length;
-      unsigned chan;
+      unsigned chan = ~0;
       unsigned char buffer[PACKET_SIZE];
       size_t buflen = 0;
       unsigned len;
@@ -510,7 +511,7 @@ int trace_save(const char *filename)
 void trace_setdatasize(short size)
 {
   assert(size == 0 || size == 1 || size == 2 || size == 4);
-  itm_datasize = (size == 0) ? 8 : size;
+  itm_datasize = (size == 0) ? 1 : size;
   itm_datasz_auto = (size == 0);
 }
 
@@ -522,6 +523,7 @@ short trace_getdatasize(void)
 
 
 #if defined WIN32 || defined _WIN32
+static unsigned long win_errno = 0;
 
 static BOOL MakeGUID(const char *label, GUID *guid)
 {
@@ -623,6 +625,8 @@ static BOOL usb_GetDevicePath(const TCHAR *guid, TCHAR *path, size_t pathsize)
     SetupDiDestroyDeviceInfoList(hDevInfo);
   }
 
+  if (!result)
+    win_errno = GetLastError();
   return result;
 }
 
@@ -636,11 +640,14 @@ static HANDLE usb_OpenDevice(const TCHAR *path)
                     FILE_SHARE_WRITE | FILE_SHARE_READ,
                     NULL, OPEN_EXISTING,
                     FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OVERLAPPED, NULL);
-  if (hDev == INVALID_HANDLE_VALUE)
+  if (hDev == INVALID_HANDLE_VALUE) {
+    win_errno = GetLastError();
     return INVALID_HANDLE_VALUE;
+  }
 
   result = WinUsb_Initialize(hDev, &hUSB);
   if (!result) {
+    win_errno = GetLastError();
     CloseHandle(hDev);
     return INVALID_HANDLE_VALUE;
   }
@@ -667,6 +674,7 @@ static BOOL usb_ConfigEndpoint(WINUSB_INTERFACE_HANDLE hUSB, unsigned char endpo
         return TRUE;
     }
   }
+  win_errno = GetLastError();
   return FALSE;
 }
 
@@ -714,6 +722,7 @@ int trace_init(void)
 {
   TCHAR guid[100], path[_MAX_PATH];
 
+  win_errno = 0;
   if (hThread != NULL && hUSB != INVALID_HANDLE_VALUE)
     return TRACESTAT_OK;            /* double initialization */
 
@@ -729,8 +738,10 @@ int trace_init(void)
     return TRACESTAT_NO_PIPE;       /* endpoint pipe could not be found -> not a Black Magic Probe? */
 
   hThread = CreateThread(NULL, 0, trace_read, NULL, 0, NULL);
-  if (hThread == NULL)
+  if (hThread == NULL) {
+    win_errno = GetLastError();
     return TRACESTAT_NO_THREAD;
+  }
   SetThreadPriority(hThread, THREAD_PRIORITY_ABOVE_NORMAL);
 
   return TRACESTAT_OK;
@@ -738,6 +749,7 @@ int trace_init(void)
 
 void trace_close(void)
 {
+  win_errno = 0;
   if (hThread != NULL) {
     TerminateThread(hThread, 0);
     hThread = NULL;
@@ -746,6 +758,11 @@ void trace_close(void)
     WinUsb_Free(hUSB);
     hUSB = INVALID_HANDLE_VALUE;
   }
+}
+
+unsigned long trace_errno(void)
+{
+  return win_errno;
 }
 
 #else
@@ -877,6 +894,10 @@ void trace_close(void)
   }
 }
 
+unsigned long trace_errno(void)
+{
+  return errno;
+}
 #endif
 
 static int recent_statuscode = 0;

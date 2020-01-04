@@ -29,6 +29,7 @@ enum {
   TRACESTAT_BAD_PACKET,   /* invalid trace data packet received */
   TRACESTAT_NO_THREAD,    /* thread could not be created */
   TRACESTAT_INIT_FAILED,  /* WunUSB / libusb initialization failed */
+  TRACESTAT_NO_CONNECT,   /* Failed to connect to Black Magic Probe */
 };
 
 enum {
@@ -46,6 +47,7 @@ void channel_setcolor(int index, struct nk_color color);
 
 int  trace_init(void);
 void trace_close(void);
+unsigned long trace_errno(void);
 
 void trace_setdatasize(short size);
 short trace_getdatasize();

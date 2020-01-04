@@ -313,6 +313,7 @@ int main(int argc, char *argv[])
   for ( ;; ) {
     if (reinitialize == 1) {
       int result;
+      char msg[100];
       if ((cpuclock = strtol(cpuclock_str, NULL, 10)) == 0)
         cpuclock = 48000000;
       if ((bitrate = strtol(bitrate_str, NULL, 10)) == 0)
@@ -322,6 +323,8 @@ int main(int argc, char *argv[])
       result = bmp_connect();
       if (result)
         result = bmp_attach(2, mcu_driver, sizearray(mcu_driver), NULL, 0);
+      else
+        trace_status = TRACESTAT_NO_CONNECT;
       if (result && opt_mode != MODE_PASSIVE) {
         unsigned long params[2];
         bmp_runscript("swo-device", mcu_driver, NULL);
@@ -337,7 +340,7 @@ int main(int argc, char *argv[])
         bmp_runscript("swo-channels", mcu_driver, params);
       }
       if (result) {
-        bmp_enabletrace((opt_mode == MODE_ASYNC)? bitrate : 0);
+        bmp_enabletrace((opt_mode == MODE_ASYNC) ? bitrate : 0);
         bmp_restart();
       }
       tracestring_clear();
@@ -347,7 +350,6 @@ int main(int argc, char *argv[])
         if (opt_mode == MODE_PASSIVE) {
           tracelog_statusmsg(TRACESTATMSG_BMP, "Listening...", recent_statuscode);
         } else if (recent_statuscode >= 0) {
-          char msg[100];
           assert(strlen(mcu_driver) > 0);
           sprintf(msg, "Connected [%s]", mcu_driver);
           tracelog_statusmsg(TRACESTATMSG_BMP, msg, recent_statuscode);
@@ -362,11 +364,17 @@ int main(int argc, char *argv[])
         break;
       case TRACESTAT_NO_ACCESS:
         recent_statuscode = BMPERR_GENERAL;
-        tracelog_statusmsg(TRACESTATMSG_BMP, "Trace access denied", recent_statuscode);
+        sprintf(msg, "Trace access denied (error %d)", trace_errno());
+        tracelog_statusmsg(TRACESTATMSG_BMP, msg, recent_statuscode);
         break;
       case TRACESTAT_NO_THREAD:
         recent_statuscode = BMPERR_GENERAL;
-        tracelog_statusmsg(TRACESTATMSG_BMP, "Multithreading failed", recent_statuscode);
+        sprintf(msg, "Multithreading failed (error %d)", trace_errno());
+        tracelog_statusmsg(TRACESTATMSG_BMP, msg, recent_statuscode);
+        break;
+      case TRACESTAT_NO_CONNECT:
+        recent_statuscode = BMPERR_GENERAL;
+        tracelog_statusmsg(TRACESTATMSG_BMP, "Failed to \"attach\" to Black Magic Probe", recent_statuscode);
         break;
       }
       reinitialize = 0;

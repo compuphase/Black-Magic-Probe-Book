@@ -174,10 +174,10 @@ static const REG_SCRIPT scripts[] = {
 static REG_CACHE cache = { NULL, NULL, NULL };
 
 
-/** clearcache() clears the cache for the script mist recently found. It
- *  is needed if you want to run the same script on the same MCU a second
- *  time. If the cache is not cleared in between, scriptline() would return
- *  false (for end of script reached) immediately.
+/** clearcache() clears the cache for the script most recently found. It is
+ *  needed if you want to run the same script on the same MCU a second time. If
+ *  the cache is not cleared in between, scriptline() would return false (for
+ *  end of script reached) immediately.
  */
 void bmscript_clearcache(void)
 {

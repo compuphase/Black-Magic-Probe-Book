@@ -488,6 +488,8 @@ restart:
               cache_filled = len;
               return result; /* nothing to do further, wait for more bytes */
             }
+          } else {
+            idx += 1;
           }
         }
       }
