@@ -242,6 +242,14 @@ restart:
             while (ptr > namebuffer && *(ptr - 1) == ' ')
               *(char*)--ptr = '\0'; /* strip trailing whitespace */
           }
+          //
+          // Some STM32Fxxx MCU names returned by BMP have extra
+          // characters after the "STM32Fx", these confuse the script
+          // running and so the name should be truncated to "STM32Fx"
+          //
+          if ((namebuffer[0] == 'S') && (namebuffer[1] == 'T') && (namebuffer[2] == 'M')) {
+            namebuffer[7] = 0x00 ;
+          }
           strlcpy(name, namebuffer, namelength);
         }
         notice(BMPSTAT_NOTICE, buffer + 1);  /* skip the 'o' at the start */
