@@ -2,7 +2,7 @@
  * GDB front-end with specific support for the Black Magic Probe.
  * This utility is built with Nuklear for a cross-platform GUI.
  *
- * Copyright 2019 CompuPhase
+ * Copyright 2019-2020 CompuPhase
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -62,6 +62,7 @@
 #include "dwarf.h"
 #include "guidriver.h"
 #include "noc_file_dialog.h"
+#include "nuklear_tooltip.h"
 #include "minIni.h"
 #include "specialfolder.h"
 
@@ -174,6 +175,15 @@ static void stringlist_clear(STRINGLIST *root)
     free((void*)item->text);
     free((void*)item);
   }
+}
+
+static unsigned stringlist_count(STRINGLIST *root)
+{
+  STRINGLIST *item;
+  unsigned count = 0;
+  for (item = root->next; item != NULL; item = item->next)
+    count++;
+  return count;
 }
 
 /** stringlist_getlast() returns the last string that has the "include" flags
@@ -346,6 +356,27 @@ static int is_gdb_prompt(const char *text)
   return strncmp(text, "(gdb)", 5) == 0 && strlen(text) <= 6;
 }
 
+
+static int is_keyword(const char *word)
+{
+  static const char *keywords[] = { "auto", "break", "case", "char", "const",
+                                    "continue", "default", "do", "double",
+                                    "else", "enum", "extern", "float", "for",
+                                    "goto", "if", "int", "long", "register",
+                                    "return", "short", "signed", "sizeof",
+                                    "static", "struct", "switch", "typedef",
+                                    "union", "unsigned", "void", "volatile",
+                                    "while" };
+  int idx;
+
+  assert(word != NULL);
+  if (!isalpha(*word))
+    return 0; /* quick test: all keywords begin with a letter */
+  for (idx = 0; idx < sizearray(keywords); idx++)
+    if (strcmp(word, keywords[idx]) == 0)
+      return 1;
+  return 0;
+}
 
 static char *console_buffer = NULL;
 static size_t console_bufsize = 0;
@@ -2114,7 +2145,7 @@ static int source_mouse2char(struct nk_context *ctx, const char *id,
 static int source_getsymbol(char *symname, size_t symlen, int row, int col)
 {
   STRINGLIST *item;
-  const char *head, *tail;
+  const char *head, *tail, *ptr;
   int len, nest;
 
   assert(symname != NULL && symlen > 0);
@@ -2141,6 +2172,36 @@ static int source_getsymbol(char *symname, size_t symlen, int row, int col)
     head--;
   if (!isalpha(*head) && *head != '_' && *head != '*')
     return 0; /* symbol must start with a letter or '_' (but make an exception for the '*' prefix) */
+  /* run from the start of the line to the head, check for preprocessor directives,
+     comments and literal strings (it does not work well for multi-line comments
+     and it also does not take continued lines into account) */
+  ptr = skipwhite(item->text);
+  if (*ptr == '#')
+    return 0;     /* symbol is on a preprocessor directive */
+  while (ptr < head) {
+    assert(*ptr != '\0');
+    if (*ptr == '/' && *(ptr + 1) == '/')
+      return 0;   /* symbol is in a single-line comment */
+    if (*ptr == '/' && *(ptr + 1) == '*') {
+      ptr += 2;
+      while (*ptr != '\0' && (*ptr != '*' || *(ptr + 1) != '/')) {
+        if (ptr >= head)
+          return 0; /* symbol is in ablock comment */
+        ptr += 1;
+      }
+      ptr += 1; /* we stopped on the '*', move to the '/' which is the end of the comment */
+    } else if (*ptr == '\'' || *ptr == '"') {
+      char quote = *ptr++;
+      while (*ptr != '\0' && *ptr != quote) {
+        if (ptr >= head)
+          return 0; /* symbol is in a literal character or string */
+        if (*ptr == '\\')
+          ptr += 1; /* escape character, skip 2 characters */
+        ptr += 1;
+      }
+    }
+    ptr++;
+  }
   /* when moving to the right, skip '[' and ']' so that pointing at 'vector[i]'
      shows the element 'i' of array 'vector' (but skip ']' only if '[' was seen
      too) */
@@ -2160,39 +2221,11 @@ static int source_getsymbol(char *symname, size_t symlen, int row, int col)
     return 0; /* full symbol name does not fit, no need to try to look it up */
   strncpy(symname, head, len);
   symname[len] = '\0';
+  if (is_keyword(symname))
+    return 0; /* reserved words are not symbols */
   return 1;
 }
 
-#define TOOLTIP_DELAY 1000
-static int tooltip(struct nk_context *ctx, struct nk_rect bounds, const char *text, struct nk_rect *viewport)
-{
-  static struct nk_rect recent_bounds;
-  static unsigned long start_tstamp;
-  unsigned long tstamp;
-
-  #if defined WIN32 || defined _WIN32
-    tstamp = GetTickCount();  /* 55ms granularity, but good enough */
-  #else
-    struct timeval  tv;
-    gettimeofday(&tv, NULL);
-    tstamp = tv.tv_sec * 1000 + tv.tv_usec / 1000;
-  #endif
-
-  if (!nk_input_is_mouse_hovering_rect(&ctx->input, bounds))
-    return 0;           /* not hovering this control/area */
-  if (memcmp(&bounds, &recent_bounds, sizeof(struct nk_rect)) != 0) {
-    /* hovering this control/area, but it's a different one from the previous;
-       restart timer */
-    recent_bounds = bounds;
-    start_tstamp = tstamp;
-    return 0;
-  }
-  if (tstamp - start_tstamp < TOOLTIP_DELAY)
-    return 0;           /* delay time has not reached its value yet */
-  if (text != NULL)
-    nk_tooltip(ctx, text, viewport);
-  return 1;
-}
 
 enum {
   STATE_INIT,
@@ -2263,7 +2296,7 @@ typedef struct tagSWOSETTINGS {
   char metadata[_MAX_PATH];
 } SWOSETTINGS;
 
-enum { SWOMODE_NONE, SWOMODE_MANCHESTER, SWOMODE_ASYNC, SWOMODE_PASSIVE };
+enum { SWOMODE_NONE, SWOMODE_MANCHESTER, SWOMODE_ASYNC };
 
 static int save_settings(const char *filename, const char *entrypoint,
                          int tpwr, int autodownload, const SWOSETTINGS *swo)
@@ -2561,13 +2594,16 @@ static void trace_info_mode(const SWOSETTINGS *swo)
     strlcat(msg, "disabled", sizearray(msg));
     break;
   case SWOMODE_MANCHESTER:
-    sprintf(msg + strlen(msg), "Manchester encoding, clock = %u, bitrate = %u", swo->clock, swo->bitrate);
+    if (swo->clock == 0l)
+      strlcat(msg, "Manchester encoding, passive", sizearray(msg));
+    else
+      sprintf(msg + strlen(msg), "Manchester encoding, clock = %u, bitrate = %u", swo->clock, swo->bitrate);
     break;
   case SWOMODE_ASYNC:
-    sprintf(msg + strlen(msg), "Asynchronous encoding, clock = %u, bitrate = %u", swo->clock, swo->bitrate);
-    break;
-  case SWOMODE_PASSIVE:
-    strlcat(msg, "Manchester encoding, passive", sizearray(msg));
+    if (swo->clock == 0l)
+      sprintf(msg + strlen(msg), "Asynchronous encoding, passive, bitrate = %u", swo->bitrate);
+    else
+      sprintf(msg + strlen(msg), "Asynchronous encoding, clock = %u, bitrate = %u", swo->clock, swo->bitrate);
     break;
   }
 
@@ -2590,7 +2626,8 @@ static void trace_info_mode(const SWOSETTINGS *swo)
 /** handle_trace_cmd()
  *  \param command    [in] command string.
  *  \param mode       [out] SWOMODE_NONE, SWOMODE_ASYNC or SWOMODE_MANCHESTER.
- *  \param clock      [out] target clock rate.
+ *  \param clock      [out] target clock rate; this is set to zero for passive
+ *                    mode.
  *  \param bitrate    [out] transmission speed.
  *  \param datasize   [out] payload data size.
  *  \param tsdlfile   [out] definition file for CTF.
@@ -2675,6 +2712,16 @@ static int handle_trace_cmd(const char *command, SWOSETTINGS *swo)
     memset(ptr, ' ', 4);    /* erase the datasize setting from the string */
   }
 
+  /* when "passive" is set, the clock is set to 0 (so that the target is not
+     initialized) */
+  if ((ptr = strstr(cmdcopy, "passive")) != 0 && TERM_END(ptr, 7)) {
+    swo->clock = 0;
+    memset(ptr, ' ', 7);    /* erase the setting from the string */
+  } else if ((ptr = strstr(cmdcopy, "pasv")) != 0 && TERM_END(ptr, 4)) {
+    swo->clock = 0;
+    memset(ptr, ' ', 4);    /* erase the setting from the string */
+  }
+
   /* check whether any of the parameters is a TSDL file */
   ptr = (char*)skipwhite(cmdcopy + 6);  /* reset to start */
   while (*ptr != '\0' && !tsdl_set) {
@@ -2702,7 +2749,7 @@ static int handle_trace_cmd(const char *command, SWOSETTINGS *swo)
   }
   if ((strncmp(ptr, "enable", 6) == 0 && TERM_END(ptr, 6))) {
     ptr = (char*)skipwhite(ptr + 6);
-    newmode = (swo->mode == SWOMODE_NONE) ? SWOMODE_PASSIVE : swo->mode;
+    newmode = (swo->mode == SWOMODE_NONE) ? SWOMODE_MANCHESTER : swo->mode;
   }
   if (strncmp(ptr, "async", 5) == 0 && TERM_END(ptr, 5)) {
     newmode = SWOMODE_ASYNC;
@@ -2727,7 +2774,7 @@ static int handle_trace_cmd(const char *command, SWOSETTINGS *swo)
       v *= 1000000;
       ptr = strchr(ptr, ' ');
       ptr = (ptr != NULL) ? (char*)skipwhite(ptr) : strchr(cmdcopy, '\0');
-    } else if ((strnicmp(ptr, "khz", 3) == 0 && TERM_END(ptr, 3)) || (strnicmp(ptr, "k", 1) == 0 && TERM_END(ptr, 1))) {
+    } else if ((strnicmp(ptr, "kbps", 4) == 0 && TERM_END(ptr, 4)) || (strnicmp(ptr, "khz", 3) == 0 && TERM_END(ptr, 3)) || (strnicmp(ptr, "k", 1) == 0 && TERM_END(ptr, 1))) {
       v *= 1000;
       ptr = strchr(ptr, ' ');
       ptr = (ptr != NULL) ? (char*)skipwhite(ptr) : strchr(cmdcopy, '\0');
@@ -2736,7 +2783,7 @@ static int handle_trace_cmd(const char *command, SWOSETTINGS *swo)
     if (swo->mode != SWOMODE_ASYNC)
       newmode = SWOMODE_MANCHESTER; /* if bitrate is set, mode must be async or manchester */
   }
-  if (newmode != SWOMODE_NONE && swo->bitrate > swo->clock) {
+  if (newmode != SWOMODE_NONE && swo->clock > 0 && swo->bitrate > swo->clock) {
     /* if bitrate > clock swap the two (this can never happen, so it is likely
        an error) */
     unsigned t = swo->bitrate;
@@ -2787,7 +2834,8 @@ int main(int argc, char *argv[])
   int curstate, prevstate, nextstate, stateparam[3];
   int refreshflags, trace_status, warn_source_tstamps;
   int atprompt, insplitter, console_activate, cont_is_run, exitcode, monitor_cmd_active;
-  int idx, result;
+  int idx, result, highlight;
+  unsigned semihosting_lines, swo_lines;
   int prev_clicked_line;
   unsigned watchseq;
   unsigned long scriptparams[3];
@@ -2923,6 +2971,8 @@ int main(int argc, char *argv[])
   source_execfile = -1;
   source_execline = 0;
   prev_clicked_line = -1;
+  semihosting_lines = 0;
+  swo_lines = 0;
   watchseq = 0;
   trace_status = TRACESTAT_INIT_FAILED;
 
@@ -3515,7 +3565,7 @@ int main(int argc, char *argv[])
         }
         break;
       case STATE_SWODEVICE:
-        if (opt_swo.mode != SWOMODE_MANCHESTER && opt_swo.mode != SWOMODE_ASYNC) {
+        if ((opt_swo.mode != SWOMODE_MANCHESTER && opt_swo.mode != SWOMODE_ASYNC) || opt_swo.clock == 0) {
           curstate = STATE_SWOCHANNELS;
           break;
         }
@@ -3546,14 +3596,14 @@ int main(int argc, char *argv[])
         }
         break;
       case STATE_SWOGENERIC:
-        if (opt_swo.mode != SWOMODE_MANCHESTER && opt_swo.mode != SWOMODE_ASYNC) {
+        if ((opt_swo.mode != SWOMODE_MANCHESTER && opt_swo.mode != SWOMODE_ASYNC) || opt_swo.clock == 0) {
           curstate = STATE_SWOCHANNELS;
           break;
         }
         if (!atprompt)
           break;
         if (prevstate != curstate) {
-          assert(opt_swo.bitrate > 0);
+          assert(opt_swo.bitrate > 0 && opt_swo.clock > 0);
           scriptparams[0] = (opt_swo.mode == SWOMODE_MANCHESTER) ? 1 : 2;
           scriptparams[1] = opt_swo.clock / opt_swo.bitrate - 1;
           if (bmscript_line_fmt("swo-generic", mcu_family, cmd, scriptparams)) {
@@ -4164,14 +4214,23 @@ int main(int argc, char *argv[])
           nk_tree_state_pop(ctx);
         } /* watches */
 
-        if (nk_tree_state_push(ctx, NK_TREE_TAB, "Semihosting output", &tab_states[TAB_SEMIHOSTING])) {
+        /* highlight tab text if new content arrives and the tab is closed */
+        highlight = !tab_states[TAB_SEMIHOSTING] && stringlist_count(&semihosting_root) != semihosting_lines;
+        if (highlight)
+          nk_style_push_color(ctx,&ctx->style.tab.text, nk_rgba(255, 255, 160, 255));
+        result = nk_tree_state_push(ctx, NK_TREE_TAB, "Semihosting output", &tab_states[TAB_SEMIHOSTING]);
+        if (highlight)
+          nk_style_pop_color(ctx);
+        if (result) {
           nk_layout_row_dynamic(ctx, tab_heights[TAB_SEMIHOSTING], 1);
           nk_style_push_color(ctx, &ctx->style.window.fixed_background.data.color, nk_rgba(20, 29, 38, 225));
           if (nk_group_begin(ctx, "semihosting", 0)) {
             STRINGLIST *item;
+            semihosting_lines = 0;
             for (item = semihosting_root.next; item != NULL; item = item->next) {
               nk_layout_row_dynamic(ctx, FONT_HEIGHT, 1);
               nk_label(ctx, item->text, NK_TEXT_LEFT);
+              semihosting_lines += 1;
             }
             nk_group_end(ctx);
           }
@@ -4192,10 +4251,18 @@ int main(int argc, char *argv[])
           nk_tree_state_pop(ctx);
         } /* semihosting (Target output) */
 
-        if (nk_tree_state_push(ctx, NK_TREE_TAB, "SWO tracing", &tab_states[TAB_SWO])) {
+        /* highlight tab text if new content arrives and the tab is closed */
+        highlight = !tab_states[TAB_SWO] && tracestring_count() != swo_lines;
+        if (highlight)
+          nk_style_push_color(ctx,&ctx->style.tab.text, nk_rgba(255, 255, 160, 255));
+        result = nk_tree_state_push(ctx, NK_TREE_TAB, "SWO tracing", &tab_states[TAB_SWO]);
+        if (highlight)
+          nk_style_pop_color(ctx);
+        if (result) {
           tracestring_process(trace_status == TRACESTAT_OK);
           nk_layout_row_dynamic(ctx, tab_heights[TAB_SWO], 1);
           tracelog_widget(ctx, "tracelog", FONT_HEIGHT, -1, 0);
+          swo_lines = tracestring_count();
           /* make view height resizeable */
           nk_layout_row_dynamic(ctx, SEPARATOR_VER, 1);
           bounds = nk_widget_bounds(ctx);
@@ -4294,7 +4361,8 @@ int main(int argc, char *argv[])
   stringlist_clear(&consolestring_root);
   stringlist_clear(&consoleedit_root);
   console_clear();
-  sources_clear(1);
+  sources_clear(nk_true);
   dwarf_cleanup(&linetable,&symboltable,&filetable);
   return exitcode;
 }
+

@@ -3,7 +3,7 @@
  * Black Magic Probe. This utility is built with Nuklear for a cross-platform
  * GUI.
  *
- * Copyright 2019 CompuPhase
+ * Copyright 2019-2020 CompuPhase
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -53,6 +53,7 @@
 #include "gdb-rsp.h"
 #include "minIni.h"
 #include "noc_file_dialog.h"
+#include "nuklear_tooltip.h"
 #include "rs232.h"
 #include "specialfolder.h"
 
@@ -183,7 +184,7 @@ int main(int argc, char *argv[])
   enum { TAB_CONFIGURATION, TAB_CHANNELS, /* --- */ TAB_COUNT };
   enum { SPLITTER_NONE, SPLITTER_VERTICAL, SPLITTER_HORIZONTAL };
 
-  static const char *mode_strings[] = { "Passive listener", "Manchester", "NRZ/async." };
+  static const char *mode_strings[] = { "Manchester", "NRZ/async." };
   static const char *datasize_strings[] = { "auto", "8 bit", "16 bit", "32 bit" };
   struct nk_context *ctx;
   int canvas_width, canvas_height;
@@ -197,7 +198,9 @@ int main(int argc, char *argv[])
   unsigned long cpuclock = 0, bitrate = 0;
   int chan, cur_chan_edit = -1;
   unsigned long channelmask = 0;
-  enum { MODE_PASSIVE, MODE_MANCHESTER, MODE_ASYNC } opt_mode = MODE_MANCHESTER;
+  enum { MODE_MANCHESTER = 1, MODE_ASYNC } opt_mode = MODE_MANCHESTER;
+  int opt_init_target = 1;
+  int opt_init_bmp = 1;
   int opt_datasize = 0;
   int opt_fontsize = FONT_HEIGHT;
   int trace_status = 0;
@@ -232,6 +235,13 @@ int main(int argc, char *argv[])
   }
   /* other configuration */
   opt_mode = (int)ini_getl("Settings", "mode", MODE_MANCHESTER, txtConfigFile);
+  opt_init_target = (int)ini_getl("Settings", "init-target", 1, txtConfigFile);
+  opt_init_bmp = (int)ini_getl("Settings", "init-bmp", 1, txtConfigFile);
+  if (opt_mode == 0) {  /* legacy: opt_mode == 0 was MODE_PASSIVE */
+    opt_mode = MODE_MANCHESTER;
+    opt_init_target = 0;
+    opt_init_bmp = 0;
+  }
   opt_datasize = (int)ini_getl("Settings", "datasize", 1, txtConfigFile);
   ini_gets("Settings", "tsdl", "", txtTSDLfile, sizearray(txtTSDLfile), txtConfigFile);
   ini_gets("Settings", "mcu-freq", "48000000", cpuclock_str, sizearray(cpuclock_str), txtConfigFile);
@@ -298,9 +308,6 @@ int main(int argc, char *argv[])
     }
   }
 
-  trace_status = trace_init();
-  if (trace_status != TRACESTAT_OK)
-    trace_running = 0;
   trace_setdatasize((opt_datasize == 3) ? 4 : opt_datasize);
   bmp_setcallback(bmp_callback);
   reinitialize = 2; /* skip first iteration, so window is updated */
@@ -318,41 +325,56 @@ int main(int argc, char *argv[])
         cpuclock = 48000000;
       if ((bitrate = strtol(bitrate_str, NULL, 10)) == 0)
         bitrate = 100000;
-      if (rs232_isopen())
-        bmp_break();
-      result = bmp_connect();
-      if (result)
-        result = bmp_attach(2, mcu_driver, sizearray(mcu_driver), NULL, 0);
-      else
-        trace_status = TRACESTAT_NO_CONNECT;
-      if (result && opt_mode != MODE_PASSIVE) {
-        unsigned long params[2];
-        bmp_runscript("swo-device", mcu_driver, NULL);
-        params[0] = opt_mode;
-        params[1] = cpuclock / bitrate - 1;
-        bmp_runscript("swo-generic", mcu_driver, params);
-        /* enable active channels in the target (disable inactive channels) */
-        channelmask = 0;
-        for (chan = 0; chan < NUM_CHANNELS; chan++)
-          if (channel_getenabled(chan))
-            channelmask |= (1 << chan);
-        params[0] = channelmask;
-        bmp_runscript("swo-channels", mcu_driver, params);
+      trace_status = trace_init();  /* this does nothing if initialization had already succeeded */
+      if (trace_status != TRACESTAT_OK)
+        trace_running = 0;
+      if (opt_init_target || opt_init_bmp) {
+        /* open/reset the serial port/device if any initialization must be done */
+        if (rs232_isopen())
+          bmp_break();
+        result = bmp_connect(); /* this function also opens the (virtual) serial port/device */
+        if (result)
+          result = bmp_attach(2, mcu_driver, sizearray(mcu_driver), NULL, 0);
+        else
+          trace_status = TRACESTAT_NO_CONNECT;
+        if (result && opt_init_target) {
+          /* initialize the target (target-specific configuration, generic
+             configuration and channels */
+          unsigned long params[2];
+          bmp_runscript("swo-device", mcu_driver, NULL);
+          assert(opt_mode == MODE_MANCHESTER || opt_mode == MODE_ASYNC);
+          params[0] = opt_mode;
+          params[1] = cpuclock / bitrate - 1;
+          bmp_runscript("swo-generic", mcu_driver, params);
+          /* enable active channels in the target (disable inactive channels) */
+          channelmask = 0;
+          for (chan = 0; chan < NUM_CHANNELS; chan++)
+            if (channel_getenabled(chan))
+              channelmask |= (1 << chan);
+          params[0] = channelmask;
+          bmp_runscript("swo-channels", mcu_driver, params);
+        }
+      } else if (rs232_isopen()) {
+        /* no initialization is requested, if the serial port is open, close it
+           (so that the gdbserver inside the BMP is available for debugging) */
+        rs232_close();
+        result = 1; /* flag status = ok, to drop into the next "if" */
       }
       if (result) {
-        bmp_enabletrace((opt_mode == MODE_ASYNC) ? bitrate : 0);
+        if (result && opt_init_bmp)
+          bmp_enabletrace((opt_mode == MODE_ASYNC) ? bitrate : 0);
         bmp_restart();
       }
       tracestring_clear();
       switch (trace_status) {
       case TRACESTAT_OK:
         recent_statuscode = BMPSTAT_SUCCESS;
-        if (opt_mode == MODE_PASSIVE) {
-          tracelog_statusmsg(TRACESTATMSG_BMP, "Listening...", recent_statuscode);
-        } else if (recent_statuscode >= 0) {
+        if (opt_init_target || opt_init_bmp) {
           assert(strlen(mcu_driver) > 0);
           sprintf(msg, "Connected [%s]", mcu_driver);
           tracelog_statusmsg(TRACESTATMSG_BMP, msg, recent_statuscode);
+        } else if (recent_statuscode >= 0) {
+          tracelog_statusmsg(TRACESTATMSG_BMP, "Listening (passive mode)...", recent_statuscode);
         }
         break;
       case TRACESTAT_INIT_FAILED:
@@ -417,6 +439,7 @@ int main(int argc, char *argv[])
       #define SEPARATOR_VER 4
       #define SPACING       4
       float splitter_columns[3];
+      struct nk_rect rc_canvas = nk_rect(0, 0, canvas_width, canvas_height);
       struct nk_rect bounds;
 
       #define EXTRA_SPACE_HOR     (SEPARATOR_HOR + 3 * SPACING)
@@ -510,35 +533,58 @@ int main(int argc, char *argv[])
           nk_layout_row_push(ctx, LABEL_WIDTH);
           nk_label(ctx, "Mode", NK_TEXT_ALIGN_LEFT | NK_TEXT_ALIGN_MIDDLE);
           nk_layout_row_push(ctx, VALUE_WIDTH);
-          result = opt_mode;
-          opt_mode = nk_combo(ctx, mode_strings, NK_LEN(mode_strings), opt_mode, FONT_HEIGHT, nk_vec2(VALUE_WIDTH,4.5*FONT_HEIGHT));
-          if (opt_mode != result)
+          result = opt_mode - MODE_MANCHESTER;
+          result = nk_combo(ctx, mode_strings, NK_LEN(mode_strings), result, FONT_HEIGHT, nk_vec2(VALUE_WIDTH,4.5*FONT_HEIGHT));
+          if (opt_mode != result + MODE_MANCHESTER) {
+            /* opt_mode is 1-based, the result of nk_combo() is 0-based, which is
+               we MODE_MANCHESTER is added (MODE_MANCHESTER == 1) */
+            opt_mode = result + MODE_MANCHESTER;
             reinitialize = 1;
+          }
           nk_layout_row_end(ctx);
-          nk_layout_row_begin(ctx, NK_STATIC, ROW_HEIGHT, 2);
-          nk_layout_row_push(ctx, LABEL_WIDTH);
-          nk_label(ctx, "CPU clock", NK_TEXT_ALIGN_LEFT | NK_TEXT_ALIGN_MIDDLE);
-          nk_layout_row_push(ctx, VALUE_WIDTH);
-          result = nk_edit_string_zero_terminated(ctx, NK_EDIT_FIELD | NK_EDIT_SIG_ENTER, cpuclock_str, sizearray(cpuclock_str), nk_filter_decimal);
-          if ((result & NK_EDIT_COMMITED) != 0 || ((result & NK_EDIT_DEACTIVATED) && strtoul(cpuclock_str, NULL, 10) != cpuclock))
+          nk_layout_row_dynamic(ctx, ROW_HEIGHT, 1);
+          bounds = nk_widget_bounds(ctx);
+          if (nk_checkbox_label(ctx, "Configure Target", &opt_init_target))
             reinitialize = 1;
-          nk_layout_row_end(ctx);
-          nk_layout_row_begin(ctx, NK_STATIC, ROW_HEIGHT, 2);
-          nk_layout_row_push(ctx, LABEL_WIDTH);
-          nk_label(ctx, "Bit rate", NK_TEXT_ALIGN_LEFT | NK_TEXT_ALIGN_MIDDLE);
-          nk_layout_row_push(ctx, VALUE_WIDTH);
-          result = nk_edit_string_zero_terminated(ctx, NK_EDIT_FIELD | NK_EDIT_SIG_ENTER, bitrate_str, sizearray(bitrate_str), nk_filter_decimal);
-          if ((result & NK_EDIT_COMMITED) != 0 || ((result & NK_EDIT_DEACTIVATED) && strtoul(bitrate_str, NULL, 10) != bitrate))
+          tooltip(ctx, bounds, "Configure the target microcontroller for SWO", &rc_canvas);
+          nk_layout_row_dynamic(ctx, ROW_HEIGHT, 1);
+          bounds = nk_widget_bounds(ctx);
+          if (nk_checkbox_label(ctx, "Configure Debug Probe", &opt_init_bmp))
             reinitialize = 1;
-          nk_layout_row_end(ctx);
-
+          tooltip(ctx, bounds, "Activate SWO trace capture in the Black Magic Probe", &rc_canvas);
+          if (opt_init_target) {
+            nk_layout_row_begin(ctx, NK_STATIC, ROW_HEIGHT, 2);
+            nk_layout_row_push(ctx, LABEL_WIDTH);
+            nk_label(ctx, "CPU clock", NK_TEXT_ALIGN_LEFT | NK_TEXT_ALIGN_MIDDLE);
+            nk_layout_row_push(ctx, VALUE_WIDTH);
+            bounds = nk_widget_bounds(ctx);
+            result = nk_edit_string_zero_terminated(ctx, NK_EDIT_FIELD | NK_EDIT_SIG_ENTER, cpuclock_str, sizearray(cpuclock_str), nk_filter_decimal);
+            if ((result & NK_EDIT_COMMITED) != 0 || ((result & NK_EDIT_DEACTIVATED) && strtoul(cpuclock_str, NULL, 10) != cpuclock))
+              reinitialize = 1;
+            tooltip(ctx, bounds, "CPU clock of the target microcontroller", &rc_canvas);
+            nk_layout_row_end(ctx);
+          }
+          if (opt_init_target || opt_init_bmp) {
+            nk_layout_row_begin(ctx, NK_STATIC, ROW_HEIGHT, 2);
+            nk_layout_row_push(ctx, LABEL_WIDTH);
+            nk_label(ctx, "Bit rate", NK_TEXT_ALIGN_LEFT | NK_TEXT_ALIGN_MIDDLE);
+            nk_layout_row_push(ctx, VALUE_WIDTH);
+            bounds = nk_widget_bounds(ctx);
+            result = nk_edit_string_zero_terminated(ctx, NK_EDIT_FIELD | NK_EDIT_SIG_ENTER, bitrate_str, sizearray(bitrate_str), nk_filter_decimal);
+            if ((result & NK_EDIT_COMMITED) != 0 || ((result & NK_EDIT_DEACTIVATED) && strtoul(bitrate_str, NULL, 10) != bitrate))
+              reinitialize = 1;
+            tooltip(ctx, bounds, "SWO bit rate (data rate)", &rc_canvas);
+            nk_layout_row_end(ctx);
+          }
           nk_layout_row_begin(ctx, NK_STATIC, ROW_HEIGHT, 3);
           nk_layout_row_push(ctx, LABEL_WIDTH);
           nk_label(ctx, "TSDL file", NK_TEXT_ALIGN_LEFT | NK_TEXT_ALIGN_MIDDLE);
           nk_layout_row_push(ctx, VALUE_WIDTH - BROWSEBTN_WIDTH - 5);
+          bounds = nk_widget_bounds(ctx);
           result = nk_edit_string_zero_terminated(ctx, NK_EDIT_FIELD | NK_EDIT_SIG_ENTER, txtTSDLfile, sizearray(txtTSDLfile), nk_filter_ascii);
           if (result & (NK_EDIT_COMMITED | NK_EDIT_DEACTIVATED))
             reload_format = 1;
+          tooltip(ctx, bounds, "Metadata file for Common Trace Format (CTF)", &rc_canvas);
           nk_layout_row_push(ctx, BROWSEBTN_WIDTH);
           if (nk_button_symbol(ctx, NK_SYMBOL_TRIPLE_DOT)) {
             const char *s = noc_file_dialog_open(NOC_FILE_DIALOG_OPEN,
@@ -555,16 +601,17 @@ int main(int argc, char *argv[])
           nk_layout_row_push(ctx, LABEL_WIDTH);
           nk_label(ctx, "Data size", NK_TEXT_ALIGN_LEFT | NK_TEXT_ALIGN_MIDDLE);
           nk_layout_row_push(ctx, VALUE_WIDTH);
+          bounds = nk_widget_bounds(ctx);
           result = opt_datasize;
           opt_datasize = nk_combo(ctx, datasize_strings, NK_LEN(datasize_strings), opt_datasize, FONT_HEIGHT, nk_vec2(VALUE_WIDTH,5.5*FONT_HEIGHT));
           if (opt_datasize != result)
             trace_setdatasize((opt_datasize == 3) ? 4 : opt_datasize);
+          tooltip(ctx, bounds, "Payload size of an SWO packet (in bits); auto for autodetect", &rc_canvas);
           nk_layout_row_end(ctx);
           nk_tree_state_pop(ctx);
         }
 
         if (nk_tree_state_push(ctx, NK_TREE_TAB, "Channels", &tab_states[TAB_CHANNELS])) {
-          struct nk_rect rc_canvas = nk_rect(0, 0, canvas_width, canvas_height);
           float labelwidth = tracelog_labelwidth(FONT_HEIGHT) + 10;
           struct nk_style_button stbtn = ctx->style.button;
           stbtn.border = 0;
@@ -578,7 +625,7 @@ int main(int argc, char *argv[])
             nk_layout_row_push(ctx, 3 * FONT_HEIGHT);
             sprintf(label, "%2d", chan);
             enabled = channel_getenabled(chan);
-            if (nk_checkbox_label(ctx, label, &enabled) && opt_mode > MODE_PASSIVE) {
+            if (nk_checkbox_label(ctx, label, &enabled) && opt_init_target) {
               /* enable/disable channel in the target */
               channel_setenabled(chan, enabled);
               if (enabled)
@@ -707,6 +754,8 @@ int main(int argc, char *argv[])
   }
   ini_putl("Settings", "fontsize", opt_fontsize, txtConfigFile);
   ini_putl("Settings", "mode", opt_mode, txtConfigFile);
+  ini_putl("Settings", "init-target", opt_init_target, txtConfigFile);
+  ini_putl("Settings", "init-bmp", opt_init_bmp, txtConfigFile);
   ini_putl("Settings", "datasize", opt_datasize, txtConfigFile);
   ini_puts("Settings", "tsdl", txtTSDLfile, txtConfigFile);
   ini_putl("Settings", "mcu-freq", cpuclock, txtConfigFile);

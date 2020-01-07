@@ -320,6 +320,15 @@ int tracestring_isempty(void)
   return (tracestring_root.next == NULL);
 }
 
+unsigned tracestring_count(void)
+{
+  TRACESTRING *item;
+  unsigned count = 0;
+  for (item = tracestring_root.next; item != NULL; item = item->next)
+    count++;
+  return count;
+}
+
 void tracestring_process(int enabled)
 {
   while (tracequeue_head != tracequeue_tail) {
@@ -630,29 +639,32 @@ static BOOL usb_GetDevicePath(const TCHAR *guid, TCHAR *path, size_t pathsize)
   return result;
 }
 
-static HANDLE usb_OpenDevice(const TCHAR *path)
+static BOOL usb_OpenDevice(const TCHAR *path, HANDLE *hdevUSB, WINUSB_INTERFACE_HANDLE *hifaceUSB)
 {
   BOOL result;
-  HANDLE hDev;
-  WINUSB_INTERFACE_HANDLE hUSB;
 
-  hDev = CreateFile(path, GENERIC_WRITE | GENERIC_READ,
-                    FILE_SHARE_WRITE | FILE_SHARE_READ,
-                    NULL, OPEN_EXISTING,
-                    FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OVERLAPPED, NULL);
-  if (hDev == INVALID_HANDLE_VALUE) {
+  assert(hdevUSB != NULL);
+  assert(hifaceUSB != NULL);
+  *hifaceUSB = INVALID_HANDLE_VALUE;  /* preset, in case CreateFile() fails */
+
+  *hdevUSB = CreateFile(path, GENERIC_WRITE | GENERIC_READ,
+                        FILE_SHARE_WRITE | FILE_SHARE_READ,
+                        NULL, OPEN_EXISTING,
+                        FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OVERLAPPED, NULL);
+  if (*hdevUSB == INVALID_HANDLE_VALUE) {
     win_errno = GetLastError();
-    return INVALID_HANDLE_VALUE;
+    return FALSE;
   }
 
-  result = WinUsb_Initialize(hDev, &hUSB);
+  result = WinUsb_Initialize(*hdevUSB, hifaceUSB);
   if (!result) {
     win_errno = GetLastError();
-    CloseHandle(hDev);
-    return INVALID_HANDLE_VALUE;
+    CloseHandle(*hdevUSB);
+    *hdevUSB = *hifaceUSB = INVALID_HANDLE_VALUE;
+    return FALSE;
   }
 
-  return hUSB;
+  return TRUE;
 }
 
 /* endpoint: use 0x85 for input endpoint #5
@@ -679,7 +691,8 @@ static BOOL usb_ConfigEndpoint(WINUSB_INTERFACE_HANDLE hUSB, unsigned char endpo
 }
 
 static HANDLE hThread = NULL;
-static WINUSB_INTERFACE_HANDLE hUSB = INVALID_HANDLE_VALUE;
+static HANDLE hUSBdev = INVALID_HANDLE_VALUE;
+static WINUSB_INTERFACE_HANDLE hUSBiface = INVALID_HANDLE_VALUE;
 static LARGE_INTEGER pcfreq;
 
 /** get_timestamp() return precision timestamp in seconds.
@@ -701,7 +714,7 @@ static DWORD __stdcall trace_read(LPVOID arg)
 
   (void)arg;
   for ( ;; ) {
-    if (WinUsb_ReadPipe(hUSB, BMP_EP_TRACE, buffer, sizearray(buffer), &numread, NULL)) {
+    if (WinUsb_ReadPipe(hUSBiface, BMP_EP_TRACE, buffer, sizearray(buffer), &numread, NULL)) {
       /* add the packet to the queue */
       int next = (tracequeue_tail + 1) % PACKET_NUM;
       if (numread > 0 && next != tracequeue_head) {
@@ -723,18 +736,21 @@ int trace_init(void)
   TCHAR guid[100], path[_MAX_PATH];
 
   win_errno = 0;
-  if (hThread != NULL && hUSB != INVALID_HANDLE_VALUE)
+  if (hThread != NULL && hUSBiface != INVALID_HANDLE_VALUE)
     return TRACESTAT_OK;            /* double initialization */
+
+  /* if a previous initialization did not succeed completely, clean up before
+     retrying */
+  trace_close();
 
   if (!find_bmp(0, BMP_IF_TRACE, guid, sizearray(guid)))
     return TRACESTAT_NO_INTERFACE;  /* Black Magic Probe not found (trace interface not found) */
   if (!usb_GetDevicePath(guid, path, sizearray(path)))
     return TRACESTAT_NO_DEVPATH;    /* device path to trace interface not found (should not occur) */
 
-  hUSB = usb_OpenDevice(path);
-  if (hUSB == INVALID_HANDLE_VALUE)
+  if (!usb_OpenDevice(path, &hUSBdev, &hUSBiface))
     return TRACESTAT_NO_ACCESS;     /* failure opening the device interface */
-  if (!usb_ConfigEndpoint(hUSB, BMP_EP_TRACE))
+  if (!usb_ConfigEndpoint(hUSBiface, BMP_EP_TRACE))
     return TRACESTAT_NO_PIPE;       /* endpoint pipe could not be found -> not a Black Magic Probe? */
 
   hThread = CreateThread(NULL, 0, trace_read, NULL, 0, NULL);
@@ -754,9 +770,11 @@ void trace_close(void)
     TerminateThread(hThread, 0);
     hThread = NULL;
   }
-  if (hUSB != INVALID_HANDLE_VALUE) {
-    WinUsb_Free(hUSB);
-    hUSB = INVALID_HANDLE_VALUE;
+  if (hUSBiface != INVALID_HANDLE_VALUE) {
+    assert(hUSBdev != INVALID_HANDLE_VALUE);  /* if hUSBiface is valid, hUSBdev must be too */
+    CloseHandle(hUSBdev);
+    WinUsb_Free(hUSBiface);
+    hUSBdev = hUSBiface = INVALID_HANDLE_VALUE;
   }
 }
 
@@ -768,7 +786,7 @@ unsigned long trace_errno(void)
 #else
 
 static pthread_t hThread;
-static libusb_device_handle *hUSB;
+static libusb_device_handle *hUSBiface;
 
 static int memicmp(const unsigned char *p1, const unsigned char *p2, size_t count)
 {
@@ -792,7 +810,7 @@ static void *trace_read(void *arg)
 
   (void)arg;
   for ( ;; ) {
-    if (libusb_bulk_transfer(hUSB, BMP_EP_TRACE, buffer, sizeof(buffer), &numread, 0) == 0) {
+    if (libusb_bulk_transfer(hUSBiface, BMP_EP_TRACE, buffer, sizeof(buffer), &numread, 0) == 0) {
       /* add the packet to the queue */
       int next = (tracequeue_tail + 1) % PACKET_NUM;
       if (numread > 0 && next != tracequeue_head) {
@@ -861,8 +879,12 @@ int trace_init(void)
   char dev_id[50];
   int result;
 
-  hUSB = NULL;
-  hThread = 0;
+  if (hThread != 0 && hUSBiface != NULL)
+    return TRACESTAT_OK;            /* double initialization */
+
+  /* if a previous initialization did not succeed completely, clean up before
+     retrying */
+  trace_close();
 
   if (!find_bmp(0, BMP_IF_TRACE, dev_id, sizearray(dev_id)))
     return TRACESTAT_NO_INTERFACE;  /* Black Magic Probe not found (trace interface not found) */
@@ -871,7 +893,7 @@ int trace_init(void)
   if (result < 0)
     return TRACESTAT_INIT_FAILED;
 
-  result = usb_OpenDevice(&hUSB, dev_id);
+  result = usb_OpenDevice(&hUSBiface, dev_id);
   if (result != TRACESTAT_OK)
     return result;
 
@@ -888,9 +910,9 @@ void trace_close(void)
     pthread_cancel(hThread);
     hThread = 0;
   }
-  if (hUSB != NULL) {
-    libusb_close(hUSB);
-    hUSB = NULL;
+  if (hUSBiface != NULL) {
+    libusb_close(hUSBiface);
+    hUSBiface = NULL;
   }
 }
 

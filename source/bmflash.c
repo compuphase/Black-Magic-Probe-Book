@@ -3,7 +3,7 @@
  * the Black Magic Probe on a system. This utility is built with Nuklear for a
  * cross-platform GUI.
  *
- * Copyright 2019 CompuPhase
+ * Copyright 2019-2020 CompuPhase
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -46,6 +46,7 @@
 
 #include "guidriver.h"
 #include "noc_file_dialog.h"
+#include "nuklear_tooltip.h"
 #include "bmp-script.h"
 #include "bmp-support.h"
 #include "elf.h"
@@ -973,3 +974,4 @@ int main(int argc, char *argv[])
   }
   return 0;
 }
+

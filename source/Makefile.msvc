@@ -64,19 +64,19 @@ LFLAGS_C  = $(L_DEBUG) /NOLOGO /SUBSYSTEM:console
 # -------------------------------------------------------------
 
 OBJLIST_BMDEBUG = bmdebug.obj bmp-scan.obj bmp-script.obj dwarf.obj elf.obj \
-                  guidriver.obj minini.obj rs232.obj \
+                  guidriver.obj minini.obj nuklear_tooltip.obj rs232.obj \
                   specialfolder.obj strlcpy.obj \
                   decodectf.obj parsetsdl.obj swotrace.obj \
                   nuklear.obj nuklear_gdip.obj noc_file_dialog.obj
 
 OBJLIST_BMFLASH = bmflash.obj bmp-scan.obj bmp-script.obj bmp-support.obj crc32.obj \
-                  elf.obj gdb-rsp.obj guidriver.obj minIni.obj rs232.obj \
-                  specialfolder.obj strlcpy.obj xmltractor.obj \
+                  elf.obj gdb-rsp.obj guidriver.obj minIni.obj nuklear_tooltip.obj \
+                  rs232.obj specialfolder.obj strlcpy.obj xmltractor.obj \
                   nuklear.obj nuklear_gdip.obj noc_file_dialog.obj
 
 OBJLIST_BMTRACE = bmtrace.obj bmp-scan.obj bmp-script.obj bmp-support.obj crc32.obj \
-                  elf.obj gdb-rsp.obj guidriver.obj minini.obj rs232.obj \
-                  specialfolder.obj strlcpy.obj xmltractor.obj \
+                  elf.obj gdb-rsp.obj guidriver.obj minini.obj nuklear_tooltip.obj \
+                  rs232.obj specialfolder.obj strlcpy.obj xmltractor.obj \
                   decodectf.obj parsetsdl.obj swotrace.obj \
                   nuklear.obj nuklear_gdip.obj noc_file_dialog.obj
 
@@ -124,6 +124,8 @@ gdb-rsp.obj : gdb-rsp.c
 guidriver.obj : guidriver.c
 
 minIni.obj : minIni.c
+
+nuklear_tooltip.obj : nuklear_tooltip.c
 
 rs232.obj : rs232.c
 

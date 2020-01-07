@@ -45,27 +45,28 @@ void channel_setname(int index, const char *name);
 struct nk_color channel_getcolor(int index);
 void channel_setcolor(int index, struct nk_color color);
 
-int  trace_init(void);
-void trace_close(void);
+int    trace_init(void);
+void   trace_close(void);
 unsigned long trace_errno(void);
 
-void trace_setdatasize(short size);
-short trace_getdatasize();
+void   trace_setdatasize(short size);
+short  trace_getdatasize();
 
-void tracestring_add(unsigned channel, const unsigned char *buffer, size_t length, double timestamp);
-void tracestring_clear(void);
-int  tracestring_isempty(void);
-void tracestring_process(int enabled);
-int  trace_save(const char *filename);
-int  tracestring_find(const char *text, int curline);
-int  tracestring_findtimestamp(double timestamp);
+void   tracestring_add(unsigned channel, const unsigned char *buffer, size_t length, double timestamp);
+void   tracestring_clear(void);
+int    tracestring_isempty(void);
+unsigned tracestring_count(void);
+void   tracestring_process(int enabled);
+int    trace_save(const char *filename);
+int    tracestring_find(const char *text, int curline);
+int    tracestring_findtimestamp(double timestamp);
 
-float tracelog_labelwidth(float rowheight);
-void  tracelog_statusmsg(int type, const char *msg, int code);
-void  tracelog_widget(struct nk_context *ctx, const char *id, float rowheight, int markline, nk_flags widget_flags);
+float  tracelog_labelwidth(float rowheight);
+void   tracelog_statusmsg(int type, const char *msg, int code);
+void   tracelog_widget(struct nk_context *ctx, const char *id, float rowheight, int markline, nk_flags widget_flags);
 
-void  timeline_getconfig(double *spacing, unsigned long *scale, unsigned long *delta);
-void  timeline_setconfig(double spacing, unsigned long scale, unsigned long delta);
+void   timeline_getconfig(double *spacing, unsigned long *scale, unsigned long *delta);
+void   timeline_setconfig(double spacing, unsigned long scale, unsigned long delta);
 double timeline_widget(struct nk_context *ctx, const char *id, float rowheight, nk_flags widget_flags);
 
 #endif /* _SWOTRACE_H */
