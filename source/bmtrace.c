@@ -625,14 +625,16 @@ int main(int argc, char *argv[])
             nk_layout_row_push(ctx, 3 * FONT_HEIGHT);
             sprintf(label, "%2d", chan);
             enabled = channel_getenabled(chan);
-            if (nk_checkbox_label(ctx, label, &enabled) && opt_init_target) {
+            if (nk_checkbox_label(ctx, label, &enabled)) {
               /* enable/disable channel in the target */
               channel_setenabled(chan, enabled);
-              if (enabled)
-                channelmask |= (1 << chan);
-              else
-                channelmask &= ~(1 << chan);
-              bmp_runscript("swo-channels", mcu_driver, &channelmask);
+              if (opt_init_target) {
+                if (enabled)
+                  channelmask |= (1 << chan);
+                else
+                  channelmask &= ~(1 << chan);
+                bmp_runscript("swo-channels", mcu_driver, &channelmask);
+              }
             }
             clrbk = channel_getcolor(chan);
             clrtxt = (clrbk.r + 2 * clrbk.g + clrbk.b < 700) ? nk_rgb(255,255,255) : nk_rgb(20,29,38);

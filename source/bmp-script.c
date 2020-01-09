@@ -130,7 +130,7 @@ static const REG_SCRIPT scripts[] = {
     "AFIO_MAPR |= 0x2000000 \n" /* 2 << 24 */
     "DBGMCU_CR |= 0x20 \n"      /* 1 << 5 */
   },
-  { "swo-device", "STM32F3,STM32F03,STM32F05,STM32F07,STM32F09,STM32F2",
+  { "swo-device", "STM32F03,STM32F05,STM32F07,STM32F09,STM32F2,STM32F3",
     "DBGMCU_CR |= 0x20 \n"      /* 1 << 5 */
   },
   { "swo-device", "STM32F4,STM32F7",
@@ -234,6 +234,7 @@ int bmscript_line(const char *name, const char *mcu, char *oper,
   assert(oper != NULL && address != NULL && value != NULL && size != NULL);
 
   if (cache.name == NULL || strcmp(name, cache.name) != 0 || cache.mcu == NULL || strcmp(mcu, cache.mcu) != 0) {
+    int idx_prefix = -1;
     /* find a script with the given name, where the MCU is in the list */
     for (idx = 0; scripts[idx].name != NULL; idx++) {
       if (stricmp(name, scripts[idx].name) == 0) {
@@ -247,14 +248,16 @@ int bmscript_line(const char *name, const char *mcu, char *oper,
           char *tok, *space;
           for (tok = strtok(list, ","); tok != NULL; tok = strtok(NULL, ",")) {
             if (stricmp(mcu, tok) == 0)
-              break;
+              break;        /* exact match -> done */
             /* also check whether the CPU architecture is added to the name */
             if ((space = strrchr(tok, ' ')) != NULL && space[1] == 'M' && isdigit(space[2])) {
               *space = '\0';
               if (stricmp(mcu, tok) == 0)
-                break;
+                break;      /* exact match after stripping the CPU architecture */
               *space = ' '; /* restore string (although probably redundant) */
             }
+            if (strnicmp(mcu, tok, strlen(tok)) == 0)
+              idx_prefix = idx; /* prefix match -> save (but continue to try to find an exact match) */
           }
           free((void*)list);
           if (tok != NULL)
@@ -262,6 +265,8 @@ int bmscript_line(const char *name, const char *mcu, char *oper,
         }
       }
     }
+    if (scripts[idx].name == NULL && idx_prefix >= 0)
+      idx = idx_prefix;
     if (scripts[idx].name == NULL)
       return 0;     /* no script with matching name and mcu is found */
 

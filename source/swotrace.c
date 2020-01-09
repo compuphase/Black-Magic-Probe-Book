@@ -237,7 +237,7 @@ void tracestring_add(unsigned channel, const unsigned char *buffer, size_t lengt
     for (idx = 0; idx < length; idx++) {
       /* see whether to append to the recent string, or to add a new string */
       if (tracestring_tail != NULL) {
-        if (buffer[idx + 1] == '\r' || buffer[idx + 1] == '\n') {
+        if (buffer[idx] == '\r' || buffer[idx] == '\n') {
           tracestring_tail->flags |= 0x01;  /* on newline, create a new string */
           continue;
         } else if (tracestring_tail->channel != channel) {
@@ -264,11 +264,11 @@ void tracestring_add(unsigned channel, const unsigned char *buffer, size_t lengt
           }
         }
         if (tracestring_tail->length < tracestring_tail->size)
-          tracestring_tail->text[tracestring_tail->length++] = buffer[idx + 1];
+          tracestring_tail->text[tracestring_tail->length++] = buffer[idx];
       } else {
         /* create a new string */
         TRACESTRING *item;
-        if (tracestring_tail == NULL && (buffer[idx + 1] == '\r' || buffer[idx + 1] == '\n'))
+        if (tracestring_tail == NULL && (buffer[idx] == '\r' || buffer[idx] == '\n'))
           continue; /* don't create an empty first string */
         item = malloc(sizeof(TRACESTRING));
         if (item != NULL) {
@@ -292,7 +292,7 @@ void tracestring_add(unsigned channel, const unsigned char *buffer, size_t lengt
             else
               tracestring_root.next = item;
             tracestring_tail = item;
-            tracestring_tail->text[tracestring_tail->length++] = buffer[idx + 1];
+            tracestring_tail->text[tracestring_tail->length++] = buffer[idx];
           } else {
             free(item); /* adding a new string failed */
           }
