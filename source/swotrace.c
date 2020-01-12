@@ -1,7 +1,7 @@
 /*
  * Shared code for SWO Trace for the bmtrace and bmdebug utilities.
  *
- * Copyright 2019 CompuPhase
+ * Copyright 2019-2020 CompuPhase
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -46,6 +46,7 @@
 #endif
 
 #include "bmp-scan.h"
+#include "dwarf.h"
 #include "guidriver.h"
 #include "parsetsdl.h"
 #include "decodectf.h"
@@ -172,6 +173,7 @@ static unsigned char itm_cache[5]; /* we may need to cache an ITM data packet th
 static size_t itm_cachefilled = 0;
 static short itm_datasize = 1;    /* size in bytes (not bits) */
 static short itm_datasz_auto = 0;
+static int itm_packet_errors = 0;
 
 #define ITM_VALIDHDR(b)   (((b) & 0x07) >= 1 && ((b) & 0x07) <= 3)
 #define ITM_CHANNEL(b)    (((b) >> 3) & 0x1f) /* get channel number from ITM packet header */
@@ -234,6 +236,8 @@ void tracestring_add(unsigned channel, const unsigned char *buffer, size_t lengt
   } else {
     /* plain text mode */
     unsigned idx;
+    while (length > 0 && buffer[length - 1] == '\0')
+      length--; /* this can happen with expansion from zero-compression */
     for (idx = 0; idx < length; idx++) {
       /* see whether to append to the recent string, or to add a new string */
       if (tracestring_tail != NULL) {
@@ -352,6 +356,7 @@ void tracestring_process(int enabled)
             itm_datasize = len; /* if larger data word is found, datasize must be adjusted */
           } else {
             ctf_decode_reset();
+            itm_packet_errors += 1;
             goto skip_packet;   /* not a valid ITM packet, ignore it */
           }
         }
@@ -383,6 +388,7 @@ void tracestring_process(int enabled)
         }
         if (!ITM_VALIDHDR(*pktdata)) {
           ctf_decode_reset();
+          itm_packet_errors += 1;
           goto skip_packet;     /* not a valid ITM packet, ignore it */
         }
         len = ITM_LENGTH(*pktdata);
@@ -400,6 +406,7 @@ void tracestring_process(int enabled)
             itm_datasize = len; /* if larger data word is found, datasize must be adjusted */
           } else {
             ctf_decode_reset();
+            itm_packet_errors += 1;
             goto skip_packet;   /* not a valid ITM packet, ignore it */
           }
         }
@@ -522,12 +529,18 @@ void trace_setdatasize(short size)
   assert(size == 0 || size == 1 || size == 2 || size == 4);
   itm_datasize = (size == 0) ? 1 : size;
   itm_datasz_auto = (size == 0);
+  itm_packet_errors = 0;
 }
 
 /** trace_getdatasize() returns the datasize currently set. */
 short trace_getdatasize(void)
 {
   return itm_datasize;
+}
+
+int trace_getpacketerrors(void)
+{
+  return itm_packet_errors;
 }
 
 

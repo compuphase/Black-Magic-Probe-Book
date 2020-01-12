@@ -2,7 +2,7 @@
  * information * in an ELF file. For the symbol table, only the function
  * symbols are stored.
  *
- * Copyright (c) 2015,2019 ITB CompuPhase
+ * Copyright (c) 2015,2019-2020 CompuPhase
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -48,7 +48,8 @@ void dwarf_cleanup(DWARF_LINELOOKUP *linetable,DWARF_SYMBOLLIST *symboltable,DWA
 
 const DWARF_SYMBOLLIST *dwarf_lookup_sym(const DWARF_SYMBOLLIST *symboltable,const char *name);
 const DWARF_SYMBOLLIST *dwarf_get_sym(const DWARF_SYMBOLLIST *symboltable,unsigned index);
-const DWARF_PATHLIST *dwarf_lookup_path(const DWARF_PATHLIST *filetable,int fileindex);
+const char *dwarf_lookup_path(const DWARF_PATHLIST *filetable,int fileindex);
+const DWARF_LINELOOKUP *dwarf_lookup_line(const DWARF_LINELOOKUP *linetable,unsigned address);
 
 #if defined __cplusplus
   }

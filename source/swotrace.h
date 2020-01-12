@@ -1,7 +1,7 @@
 /*
  * Shared code for SWO Trace for the bmtrace and bmdebug utilities.
  *
- * Copyright 2019 CompuPhase
+ * Copyright 2019-2020 CompuPhase
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -51,6 +51,7 @@ unsigned long trace_errno(void);
 
 void   trace_setdatasize(short size);
 short  trace_getdatasize();
+int    trace_getpacketerrors(void);
 
 void   tracestring_add(unsigned channel, const unsigned char *buffer, size_t length, double timestamp);
 void   tracestring_clear(void);

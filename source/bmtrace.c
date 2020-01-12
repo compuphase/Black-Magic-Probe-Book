@@ -462,6 +462,12 @@ int main(int argc, char *argv[])
         splitter_rows[0] = (canvas_height - EXTRA_SPACE_VER) * splitter_ver;
         splitter_rows[1] = (canvas_height - EXTRA_SPACE_VER) - splitter_rows[0];
 
+        if (trace_status == TRACESTAT_OK && tracestring_isempty() && trace_getpacketerrors() > 0) {
+          char msg[100];
+          recent_statuscode = BMPERR_GENERAL;
+          sprintf(msg, "SWO packet errors (%d), verify data size", trace_getpacketerrors());
+          tracelog_statusmsg(TRACESTATMSG_BMP, msg, recent_statuscode);
+        }
         tracestring_process(trace_running);
         nk_layout_row_dynamic(ctx, splitter_rows[0], 1);
         tracelog_widget(ctx, "tracelog", FONT_HEIGHT, cur_match_line, NK_WINDOW_BORDER);
@@ -604,8 +610,14 @@ int main(int argc, char *argv[])
           bounds = nk_widget_bounds(ctx);
           result = opt_datasize;
           opt_datasize = nk_combo(ctx, datasize_strings, NK_LEN(datasize_strings), opt_datasize, FONT_HEIGHT, nk_vec2(VALUE_WIDTH,5.5*FONT_HEIGHT));
-          if (opt_datasize != result)
+          if (opt_datasize != result) {
             trace_setdatasize((opt_datasize == 3) ? 4 : opt_datasize);
+            tracestring_clear();
+            if (trace_status == TRACESTAT_OK) {
+              recent_statuscode = BMPSTAT_SUCCESS;
+              tracelog_statusmsg(TRACESTATMSG_BMP, "Listening ...", recent_statuscode);
+            }
+          }
           tooltip(ctx, bounds, "Payload size of an SWO packet (in bits); auto for autodetect", &rc_canvas);
           nk_layout_row_end(ctx);
           nk_tree_state_pop(ctx);

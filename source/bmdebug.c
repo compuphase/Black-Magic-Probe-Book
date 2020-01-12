@@ -2315,7 +2315,7 @@ static int save_settings(const char *filename, const char *entrypoint,
   ini_putl("SWO trace", "mode", swo->mode, filename);
   ini_putl("SWO trace", "bitrate", swo->bitrate, filename);
   ini_putl("SWO trace", "clock", swo->clock, filename);
-  ini_putl("SWO trace", "datasize", swo->datasize, filename);
+  ini_putl("SWO trace", "datasize", swo->datasize * 8, filename);
   ini_puts("SWO trace", "ctf", swo->metadata, filename);
   for (idx = 0; idx < NUM_CHANNELS; idx++) {
     char key[32], value[128];
@@ -2349,7 +2349,7 @@ static int load_settings(const char *filename, char *entrypoint, size_t entrypoi
   swo->mode = (unsigned)ini_getl("SWO trace", "mode", SWOMODE_NONE, filename);
   swo->bitrate = (unsigned)ini_getl("SWO trace", "bitrate", 100000, filename);
   swo->clock = (unsigned)ini_getl("SWO trace", "clock", 48000000, filename);
-  swo->datasize = (unsigned)ini_getl("SWO trace", "datasize", 8, filename);
+  swo->datasize = (unsigned)ini_getl("SWO trace", "datasize", 8, filename) / 8;
   ini_gets("SWO trace", "ctf", "", swo->metadata, sizearray(swo->metadata), filename);
   for (idx = 0; idx < NUM_CHANNELS; idx++) {
     char key[32], value[128];
@@ -2394,9 +2394,9 @@ static int handle_list_cmd(const char *command, const DWARF_SYMBOLLIST *symbolta
       unsigned line = 0, idx = UINT_MAX;
       sym = dwarf_lookup_sym(symboltable, p1);
       if (sym != NULL) {
-        const DWARF_PATHLIST *path = dwarf_lookup_path(filetable, sym->fileindex);
+        const char *path = dwarf_lookup_path(filetable, sym->fileindex);
         if (path != NULL)
-          idx = source_lookup(path->name);
+          idx = source_lookup(path);
         line = sym->line;
       } else {
         char *p2 = strchr(p1, ':');
@@ -2611,7 +2611,7 @@ static void trace_info_mode(const SWOSETTINGS *swo)
   if (swo->datasize == 0)
     strlcat(msg, "auto", sizearray(msg));
   else
-    sprintf(msg + strlen(msg), "%u-bit", swo->datasize);
+    sprintf(msg + strlen(msg), "%u-bit", swo->datasize * 8);
 
   strlcat(msg, "\n", sizearray(msg));
   console_add(msg, STRFLG_STATUS);
@@ -2625,13 +2625,13 @@ static void trace_info_mode(const SWOSETTINGS *swo)
 
 /** handle_trace_cmd()
  *  \param command    [in] command string.
- *  \param mode       [out] SWOMODE_NONE, SWOMODE_ASYNC or SWOMODE_MANCHESTER.
- *  \param clock      [out] target clock rate; this is set to zero for passive
- *                    mode.
- *  \param bitrate    [out] transmission speed.
- *  \param datasize   [out] payload data size.
- *  \param tsdlfile   [out] definition file for CTF.
+ *  \param swo        [out] the various settings, see below.
  *
+ *  \note * mode       SWOMODE_NONE, SWOMODE_ASYNC or SWOMODE_MANCHESTER.
+ *        * clock      target clock rate; this is set to zero for passive mode.
+ *        * bitrate    transmission speed.
+ *        * datasize   payload data size in bytes (not bits).
+ *        * tsdlfile   definition file for CTF.
  *  \return 0=unchanged, 1=protocol settings changed, 2=channels changed,
  *          3="info"
  */
@@ -2896,6 +2896,7 @@ int main(int argc, char *argv[])
 
   txtFilename[0] = '\0';
   txtParamFile[0] = '\0';
+  strcpy(txtEntryPoint, "main");
   for (idx = 1; idx < argc; idx++) {
     const char *ptr;
     if (argv[idx][0] == '-' || argv[idx][0] == '/') {
@@ -2948,7 +2949,7 @@ int main(int argc, char *argv[])
   opt_swo.mode = SWOMODE_NONE;
   opt_swo.clock = 48000000;
   opt_swo.bitrate = 100000;
-  opt_swo.datasize = 8;
+  opt_swo.datasize = 1;
   if (strlen(txtFilename) > 0) {
     strlcpy(txtParamFile, txtFilename, sizearray(txtParamFile));
     strlcat(txtParamFile, ".bmcfg", sizearray(txtParamFile));
@@ -3239,7 +3240,7 @@ int main(int argc, char *argv[])
             task_stdin(&task, cmd);
             atprompt = 0;
             prevstate = curstate;
-            console_replaceflags = STRFLG_LOG;  /* move LOG to SCRRIPT, to hide script output by default */
+            console_replaceflags = STRFLG_LOG;  /* move LOG to SCRIPT, to hide script output by default */
             console_xlateflags = STRFLG_SCRIPT;
           } else {
             curstate = STATE_VERIFY;
@@ -3530,7 +3531,7 @@ int main(int argc, char *argv[])
             if (trace_status != TRACESTAT_OK)
               console_add("Failed to initialize SWO tracing\n", STRFLG_ERROR);
             else
-              trace_setdatasize(opt_swo.datasize / 8);
+              trace_setdatasize(opt_swo.datasize);
           }
           ctf_parse_cleanup();
           ctf_decode_cleanup();

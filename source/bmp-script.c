@@ -125,7 +125,7 @@ static const REG_SCRIPT scripts[] = {
   },
 
   /* MCU-specific & generic configuration for SWO tracing */
-  { "swo-device", "STM32F1 medium density,STM32F1 high density",
+  { "swo-device", "STM32F1*",
     "RCC_APB2ENR |= 1 \n"
     "AFIO_MAPR |= 0x2000000 \n" /* 2 << 24 */
     "DBGMCU_CR |= 0x20 \n"      /* 1 << 5 */
@@ -133,7 +133,7 @@ static const REG_SCRIPT scripts[] = {
   { "swo-device", "STM32F03,STM32F05,STM32F07,STM32F09,STM32F2,STM32F3",
     "DBGMCU_CR |= 0x20 \n"      /* 1 << 5 */
   },
-  { "swo-device", "STM32F4,STM32F7",
+  { "swo-device", "STM32F4*,STM32F7*",
     "RCC_AHB1ENR |= 0x02 \n"    /* enable GPIOB clock */
     "GPIOB_MODER ~= 0x00c0 \n"  /* PB3: use alternate function */
     "GPIOB_MODER |= 0x0080 \n"
@@ -214,11 +214,11 @@ void bmscript_clearcache(void)
  *        Each line in the script has a register/memory setting (it is assumed
  *        that registers are memory-mapped). The setting consists of an address,
  *        a value, a size, and an operator. The size is typically 4 (32-bit
- *        reisters), but may be 1 or 2 as well. The operator is '=' for a simple
- *        assignment ("value" is stored as "address"), '|' to set bits in the
- *        current register value, and '~' to clear bits. For the last option: a
- *        1 bit in value, clears that bit im the register (so it is an AND with
- *        the inverse of "value").
+ *        registers), but may be 1 or 2 as well. The operator is '=' for a
+ *        simple assignment ("value" is stored as "address"), '|' to set bits in
+ *        the current register value, and '~' to clear bits. For the last
+ *        option: a 1 bit in value, clears that bit im the register (so it is an
+ *        AND with the inverse of "value").
  */
 int bmscript_line(const char *name, const char *mcu, char *oper,
                   uint32_t *address, uint32_t *value, uint8_t *size)
@@ -234,7 +234,6 @@ int bmscript_line(const char *name, const char *mcu, char *oper,
   assert(oper != NULL && address != NULL && value != NULL && size != NULL);
 
   if (cache.name == NULL || strcmp(name, cache.name) != 0 || cache.mcu == NULL || strcmp(mcu, cache.mcu) != 0) {
-    int idx_prefix = -1;
     /* find a script with the given name, where the MCU is in the list */
     for (idx = 0; scripts[idx].name != NULL; idx++) {
       if (stricmp(name, scripts[idx].name) == 0) {
@@ -245,7 +244,7 @@ int bmscript_line(const char *name, const char *mcu, char *oper,
         /* check whether the MCU is in the list of MCUs */
         list = strdup(scripts[idx].mcu_list);
         if (list != NULL) {
-          char *tok, *space;
+          char *tok, *space, *asterisk;
           for (tok = strtok(list, ","); tok != NULL; tok = strtok(NULL, ",")) {
             if (stricmp(mcu, tok) == 0)
               break;        /* exact match -> done */
@@ -256,8 +255,12 @@ int bmscript_line(const char *name, const char *mcu, char *oper,
                 break;      /* exact match after stripping the CPU architecture */
               *space = ' '; /* restore string (although probably redundant) */
             }
-            if (strnicmp(mcu, tok, strlen(tok)) == 0)
-              idx_prefix = idx; /* prefix match -> save (but continue to try to find an exact match) */
+            if ((asterisk = strchr(tok, '*')) != NULL) {
+              *asterisk = '\0';
+              if (strnicmp(mcu, tok, strlen(tok)) == 0)
+                break;      /* match on prefix (part before the wildcard) */
+              *asterisk = '*'; /* restore string (although probably redundant) */
+            }
           }
           free((void*)list);
           if (tok != NULL)
@@ -265,8 +268,6 @@ int bmscript_line(const char *name, const char *mcu, char *oper,
         }
       }
     }
-    if (scripts[idx].name == NULL && idx_prefix >= 0)
-      idx = idx_prefix;
     if (scripts[idx].name == NULL)
       return 0;     /* no script with matching name and mcu is found */
 
