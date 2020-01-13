@@ -23,6 +23,7 @@
   #if defined _MSC_VER
     #define strdup(s)         _strdup(s)
     #define stricmp(s1,s2)    _stricmp((s1),(s2))
+    #define strnicmp(s1,s2,n) _strnicmp((s1),(s2),(n))
   #endif
 #else
   #include <unistd.h>
@@ -36,7 +37,8 @@
 #include "bmp-script.h"
 
 #if defined __linux__ || defined __FreeBSD__ || defined __APPLE__
-#  define stricmp(s1,s2)  strcasecmp((s1),(s2))
+#  define stricmp(s1,s2)    strcasecmp((s1),(s2))
+#  define strnicmp(s1,s2,n) strncasecmp((s1),(s2),(n))
 #endif
 #if !defined sizearray
 #  define sizearray(e)    (sizeof(e) / sizeof((e)[0]))

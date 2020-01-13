@@ -386,12 +386,12 @@ int main(int argc, char *argv[])
         break;
       case TRACESTAT_NO_ACCESS:
         recent_statuscode = BMPERR_GENERAL;
-        sprintf(msg, "Trace access denied (error %d)", trace_errno());
+        sprintf(msg, "Trace access denied (error %lu)", trace_errno());
         tracelog_statusmsg(TRACESTATMSG_BMP, msg, recent_statuscode);
         break;
       case TRACESTAT_NO_THREAD:
         recent_statuscode = BMPERR_GENERAL;
-        sprintf(msg, "Multithreading failed (error %d)", trace_errno());
+        sprintf(msg, "Multithreading failed (error %lu)", trace_errno());
         tracelog_statusmsg(TRACESTATMSG_BMP, msg, recent_statuscode);
         break;
       case TRACESTAT_NO_CONNECT:
