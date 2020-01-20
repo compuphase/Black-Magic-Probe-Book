@@ -97,8 +97,13 @@
   #define DIRSEP_CHAR '/'
 #endif
 
+static const char *lastdirsep(const char *path);
 static char *translate_path(char *path, int native);
 static const char *source_getname(unsigned idx);
+
+static DWARF_LINELOOKUP dwarf_linetable = { NULL };
+static DWARF_SYMBOLLIST dwarf_symboltable = { NULL};
+static DWARF_PATHLIST dwarf_filetable = { NULL};
 
 
 #define STRFLG_INPUT    0x0001  /* stdin echo */
@@ -201,6 +206,93 @@ static STRINGLIST *stringlist_getlast(STRINGLIST *root, int include, int exclude
       last = item;
   assert(last == NULL || last->text != NULL);
   return last;
+}
+
+
+static void semihosting_add(STRINGLIST *root, const char *text, unsigned short flags)
+{
+  STRINGLIST *item;
+
+  assert(root != NULL);
+  /* get the last string ends, for checking whether it ended with a newline */
+  for (item = root; item->next != NULL; item = item->next)
+    /* nothing */;
+
+  assert(text != NULL);
+  while (*text != '\0') {
+    char *buffer;
+    size_t buflen;
+    const char *tail = strchr(text, '\n');
+    if (tail == NULL)
+      tail = strchr(text, '\0');
+    buflen = (tail - text);
+    if (buflen > 0) {
+      assert(item != NULL && item->next == NULL);
+      if (item != root && (item->flags & STRFLG_HANDLED) == 0) {
+        /* concatenate the string to the tail */
+        size_t curlen;
+        assert(item->text != NULL);
+        curlen = strlen(item->text);
+        buffer = (char*)malloc((curlen + buflen + 1) * sizeof(char));
+        if (buffer != NULL) {
+          strcpy(buffer, item->text);
+          strncpy(buffer + curlen, text, buflen);
+          buffer[curlen + buflen] = '\0';
+          free((void*)item->text);
+          item->text = buffer;
+        }
+      } else {
+        buffer = (char*)malloc((buflen + 1) * sizeof(char));
+        if (buffer != NULL) {
+          strncpy(buffer, text, buflen);
+          buffer[buflen] = '\0';
+          item = stringlist_add(root, text, flags);
+          free(buffer);
+          if (item == NULL)
+            return; /* stringlist_add() failed! -> quit */
+        }
+      }
+    }
+    /* prepare for the next part of the string */
+    text = tail;
+    if (*text == '\n') {
+      char *start;
+      text++;             /* skip '\n' (to set start of next string) */
+      /* text ended with a newline -> set "handled" flag */
+      assert(item != NULL);
+      item->flags |= STRFLG_HANDLED;
+      /* look up file:line information from addresses */
+      if (dwarf_linetable.next != NULL && dwarf_filetable.next != NULL
+          && (start = strstr(item->text, "*0x")) != NULL)
+      {
+        unsigned long addr = strtoul(start + 3, (char**)&tail, 16);
+        const DWARF_LINELOOKUP *lineinfo = dwarf_line_from_address(&dwarf_linetable, addr);
+        if (lineinfo != NULL) {
+          const char *path = dwarf_path_from_index(&dwarf_filetable, lineinfo->fileindex);
+          if (path != NULL) {
+            size_t sz = (start - item->text) + strlen(tail);
+            const char *basename = lastdirsep(path);
+            if (basename == NULL)
+              basename = path;
+            sz += strlen(basename) + 12;  /* +12 for the line number plus colon */
+            buffer = (char*)malloc((sz + 1) * sizeof(char));
+            if (buffer != NULL) {
+              size_t pos = start - item->text;
+              size_t len = strlen(basename);
+              strncpy(buffer, item->text, pos);
+              strncpy(buffer + pos, basename, len);
+              buffer[pos + len] = ':';
+              sprintf(buffer + pos + len + 1, "%d", lineinfo->line);
+              strcat(buffer, tail);
+              assert(strlen(buffer) <= sz);
+              free((void*)item->text);
+              item->text = buffer;
+            }
+          }
+        }
+      }
+    }
+  }
 }
 
 
@@ -424,12 +516,11 @@ static int console_add(const char *text, int flags)
     ptr = gdbmi_leader(console_buffer, &xtraflags);
     if ((curflags & STRFLG_MON_OUT) != 0 && (xtraflags & STRFLG_TARGET) != 0)
       xtraflags = (xtraflags & ~STRFLG_TARGET) | STRFLG_STATUS;
-    /* after gdbmi_leader(), there may again be \n in the resulting string */
-    for (tok = strtok((char*)ptr, "\n"); tok != NULL; tok = strtok(NULL, "\n")) {
+    if ((xtraflags & STRFLG_TARGET) != 0 && (curflags & STRFLG_STARTUP) == 0)
+      semihosting_add(&semihosting_root, ptr, curflags | xtraflags);
+    /* after gdbmi_leader(), there may again be '\n' characters in the resulting string */
+    for (tok = strtok((char*)ptr, "\n"); tok != NULL; tok = strtok(NULL, "\n"))
       stringlist_add(&consolestring_root, tok, curflags | xtraflags);
-      if ((xtraflags & STRFLG_TARGET) != 0 && (curflags & STRFLG_STARTUP) == 0)
-        stringlist_add(&semihosting_root, tok, curflags | xtraflags);
-    }
     console_buffer[0] = '\0';
   }
   curflags = flags;
@@ -464,8 +555,10 @@ static int console_add(const char *text, int flags)
       if (prompt) {
         foundprompt = 1;  /* don't add prompt to the output console, but mark that we've seen it */
       } else {
-        /* after gdbmi_leader(), there may again be \n in the resulting string */
+        /* after gdbmi_leader(), there may again be '\n' characters in the resulting string */
         char *tok;
+        if ((xtraflags & STRFLG_TARGET) != 0 && (curflags & STRFLG_STARTUP) == 0)
+          semihosting_add(&semihosting_root, ptr, curflags | xtraflags);
         for (tok = strtok((char*)ptr, "\n"); tok != NULL; tok = strtok(NULL, "\n")) {
           /* avoid adding a "log" string when the same string is at the tail of
              the list */
@@ -475,8 +568,6 @@ static int console_add(const char *text, int flags)
               continue;
           }
           stringlist_add(&consolestring_root, tok, flags | xtraflags);
-          if ((xtraflags & STRFLG_TARGET) != 0 && (curflags & STRFLG_STARTUP) == 0)
-            stringlist_add(&semihosting_root, tok, curflags | xtraflags);
         }
       }
       console_buffer[0]= '\0';
@@ -649,7 +740,7 @@ static int console_autocomplete(char *text, size_t textsize, const DWARF_SYMBOLL
               }
             } else if (strcmp(ptr, "%var") == 0 || strcmp(ptr, "%func") == 0) {
               const DWARF_SYMBOLLIST *sym;
-              for (idx = 0; !result && (sym = dwarf_get_sym(symboltable, idx)) != 0; idx++) {
+              for (idx = 0; !result && (sym = dwarf_sym_from_index(symboltable, idx)) != 0; idx++) {
                 assert(sym->name != NULL);
                 if (strncmp(word, sym->name, len)== 0) {
                   if ((strcmp(ptr, "%var") == 0 && sym->address == 0) || (strcmp(ptr, "%func") == 0 && sym->address != 0)) {
@@ -2392,9 +2483,9 @@ static int handle_list_cmd(const char *command, const DWARF_SYMBOLLIST *symbolta
     } else {
       const DWARF_SYMBOLLIST *sym;              /* "list filename", "list filename:#" or "list function" */
       unsigned line = 0, idx = UINT_MAX;
-      sym = dwarf_lookup_sym(symboltable, p1);
+      sym = dwarf_sym_from_name(symboltable, p1);
       if (sym != NULL) {
-        const char *path = dwarf_lookup_path(filetable, sym->fileindex);
+        const char *path = dwarf_path_from_index(filetable, sym->fileindex);
         if (path != NULL)
           idx = source_lookup(path);
         line = sym->line;
@@ -2840,9 +2931,6 @@ int main(int argc, char *argv[])
   unsigned watchseq;
   unsigned long scriptparams[3];
   const char **sourcefiles = NULL;
-  DWARF_LINELOOKUP linetable = { NULL };
-  DWARF_SYMBOLLIST symboltable = { NULL};
-  DWARF_PATHLIST filetable = { NULL};
 
   /* locate the configuration file */
   if (folder_AppConfig(txtConfigFile, sizearray(txtConfigFile))) {
@@ -3104,10 +3192,12 @@ int main(int argc, char *argv[])
               console_add(cmd, STRFLG_ERROR);
             }
           }
-          if (strlen(mcu_family) > 0)
+          if (strlen(mcu_family) > 0) {
+            bmscript_load(mcu_family);
             curstate = STATE_ASYNC_MODE;
-          else
+          } else {
             set_idle_time(1000); /* stay in scan state, so toggling TPWR works */
+          }
           gdbmi_sethandled(0);
         }
         break;
@@ -3144,7 +3234,7 @@ int main(int argc, char *argv[])
         if (!atprompt)
           break;
         if (prevstate != curstate) {
-          dwarf_cleanup(&linetable, &symboltable, &filetable);
+          dwarf_cleanup(&dwarf_linetable, &dwarf_symboltable, &dwarf_filetable);
           /* create parameter filename from target filename, then read target-specific settings */
           strlcpy(txtParamFile, txtFilename, sizearray(txtParamFile));
           strlcat(txtParamFile, ".bmcfg", sizearray(txtParamFile));
@@ -3181,7 +3271,7 @@ int main(int argc, char *argv[])
           FILE *fp = fopen(txtFilename, "rb");
           if (fp != NULL) {
             int address_size;
-            dwarf_read(fp,&linetable,&symboltable,&filetable,&address_size);
+            dwarf_read(fp,&dwarf_linetable,&dwarf_symboltable,&dwarf_filetable,&address_size);
             fclose(fp);
           }
           /* clear source files (if any were loaded); these will be reloaded
@@ -3235,7 +3325,7 @@ int main(int argc, char *argv[])
         if (!atprompt)
           break;
         if (prevstate != curstate) {
-          if (bmscript_line_fmt("memremap", mcu_family, cmd, NULL)) {
+          if (bmscript_line_fmt("memremap", cmd, NULL)) {
             /* run first line from the script */
             task_stdin(&task, cmd);
             atprompt = 0;
@@ -3248,7 +3338,7 @@ int main(int argc, char *argv[])
         } else if (gdbmi_isresult() != NULL) {
           /* run next line from the script (on the end of the script, move to
              the next state) */
-          if (bmscript_line_fmt(NULL, mcu_family, cmd, NULL)) {
+          if (bmscript_line_fmt(NULL, cmd, NULL)) {
             task_stdin(&task, cmd);
             atprompt = 0;
           } else {
@@ -3311,7 +3401,7 @@ int main(int argc, char *argv[])
            we have for some reason failed to load/parse the DWARF information) */
         if (strlen(txtEntryPoint) == 0)
           strcpy(txtEntryPoint, "main");
-        if (prevstate != curstate && dwarf_lookup_sym(&symboltable, txtEntryPoint)!= NULL) {
+        if (prevstate != curstate && dwarf_sym_from_name(&dwarf_symboltable, txtEntryPoint)!= NULL) {
           //??? also check whether "main" (or the chosen entry point) is a function
           curstate = STATE_START;     /* main() found, restart program at main */
           break;
@@ -3573,7 +3663,7 @@ int main(int argc, char *argv[])
         if (!atprompt)
           break;
         if (prevstate != curstate) {
-          if (bmscript_line_fmt("swo-device", mcu_family, cmd, NULL)) {
+          if (bmscript_line_fmt("swo_device", cmd, NULL)) {
             /* run first line from the script */
             task_stdin(&task, cmd);
             atprompt = 0;
@@ -3586,7 +3676,7 @@ int main(int argc, char *argv[])
         } else if (gdbmi_isresult() != NULL) {
           /* run next line from the script (on the end of the script, move to
              the next state) */
-          if (bmscript_line_fmt(NULL, mcu_family, cmd, NULL)) {
+          if (bmscript_line_fmt(NULL, cmd, NULL)) {
             task_stdin(&task, cmd);
             atprompt = 0;
           } else {
@@ -3607,7 +3697,7 @@ int main(int argc, char *argv[])
           assert(opt_swo.bitrate > 0 && opt_swo.clock > 0);
           scriptparams[0] = (opt_swo.mode == SWOMODE_MANCHESTER) ? 1 : 2;
           scriptparams[1] = opt_swo.clock / opt_swo.bitrate - 1;
-          if (bmscript_line_fmt("swo-generic", mcu_family, cmd, scriptparams)) {
+          if (bmscript_line_fmt("swo_generic", cmd, scriptparams)) {
             /* run first line from the script */
             task_stdin(&task, cmd);
             atprompt = 0;
@@ -3620,7 +3710,7 @@ int main(int argc, char *argv[])
         } else if (gdbmi_isresult() != NULL) {
           /* run next line from the script (on the end of the script, move to
              the next state) */
-          if (bmscript_line_fmt(NULL, mcu_family, cmd, scriptparams)) {
+          if (bmscript_line_fmt(NULL, cmd, scriptparams)) {
             task_stdin(&task, cmd);
             atprompt = 0;
           } else {
@@ -3642,7 +3732,7 @@ int main(int argc, char *argv[])
               if (channel_getenabled(idx))
                 scriptparams[0] |= (1 << idx);
           }
-          if (bmscript_line_fmt("swo-channels", mcu_family, cmd, scriptparams)) {
+          if (bmscript_line_fmt("swo_channels", cmd, scriptparams)) {
             /* run first line from the script */
             task_stdin(&task, cmd);
             atprompt = 0;
@@ -3655,7 +3745,7 @@ int main(int argc, char *argv[])
         } else if (gdbmi_isresult() != NULL) {
           /* run next line from the script (on the end of the script, move to
              the next state) */
-          if (bmscript_line_fmt(NULL, mcu_family, cmd, scriptparams)) {
+          if (bmscript_line_fmt(NULL, cmd, scriptparams)) {
             task_stdin(&task, cmd);
             atprompt = 0;
           } else {
@@ -3962,7 +4052,7 @@ int main(int argc, char *argv[])
                   }
                 }
                 tab_states[TAB_SWO] = nk_true;  /* make sure the SWO tracing view is open */
-              } else if (!handle_list_cmd(console_edit, &symboltable, &filetable)
+              } else if (!handle_list_cmd(console_edit, &dwarf_symboltable, &dwarf_filetable)
                          && !handle_find_cmd(console_edit))
               {
                 /* check monitor command, to avoid that the output should goes
@@ -4316,7 +4406,7 @@ int main(int argc, char *argv[])
           console_activate = 2;
         }
       } else if (nk_input_is_key_pressed(&ctx->input, NK_KEY_TAB)) {
-        if (console_autocomplete(console_edit, sizearray(console_edit), &symboltable))
+        if (console_autocomplete(console_edit, sizearray(console_edit), &dwarf_symboltable))
           console_activate = 2;
       }
 
@@ -4361,9 +4451,11 @@ int main(int argc, char *argv[])
   guidriver_close();
   stringlist_clear(&consolestring_root);
   stringlist_clear(&consoleedit_root);
+  stringlist_clear(&semihosting_root);
   console_clear();
   sources_clear(nk_true);
-  dwarf_cleanup(&linetable,&symboltable,&filetable);
+  bmscript_clear();
+  dwarf_cleanup(&dwarf_linetable,&dwarf_symboltable,&dwarf_filetable);
   return exitcode;
 }
 

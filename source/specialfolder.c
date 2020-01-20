@@ -202,6 +202,11 @@ static int GetDefaultFolder(char *path, size_t maxlength,
 
 
 /** folder_AppData() the base name for storing application data.
+ *  \param path       [out] The resulting path is stored in this buffer. On
+ *                    failure to find the path, this parameter is set to an
+ *                    empty string.
+ *  \param maxlength  [in] The size of the "path" buffer.
+ *  \return 1 on success, 0 on failure.
  */
 int folder_AppData(char *path, size_t maxlength)
 {
@@ -209,8 +214,10 @@ int folder_AppData(char *path, size_t maxlength)
   #if defined _WIN32
     return GetShellFolder(CSIDL_APPDATA, path, maxlength);
   #elif defined __APPLE__
-    if (GetHomeFolder(path, maxlength))
+    int result = GetHomeFolder(path, maxlength);
+    if (result)
       strlcat(path, "/Library/Application Support", maxlength);
+    return result;
   #else
     return GetDefaultFolder(path, maxlength, "XDG_DATA_HOME", ".local/share");
   #endif
@@ -218,6 +225,11 @@ int folder_AppData(char *path, size_t maxlength)
 
 /** folder_AppConfig() the base name for storing configuration files for the
  *  application.
+ *  \param path       [out] The resulting path is stored in this buffer. On
+ *                    failure to find the path, this parameter is set to an
+ *                    empty string.
+ *  \param maxlength  [in] The size of the "path" buffer.
+ *  \return 1 on success, 0 on failure.
  */
 int folder_AppConfig(char *path, size_t maxlength)
 {
@@ -225,8 +237,10 @@ int folder_AppConfig(char *path, size_t maxlength)
   #if defined _WIN32
     return GetShellFolder(CSIDL_APPDATA, path, maxlength);
   #elif defined __APPLE__
-    if (GetHomeFolder(path, maxlength))
+    int result = GetHomeFolder(path, maxlength);
+    if (result)
       strlcat(path, "/Library/Application Support", maxlength);
+    return result;
   #else
     return GetDefaultFolder(path, maxlength, "XDG_CONFIG_HOME", ".config");
   #endif

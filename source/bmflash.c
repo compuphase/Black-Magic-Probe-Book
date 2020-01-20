@@ -966,6 +966,7 @@ int main(int argc, char *argv[])
     ini_puts("Session", "recent", txtFilename, txtConfigFile);
 
   guidriver_close();
+  bmscript_clear();
   gdbrsp_packetsize(0);
   if (rs232_isopen()) {
     rs232_dtr(0);

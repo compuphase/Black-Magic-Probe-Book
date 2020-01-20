@@ -46,10 +46,10 @@ typedef struct tagDWARF_LINELOOKUP {
 int dwarf_read(FILE *fp,DWARF_LINELOOKUP *linetable,DWARF_SYMBOLLIST *symboltable,DWARF_PATHLIST *filetable,int *address_size);
 void dwarf_cleanup(DWARF_LINELOOKUP *linetable,DWARF_SYMBOLLIST *symboltable,DWARF_PATHLIST *filetable);
 
-const DWARF_SYMBOLLIST *dwarf_lookup_sym(const DWARF_SYMBOLLIST *symboltable,const char *name);
-const DWARF_SYMBOLLIST *dwarf_get_sym(const DWARF_SYMBOLLIST *symboltable,unsigned index);
-const char *dwarf_lookup_path(const DWARF_PATHLIST *filetable,int fileindex);
-const DWARF_LINELOOKUP *dwarf_lookup_line(const DWARF_LINELOOKUP *linetable,unsigned address);
+const DWARF_SYMBOLLIST *dwarf_sym_from_name(const DWARF_SYMBOLLIST *symboltable,const char *name);
+const DWARF_SYMBOLLIST *dwarf_sym_from_index(const DWARF_SYMBOLLIST *symboltable,unsigned index);
+const char *dwarf_path_from_index(const DWARF_PATHLIST *filetable,int fileindex);
+const DWARF_LINELOOKUP *dwarf_line_from_address(const DWARF_LINELOOKUP *linetable,unsigned address);
 
 #if defined __cplusplus
   }

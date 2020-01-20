@@ -3,7 +3,7 @@
  * automatically handle device-specific settings. It can use the GDB-RSP serial
  * interface, or the GDB-MI console interface.
  *
- * Copyright 2019 CompuPhase
+ * Copyright 2019-2020 CompuPhase
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -28,11 +28,12 @@
 
 #define SCRIPT_MAGIC  0x6dce7fd0  /**< magic value for parameter replacement */
 
-int bmscript_line(const char *name, const char *mcu, char *oper,
-                  uint32_t *address, uint32_t *value, uint8_t *size);
-int bmscript_line_fmt(const char *name, const char *mcu, char *line, const unsigned long *params);
-
+int bmscript_load(const char *mcu);
+void bmscript_clear(void);
 void bmscript_clearcache(void);
+
+int bmscript_line(const char *name, char *oper, uint32_t *address, uint32_t *value, uint8_t *size);
+int bmscript_line_fmt(const char *name, char *line, const unsigned long *params);
 
 #if defined __cplusplus
   }

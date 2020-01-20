@@ -1325,7 +1325,7 @@ void dwarf_cleanup(DWARF_LINELOOKUP *linetable,DWARF_SYMBOLLIST *symboltable,DWA
   path_deletetable(filetable);
 }
 
-const DWARF_SYMBOLLIST *dwarf_lookup_sym(const DWARF_SYMBOLLIST *symboltable,const char *name)
+const DWARF_SYMBOLLIST *dwarf_sym_from_name(const DWARF_SYMBOLLIST *symboltable,const char *name)
 {
   const DWARF_SYMBOLLIST *sym;
 
@@ -1339,7 +1339,7 @@ const DWARF_SYMBOLLIST *dwarf_lookup_sym(const DWARF_SYMBOLLIST *symboltable,con
   return NULL;
 }
 
-const DWARF_SYMBOLLIST *dwarf_get_sym(const DWARF_SYMBOLLIST *symboltable,unsigned index)
+const DWARF_SYMBOLLIST *dwarf_sym_from_index(const DWARF_SYMBOLLIST *symboltable,unsigned index)
 {
   const DWARF_SYMBOLLIST *sym;
 
@@ -1351,7 +1351,7 @@ const DWARF_SYMBOLLIST *dwarf_get_sym(const DWARF_SYMBOLLIST *symboltable,unsign
   return NULL;
 }
 
-const char *dwarf_lookup_path(const DWARF_PATHLIST *filetable,int fileindex)
+const char *dwarf_path_from_index(const DWARF_PATHLIST *filetable,int fileindex)
 {
   const DWARF_PATHLIST *file;
 
@@ -1362,7 +1362,7 @@ const char *dwarf_lookup_path(const DWARF_PATHLIST *filetable,int fileindex)
   return (file!=NULL) ? file->name : NULL;
 }
 
-const DWARF_LINELOOKUP *dwarf_lookup_address(const DWARF_LINELOOKUP *linetable,unsigned address)
+const DWARF_LINELOOKUP *dwarf_line_from_address(const DWARF_LINELOOKUP *linetable,unsigned address)
 {
   const DWARF_LINELOOKUP *line;
 
