@@ -341,18 +341,18 @@ int main(int argc, char *argv[])
           /* initialize the target (target-specific configuration, generic
              configuration and channels */
           unsigned long params[2];
-          bmp_runscript("swo-device", mcu_driver, NULL);
+          bmp_runscript("swo_device", mcu_driver, NULL);
           assert(opt_mode == MODE_MANCHESTER || opt_mode == MODE_ASYNC);
           params[0] = opt_mode;
           params[1] = cpuclock / bitrate - 1;
-          bmp_runscript("swo-generic", mcu_driver, params);
+          bmp_runscript("swo_generic", mcu_driver, params);
           /* enable active channels in the target (disable inactive channels) */
           channelmask = 0;
           for (chan = 0; chan < NUM_CHANNELS; chan++)
             if (channel_getenabled(chan))
               channelmask |= (1 << chan);
           params[0] = channelmask;
-          bmp_runscript("swo-channels", mcu_driver, params);
+          bmp_runscript("swo_channels", mcu_driver, params);
         }
       } else if (rs232_isopen()) {
         /* no initialization is requested, if the serial port is open, close it
@@ -386,12 +386,12 @@ int main(int argc, char *argv[])
         break;
       case TRACESTAT_NO_ACCESS:
         recent_statuscode = BMPERR_GENERAL;
-        sprintf(msg, "Trace access denied (error %d)", trace_errno());
+        sprintf(msg, "Trace access denied (error %lu)", trace_errno());
         tracelog_statusmsg(TRACESTATMSG_BMP, msg, recent_statuscode);
         break;
       case TRACESTAT_NO_THREAD:
         recent_statuscode = BMPERR_GENERAL;
-        sprintf(msg, "Multithreading failed (error %d)", trace_errno());
+        sprintf(msg, "Multithreading failed (error %lu)", trace_errno());
         tracelog_statusmsg(TRACESTATMSG_BMP, msg, recent_statuscode);
         break;
       case TRACESTAT_NO_CONNECT:
@@ -645,7 +645,7 @@ int main(int argc, char *argv[])
                   channelmask |= (1 << chan);
                 else
                   channelmask &= ~(1 << chan);
-                bmp_runscript("swo-channels", mcu_driver, &channelmask);
+                bmp_runscript("swo_channels", mcu_driver, &channelmask);
               }
             }
             clrbk = channel_getcolor(chan);
@@ -787,6 +787,7 @@ int main(int argc, char *argv[])
   trace_close();
   guidriver_close();
   tracestring_clear();
+  bmscript_clear();
   gdbrsp_packetsize(0);
   ctf_parse_cleanup();
   ctf_decode_cleanup();

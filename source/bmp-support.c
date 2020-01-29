@@ -2,7 +2,7 @@
  * General purpose Black Magic Probe support routines, based on the GDB-RSP
  * serial interface. The "script" support can also be used with GDB.
  *
- * Copyright 2019 CompuPhase
+ * Copyright 2019-2020 CompuPhase
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -628,7 +628,7 @@ static int hex2byte_array(const char *hex, unsigned char *byte)
  *  for device-specific initialization.
  *
  *  \param name     The name of the script.
- *  \param driver   The name of the MCU driver.
+ *  \param driver   The name of the MCU driver (the MCU family name).
  *  \param params   An optional array with parameters to the script, this number
  *                  of required parameters depends on the stript.
  *
@@ -645,15 +645,16 @@ int bmp_runscript(const char *name, const char *driver, const unsigned long *par
   int result;
 
   bmscript_clearcache();
+  bmscript_load(driver);  /* very quick if the scripts are already in memory */
   result = 1;
-  while (result && bmscript_line(name, driver, &oper, &address, &value, &size)) {
+  while (result && bmscript_line(name, &oper, &address, &value, &size)) {
     char cmd[100];
     size_t len = 0;
     if ((value & ~0xf) == SCRIPT_MAGIC) {
       assert(params != NULL);
       value = (uint32_t)params[value & 0xf];  /* replace parameters */
     }
-    if (oper == '|' || oper == '~') {
+    if (oper == '|' || oper == '&' || oper == '~') {
       uint32_t cur = 0;
       uint8_t bytes[4] = { 0, 0, 0, 0 };
       sprintf(cmd, "m%08X,%X:", address, size);
@@ -664,6 +665,8 @@ int bmp_runscript(const char *name, const char *driver, const unsigned long *par
       memmove(&cur, bytes, size);
       if (oper == '|')
         value |= cur;
+      else if (oper == '&')
+        value &= cur;
       else
         value &= ~cur;
     }
