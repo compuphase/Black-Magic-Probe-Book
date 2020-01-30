@@ -86,8 +86,8 @@ OBJLIST_BMFLASH = bmflash.o bmp-scan.o bmp-script.o bmp-support.o crc32.o \
                   findfont.o lodepng.o
 
 OBJLIST_BMTRACE = bmtrace.o bmp-scan.o bmp-script.o bmp-support.o crc32.o \
-                  elf.o gdb-rsp.o guidriver.o minIni.o nuklear_tooltip.o \
-                  rs232.o specialfolder.o xmltractor.o \
+                  dwarf.o elf.o gdb-rsp.o guidriver.o minIni.o
+                  nuklear_tooltip.o rs232.o specialfolder.o xmltractor.o \
                   decodectf.o parsetsdl.o swotrace.o \
                   nuklear.o nuklear_glfw_gl2.o noc_file_dialog.o \
                   findfont.o lodepng.o

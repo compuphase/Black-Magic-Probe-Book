@@ -35,6 +35,7 @@
 #include "parsetsdl.h"
 #include "decodectf.h"
 
+
 #if !defined sizearray
   #define sizearray(a)  (sizeof(a) / sizeof((a)[0]))
 #endif
@@ -75,6 +76,8 @@ static TRACEMSG *msgstack = NULL;
 static size_t msgstack_size = 0;
 static size_t msgstack_head = 0;
 static size_t msgstack_tail = 0;
+
+static const DWARF_SYMBOLLIST *symboltable = NULL;
 
 
 static void cache_grow(size_t extra)
@@ -252,6 +255,25 @@ int msgstack_peek(uint16_t *streamid, double *timestamp, const char **message)
   return 1;
 }
 
+void ctf_set_symtable(const DWARF_SYMBOLLIST *symtable)
+{
+  symboltable = symtable;
+}
+
+static int lookup_symbol(uint32_t address, char *symname, size_t maxlength)
+{
+  const DWARF_SYMBOLLIST *sym;
+
+  if (symboltable == NULL)
+    return 0;
+  sym = dwarf_sym_from_address(symboltable, address, 1);
+  if (sym == NULL)
+    return 0;
+  assert(sym->name != NULL);
+  strlcpy(symname, sym->name, maxlength);
+  return 1;
+}
+
 static void str_reverse(char *str, int length)
 {
   char *tail;
@@ -341,7 +363,7 @@ static void format_field(const char *fieldname, const CTF_TYPE *type, const unsi
 
   switch (type->typeclass) {
   case CLASS_INTEGER: {
-    char txt[32];
+    char txt[128];
     uint8_t base = type->base;
     if (base < 2 || base > 16)
       base = 10;
@@ -355,10 +377,14 @@ static void format_field(const char *fieldname, const CTF_TYPE *type, const unsi
     } else {
       uint32_t v = 0;
       memcpy(&v, data, type->size / 8);
-      if (type->flags & TYPEFLAG_SIGNED)
+      if (base == CTF_BASE_ADDR) {
+        if (!lookup_symbol(v, txt, sizearray(txt)))
+          fmt_uint32(v, txt, 16);
+      } else if (type->flags & TYPEFLAG_SIGNED) {
         fmt_int32((int32_t)v, txt, base);
-      else
+      } else {
         fmt_uint32(v, txt, base);
+      }
     }
     msgbuffer_append(txt, -1);
     break;

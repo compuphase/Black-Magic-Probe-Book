@@ -285,14 +285,18 @@ static const char *parseline(const char *line, const REG_DEF *registers, size_t 
 
   /* operation */
   line = skipleading(line);
-  assert(*line == '=' || *line == '|' || *line == '&');
+  assert(*line == '=' || *line == '|' || *line == '&' || *line == '~');
   assert(oper != NULL);
   *oper = *line++;
+  if (*oper == '~') {
+    *oper = '&';
+    invert ^= 1;    /* "a ~= b" means "a &= ~b" */
+  }
   if (*line == '=')
-    line++;     /* allow |= to mean | and &= to mean & */
+    line++;         /* allow |= to mean | and &= to mean & */
   line = skipleading(line);
   if (*line == '~') {
-    invert = 1;
+    invert ^= 1;
     line = skipleading(line + 1);
   }
 
@@ -301,7 +305,7 @@ static const char *parseline(const char *line, const REG_DEF *registers, size_t 
   if (*line == '$') {
     *value = SCRIPT_MAGIC + (line[1] - '0');
     line += 2;
-    assert(!invert || *oper == '&');
+    assert(!invert || *oper == '&');  /* limitation: only support parameter inversion with &= */
     if (*oper == '&' && invert)
       *oper = '~';
   } else {

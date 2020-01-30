@@ -75,6 +75,14 @@
 #  define sizearray(e)    (sizeof(e) / sizeof((e)[0]))
 #endif
 
+#if defined WIN32 || defined _WIN32
+  #define DIRSEP_CHAR '\\'
+  #define IS_OPTION(s)  ((s)[0] == '-' || (s)[0] == '/')
+#else
+  #define DIRSEP_CHAR '/'
+  #define IS_OPTION(s)  ((s)[0] == '-')
+#endif
+
 
 #define FONT_HEIGHT     14
 #define WINDOW_WIDTH    (30 * opt_fontsize)
@@ -589,7 +597,7 @@ int main(int argc, char *argv[])
   for (idx = 1; idx < argc; idx++) {
     const char *ptr;
     int value;
-    if (argv[idx][0] == '-' || argv[idx][0] == '/') {
+    if (IS_OPTION(argv[idx])) {
       switch (argv[idx][1]) {
       case '?':
       case 'h':

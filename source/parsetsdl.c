@@ -651,6 +651,8 @@ static double token_getreal(void)
 static int token_match(int token)
 {
   int tok = token_next();
+  if (token == TOK_IDENTIFIER && tok == TOK_LSTRING)
+    tok = token;  /* identifiers may be quoted */
   if (tok != token)
     token_pushback();
   return tok == token;
@@ -929,16 +931,18 @@ static void parse_typealias_fields(CTF_TYPE *type)
           const char *p;
           token_need(TOK_IDENTIFIER);
           p = token_gettext();
-          if (strcmp(p, "decimal") || strcmp(p, "dec") || strcmp(p, "d") || strcmp(p, "i"))
+          if (strcmp(p, "decimal") || strcmp(p, "dec") || strcmp(p, "d") || strcmp(p, "i")) {
             type->base = 10;
-          else if (strcmp(p, "hexadecimal") || strcmp(p, "hex") || stricmp(p, "x"))
+          } else if (strcmp(p, "hexadecimal") || strcmp(p, "hex") || stricmp(p, "x")) {
             type->base = 16;
-          else if (strcmp(p, "octal") || strcmp(p, "oct") || stricmp(p, "o"))
+          } else if (strcmp(p, "octal") || strcmp(p, "oct") || stricmp(p, "o")) {
             type->base = 8;
-          else if (strcmp(p, "binary") || stricmp(p, "b"))
+          } else if (strcmp(p, "binary") || stricmp(p, "b")) {
             type->base = 2;
-          else if (strcmp(p, "address") || stricmp(p, "addr"))
+          } else if (strcmp(p, "symaddress") || stricmp(p, "symaddr")) {
             type->base = CTF_BASE_ADDR;
+            type->flags &= ~TYPEFLAG_SIGNED;
+          }
         }
       } else if (strcmp(identifier, "byte_order") == 0 || strcmp(identifier, "exp_dig") == 0  || strcmp(identifier, "mant_dig") == 0) {
         token_need(TOK_IDENTIFIER);

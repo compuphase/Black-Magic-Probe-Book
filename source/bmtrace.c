@@ -57,6 +57,8 @@
 #include "rs232.h"
 #include "specialfolder.h"
 
+#include "dwarf.h"
+#include "elf.h"
 #include "parsetsdl.h"
 #include "decodectf.h"
 #include "swotrace.h"
@@ -82,6 +84,15 @@
   #define sizearray(e)    (sizeof(e) / sizeof((e)[0]))
 #endif
 
+#if defined WIN32 || defined _WIN32
+  #define IS_OPTION(s)  ((s)[0] == '-' || (s)[0] == '/')
+#else
+  #define IS_OPTION(s)  ((s)[0] == '-')
+#endif
+
+static DWARF_LINELOOKUP dwarf_linetable = { NULL };
+static DWARF_SYMBOLLIST dwarf_symboltable = { NULL};
+static DWARF_PATHLIST dwarf_filetable = { NULL};
 
 static int recent_statuscode = 0;
 
@@ -193,17 +204,18 @@ int main(int argc, char *argv[])
   enum nk_collapse_states tab_states[TAB_COUNT];
   char mcu_driver[32];
   char txtConfigFile[_MAX_PATH], findtext[128] = "", valstr[128] = "";
-  char txtTSDLfile[_MAX_PATH] = "";
+  char txtTSDLfile[_MAX_PATH] = "", txtELFfile[_MAX_PATH] = "";
   char cpuclock_str[15] = "", bitrate_str[15] = "";
   unsigned long cpuclock = 0, bitrate = 0;
   int chan, cur_chan_edit = -1;
   unsigned long channelmask = 0;
   enum { MODE_MANCHESTER = 1, MODE_ASYNC } opt_mode = MODE_MANCHESTER;
+  unsigned char trace_endpoint = BMP_EP_TRACE;
   int opt_init_target = 1;
   int opt_init_bmp = 1;
   int opt_datasize = 0;
   int opt_fontsize = FONT_HEIGHT;
-  int trace_status = 0;
+  int trace_status = TRACESTAT_NOT_INIT;
   int trace_running = 1;
   int reinitialize =  1;
   int reload_format = 1;
@@ -244,6 +256,7 @@ int main(int argc, char *argv[])
   }
   opt_datasize = (int)ini_getl("Settings", "datasize", 1, txtConfigFile);
   ini_gets("Settings", "tsdl", "", txtTSDLfile, sizearray(txtTSDLfile), txtConfigFile);
+  ini_gets("Settings", "elf", "", txtELFfile, sizearray(txtELFfile), txtConfigFile);
   ini_gets("Settings", "mcu-freq", "48000000", cpuclock_str, sizearray(cpuclock_str), txtConfigFile);
   ini_gets("Settings", "bitrate", "100000", bitrate_str, sizearray(bitrate_str), txtConfigFile);
   ini_gets("Settings", "size", "", valstr, sizearray(valstr), txtConfigFile);
@@ -280,7 +293,7 @@ int main(int argc, char *argv[])
   for (idx = 1; idx < argc; idx++) {
     const char *ptr;
     int value;
-    if (argv[idx][0] == '-' || argv[idx][0] == '/') {
+    if (IS_OPTION(argv[idx])) {
       switch (argv[idx][1]) {
       case '?':
       case 'h':
@@ -305,6 +318,27 @@ int main(int argc, char *argv[])
         fprintf(stderr, "Unknown option %s; use option -h for help.\n", argv[idx]);
         return 1;
       }
+    } else if (access(argv[idx], 0) == 0) {
+      /* parameter is a filename, test whether that is an ELF file */
+      FILE *fp = fopen(argv[idx], "rb");
+      if (fp != NULL) {
+        int err = elf_info(fp, NULL, NULL, NULL);
+        if (err == ELFERR_NONE) {
+          strlcpy(txtELFfile, argv[idx], sizearray(txtELFfile));
+          if (access(txtTSDLfile, 0) != 0) {
+            /* see whether there is a TSDL file with a matching name */
+            char *ext;
+            strlcpy(txtTSDLfile, txtELFfile, sizearray(txtTSDLfile));
+            ext = strrchr(txtTSDLfile, '.');
+            if (ext != NULL && strpbrk(ext, "\\/") == NULL)
+              *ext = '\0';
+            strlcat(txtTSDLfile, ".tsdl", sizearray(txtTSDLfile));
+            if (access(txtTSDLfile, 0) != 0)
+              txtTSDLfile[0] = '\0';  /* newly constructed file not found, clear name */
+          }
+        }
+        fclose(fp);
+      }
     }
   }
 
@@ -325,9 +359,6 @@ int main(int argc, char *argv[])
         cpuclock = 48000000;
       if ((bitrate = strtol(bitrate_str, NULL, 10)) == 0)
         bitrate = 100000;
-      trace_status = trace_init();  /* this does nothing if initialization had already succeeded */
-      if (trace_status != TRACESTAT_OK)
-        trace_running = 0;
       if (opt_init_target || opt_init_bmp) {
         /* open/reset the serial port/device if any initialization must be done */
         if (rs232_isopen())
@@ -361,11 +392,13 @@ int main(int argc, char *argv[])
         result = 1; /* flag status = ok, to drop into the next "if" */
       }
       if (result) {
-        if (result && opt_init_bmp)
-          bmp_enabletrace((opt_mode == MODE_ASYNC) ? bitrate : 0);
+        if (opt_init_bmp)
+          bmp_enabletrace((opt_mode == MODE_ASYNC) ? bitrate : 0, &trace_endpoint);
+        trace_status = trace_init(trace_endpoint);  /* this does nothing if initialization had already succeeded */
         bmp_restart();
       }
       tracestring_clear();
+      trace_running = (trace_status != TRACESTAT_OK);
       switch (trace_status) {
       case TRACESTAT_OK:
         recent_statuscode = BMPSTAT_SUCCESS;
@@ -408,6 +441,7 @@ int main(int argc, char *argv[])
       ctf_parse_cleanup();
       ctf_decode_cleanup();
       tracestring_clear();
+      dwarf_cleanup(&dwarf_linetable, &dwarf_symboltable, &dwarf_filetable);
       cur_match_line = -1;
       tracelog_statusmsg(TRACESTATMSG_CTF, NULL, 0);
       ctf_error_notify(CTFERR_NONE, 0, NULL);
@@ -421,6 +455,14 @@ int main(int argc, char *argv[])
               channel_setname(seqnr, stream->name);
         } else {
           ctf_parse_cleanup();
+        }
+      }
+      if (strlen(txtELFfile) > 0 && access(txtELFfile, 0) == 0) {
+        FILE *fp = fopen(txtELFfile, "rb");
+        if (fp != NULL) {
+          int address_size;
+          dwarf_read(fp, &dwarf_linetable, &dwarf_symboltable, &dwarf_filetable, &address_size);
+          fclose(fp);
         }
       }
       reload_format = 0;
@@ -493,7 +535,7 @@ int main(int argc, char *argv[])
         if (nk_button_label(ctx, ptr) || nk_input_is_key_pressed(&ctx->input, NK_KEY_F5)) {
           trace_running = !trace_running;
           if (trace_running && trace_status != TRACESTAT_OK) {
-            trace_status = trace_init();
+            trace_status = trace_init(trace_endpoint);
             if (trace_status != TRACESTAT_OK)
               trace_running = 0;
           }
@@ -582,27 +624,6 @@ int main(int argc, char *argv[])
             tooltip(ctx, bounds, "SWO bit rate (data rate)", &rc_canvas);
             nk_layout_row_end(ctx);
           }
-          nk_layout_row_begin(ctx, NK_STATIC, ROW_HEIGHT, 3);
-          nk_layout_row_push(ctx, LABEL_WIDTH);
-          nk_label(ctx, "TSDL file", NK_TEXT_ALIGN_LEFT | NK_TEXT_ALIGN_MIDDLE);
-          nk_layout_row_push(ctx, VALUE_WIDTH - BROWSEBTN_WIDTH - 5);
-          bounds = nk_widget_bounds(ctx);
-          result = nk_edit_string_zero_terminated(ctx, NK_EDIT_FIELD | NK_EDIT_SIG_ENTER, txtTSDLfile, sizearray(txtTSDLfile), nk_filter_ascii);
-          if (result & (NK_EDIT_COMMITED | NK_EDIT_DEACTIVATED))
-            reload_format = 1;
-          tooltip(ctx, bounds, "Metadata file for Common Trace Format (CTF)", &rc_canvas);
-          nk_layout_row_push(ctx, BROWSEBTN_WIDTH);
-          if (nk_button_symbol(ctx, NK_SYMBOL_TRIPLE_DOT)) {
-            const char *s = noc_file_dialog_open(NOC_FILE_DIALOG_OPEN,
-                                                 "TSDL files\0*.tsdl;*.ctf\0All files\0*.*\0",
-                                                 NULL, NULL, NULL, guidriver_apphandle());
-            if (s != NULL && strlen(s) < sizearray(txtTSDLfile)) {
-              strcpy(txtTSDLfile, s);
-              reload_format = 1;
-              free((void*)s);
-            }
-          }
-          nk_layout_row_end(ctx);
           nk_layout_row_begin(ctx, NK_STATIC, ROW_HEIGHT, 2);
           nk_layout_row_push(ctx, LABEL_WIDTH);
           nk_label(ctx, "Data size", NK_TEXT_ALIGN_LEFT | NK_TEXT_ALIGN_MIDDLE);
@@ -620,6 +641,52 @@ int main(int argc, char *argv[])
           }
           tooltip(ctx, bounds, "Payload size of an SWO packet (in bits); auto for autodetect", &rc_canvas);
           nk_layout_row_end(ctx);
+          nk_layout_row_begin(ctx, NK_STATIC, ROW_HEIGHT, 3);
+          nk_layout_row_push(ctx, LABEL_WIDTH);
+          nk_label(ctx, "TSDL file", NK_TEXT_ALIGN_LEFT | NK_TEXT_ALIGN_MIDDLE);
+          nk_layout_row_push(ctx, VALUE_WIDTH - BROWSEBTN_WIDTH - 5);
+          bounds = nk_widget_bounds(ctx);
+          result = nk_edit_string_zero_terminated(ctx, NK_EDIT_FIELD | NK_EDIT_SIG_ENTER, txtTSDLfile, sizearray(txtTSDLfile), nk_filter_ascii);
+          if (result & (NK_EDIT_COMMITED | NK_EDIT_DEACTIVATED))
+            reload_format = 1;
+          tooltip(ctx, bounds, "Metadata file for Common Trace Format (CTF)", &rc_canvas);
+          nk_layout_row_push(ctx, BROWSEBTN_WIDTH);
+          if (nk_button_symbol(ctx, NK_SYMBOL_TRIPLE_DOT)) {
+            const char *s = noc_file_dialog_open(NOC_FILE_DIALOG_OPEN,
+                                                 "TSDL files\0*.tsdl;*.ctf\0All files\0*.*\0",
+                                                 NULL, txtTSDLfile, "Select metadata file for CTF",
+                                                 guidriver_apphandle());
+            if (s != NULL && strlen(s) < sizearray(txtTSDLfile)) {
+              strcpy(txtTSDLfile, s);
+              reload_format = 1;
+              free((void*)s);
+            }
+          }
+          nk_layout_row_end(ctx);
+          if (strlen(txtTSDLfile)> 0 && access(txtTSDLfile, 0) == 0) {
+            nk_layout_row_begin(ctx, NK_STATIC, ROW_HEIGHT, 3);
+            nk_layout_row_push(ctx, LABEL_WIDTH);
+            nk_label(ctx, "ELF file", NK_TEXT_ALIGN_LEFT | NK_TEXT_ALIGN_MIDDLE);
+            nk_layout_row_push(ctx, VALUE_WIDTH - BROWSEBTN_WIDTH - 5);
+            bounds = nk_widget_bounds(ctx);
+            result = nk_edit_string_zero_terminated(ctx, NK_EDIT_FIELD | NK_EDIT_SIG_ENTER, txtELFfile, sizearray(txtELFfile), nk_filter_ascii);
+            if (result & (NK_EDIT_COMMITED | NK_EDIT_DEACTIVATED))
+              reload_format = 1;
+            tooltip(ctx, bounds, "ELF file for symbol lookup", &rc_canvas);
+            nk_layout_row_push(ctx, BROWSEBTN_WIDTH);
+            if (nk_button_symbol(ctx, NK_SYMBOL_TRIPLE_DOT)) {
+              const char *s = noc_file_dialog_open(NOC_FILE_DIALOG_OPEN,
+                                                   "ELF Executables\0*.elf;*.bin;*.\0All files\0*.*\0",
+                                                   NULL, txtELFfile, "Select ELF Executable",
+                                                   guidriver_apphandle());
+              if (s != NULL && strlen(s) < sizearray(txtELFfile)) {
+                strcpy(txtELFfile, s);
+                reload_format = 1;
+                free((void*)s);
+              }
+            }
+            nk_layout_row_end(ctx);
+          }
           nk_tree_state_pop(ctx);
         }
 
@@ -772,6 +839,7 @@ int main(int argc, char *argv[])
   ini_putl("Settings", "init-bmp", opt_init_bmp, txtConfigFile);
   ini_putl("Settings", "datasize", opt_datasize, txtConfigFile);
   ini_puts("Settings", "tsdl", txtTSDLfile, txtConfigFile);
+  ini_puts("Settings", "elf", txtELFfile, txtConfigFile);
   ini_putl("Settings", "mcu-freq", cpuclock, txtConfigFile);
   ini_putl("Settings", "bitrate", bitrate, txtConfigFile);
   sprintf(valstr, "%d %d", canvas_width, canvas_height);
@@ -791,6 +859,7 @@ int main(int argc, char *argv[])
   gdbrsp_packetsize(0);
   ctf_parse_cleanup();
   ctf_decode_cleanup();
+  dwarf_cleanup(&dwarf_linetable, &dwarf_symboltable, &dwarf_filetable);
   if (rs232_isopen()) {
     rs232_dtr(0);
     rs232_rts(0);

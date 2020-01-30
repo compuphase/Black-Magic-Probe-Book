@@ -1339,6 +1339,20 @@ const DWARF_SYMBOLLIST *dwarf_sym_from_name(const DWARF_SYMBOLLIST *symboltable,
   return NULL;
 }
 
+const DWARF_SYMBOLLIST *dwarf_sym_from_address(const DWARF_SYMBOLLIST *symboltable,unsigned address,int exact)
+{
+  const DWARF_SYMBOLLIST *sym, *select = NULL;
+
+  assert(symboltable!=NULL);
+  for (sym=symboltable->next; sym!=NULL; sym=sym->next) {
+    if (sym->address==address)
+      return sym;   /* always return the function on an exact address match */
+    if (!exact && sym->address<address)
+      select = sym; /* optionally return the closest function at a lower address */
+  }
+  return select;
+}
+
 const DWARF_SYMBOLLIST *dwarf_sym_from_index(const DWARF_SYMBOLLIST *symboltable,unsigned index)
 {
   const DWARF_SYMBOLLIST *sym;

@@ -19,9 +19,12 @@
 #ifndef _DECODECTF_H
 #define _DECODECTF_H
 
+#include "dwarf.h"
+
 int ctf_decode(const unsigned char *stream, size_t size, long channel);
 void ctf_decode_reset(void);
 void ctf_decode_cleanup(void);
+void ctf_set_symtable(const DWARF_SYMBOLLIST *symtable);
 int msgstack_pop(uint16_t *streamid, double *timestamp, char *message, size_t size);
 int msgstack_peek(uint16_t *streamid, double *timestamp, const char **message);
 

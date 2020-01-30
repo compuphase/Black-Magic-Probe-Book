@@ -181,6 +181,7 @@ static int itm_packet_errors = 0;
 
 void tracestring_add(unsigned channel, const unsigned char *buffer, size_t length, double timestamp)
 {
+  NK_ASSERT(channel < NUM_CHANNELS);
   NK_ASSERT(buffer != NULL);
   NK_ASSERT(length > 0);
 
@@ -382,7 +383,8 @@ void tracestring_process(int enabled)
         /* if the channel changes in the middle of a packet, add a string and
            restart */
         if (chan != ITM_CHANNEL(*pktdata)) {
-          tracestring_add(chan, buffer, buflen, trace_queue[tracequeue_head].timestamp);
+          if (chan < NUM_CHANNELS && buflen > 0)
+            tracestring_add(chan, buffer, buflen, trace_queue[tracequeue_head].timestamp);
           chan = ITM_CHANNEL(*pktdata);
           buflen = 0;
         }
@@ -415,7 +417,7 @@ void tracestring_process(int enabled)
         pktdata += len + 1;
         pktlen -= len + 1;
       }
-      if (buflen)
+      if (chan < NUM_CHANNELS && buflen > 0)
         tracestring_add(chan, buffer, buflen, trace_queue[tracequeue_head].timestamp);
     }
   skip_packet:
@@ -545,7 +547,14 @@ int trace_getpacketerrors(void)
 
 
 #if defined WIN32 || defined _WIN32
+
 static unsigned long win_errno = 0;
+static HANDLE hThread = NULL;
+static HANDLE hUSBdev = INVALID_HANDLE_VALUE;
+static WINUSB_INTERFACE_HANDLE hUSBiface = INVALID_HANDLE_VALUE;
+static unsigned char usbTraceEP = BMP_EP_TRACE;
+static LARGE_INTEGER pcfreq;
+
 
 static BOOL MakeGUID(const char *label, GUID *guid)
 {
@@ -688,6 +697,7 @@ static BOOL usb_ConfigEndpoint(WINUSB_INTERFACE_HANDLE hUSB, unsigned char endpo
   USB_INTERFACE_DESCRIPTOR ifaceDescriptor;
 
   NK_ASSERT(hUSB != INVALID_HANDLE_VALUE);
+  usbTraceEP = endpoint;
 
   if (WinUsb_QueryInterfaceSettings(hUSB, 0, &ifaceDescriptor)) {
     WINUSB_PIPE_INFORMATION pipeInfo;
@@ -702,11 +712,6 @@ static BOOL usb_ConfigEndpoint(WINUSB_INTERFACE_HANDLE hUSB, unsigned char endpo
   win_errno = GetLastError();
   return FALSE;
 }
-
-static HANDLE hThread = NULL;
-static HANDLE hUSBdev = INVALID_HANDLE_VALUE;
-static WINUSB_INTERFACE_HANDLE hUSBiface = INVALID_HANDLE_VALUE;
-static LARGE_INTEGER pcfreq;
 
 /** get_timestamp() return precision timestamp in seconds.
  */
@@ -727,7 +732,7 @@ static DWORD __stdcall trace_read(LPVOID arg)
 
   (void)arg;
   for ( ;; ) {
-    if (WinUsb_ReadPipe(hUSBiface, BMP_EP_TRACE, buffer, sizearray(buffer), &numread, NULL)) {
+    if (WinUsb_ReadPipe(hUSBiface, usbTraceEP, buffer, sizearray(buffer), &numread, NULL)) {
       /* add the packet to the queue */
       int next = (tracequeue_tail + 1) % PACKET_NUM;
       if (numread > 0 && next != tracequeue_head) {
@@ -744,7 +749,7 @@ static DWORD __stdcall trace_read(LPVOID arg)
   return 0;
 }
 
-int trace_init(void)
+int trace_init(unsigned char endpoint)
 {
   TCHAR guid[100], path[_MAX_PATH];
 
@@ -763,7 +768,7 @@ int trace_init(void)
 
   if (!usb_OpenDevice(path, &hUSBdev, &hUSBiface))
     return TRACESTAT_NO_ACCESS;     /* failure opening the device interface */
-  if (!usb_ConfigEndpoint(hUSBiface, BMP_EP_TRACE))
+  if (!usb_ConfigEndpoint(hUSBiface, endpoint))
     return TRACESTAT_NO_PIPE;       /* endpoint pipe could not be found -> not a Black Magic Probe? */
 
   hThread = CreateThread(NULL, 0, trace_read, NULL, 0, NULL);
@@ -800,6 +805,7 @@ unsigned long trace_errno(void)
 
 static pthread_t hThread;
 static libusb_device_handle *hUSBiface;
+static unsigned char usbTraceEP = BMP_EP_TRACE;
 
 static int memicmp(const unsigned char *p1, const unsigned char *p2, size_t count)
 {
@@ -823,7 +829,7 @@ static void *trace_read(void *arg)
 
   (void)arg;
   for ( ;; ) {
-    if (libusb_bulk_transfer(hUSBiface, BMP_EP_TRACE, buffer, sizeof(buffer), &numread, 0) == 0) {
+    if (libusb_bulk_transfer(hUSBiface, usbTraceEP, buffer, sizeof(buffer), &numread, 0) == 0) {
       /* add the packet to the queue */
       int next = (tracequeue_tail + 1) % PACKET_NUM;
       if (numread > 0 && next != tracequeue_head) {
@@ -887,10 +893,12 @@ static int usb_OpenDevice(libusb_device_handle **hUSB, const char *path)
   return TRACESTAT_OK;
 }
 
-int trace_init(void)
+int trace_init(unsigned char endpoint)
 {
   char dev_id[50];
   int result;
+
+  usbTraceEP = endpoint;
 
   if (hThread != 0 && hUSBiface != NULL)
     return TRACESTAT_OK;            /* double initialization */

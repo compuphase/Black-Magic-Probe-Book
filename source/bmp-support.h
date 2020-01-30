@@ -54,7 +54,7 @@ int bmp_fullerase(void);
 int bmp_download(FILE *fp);
 int bmp_verify(FILE *fp);
 
-int bmp_enabletrace(int async_bitrate);
+int bmp_enabletrace(int async_bitrate, unsigned char *endpoint);
 
 int bmp_restart(void);
 int bmp_break(void);

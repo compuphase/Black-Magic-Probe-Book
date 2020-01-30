@@ -542,13 +542,17 @@ int bmp_verify(FILE *fp)
 }
 
 /** bmp_enabletrace() code enables trace in the Black Magic Probe.
- *  \param async_bitrate  The bitrate for ASYNC mode; set to 0 for manchester
- *         mode.
+ *  \param async_bitrate  [IN] The bitrate for ASYNC mode; set to 0 for
+ *                        manchester mode.
+ *  \param endpoint       [OUT] The endpoint for the SWO trace is copied into
+ *                        this parameter. This parameter may be NULL.
+ *
+ *  \return 1 on success, 0 on failure.
  */
-int bmp_enabletrace(int async_bitrate)
+int bmp_enabletrace(int async_bitrate, unsigned char *endpoint)
 {
   char buffer[100], *ptr;
-  int rcvd;
+  int rcvd, ok;
 
   if (!rs232_isopen()) {
     notice(BMPERR_NOCONNECT, "Not connected to Black Magic Probe");
@@ -563,10 +567,18 @@ int bmp_enabletrace(int async_bitrate)
   }
   rcvd = gdbrsp_recv(buffer, sizearray(buffer), 1000);
   /* a correct answer starts with 'o' and contains a serial number, the
-     interface for trace capture (0x05) and the endpoint (0x85) */
+     interface for trace capture (0x05) and the endpoint (0x85, on the original
+     Black Magic Probe) */
   assert(rcvd >= 0);
   buffer[rcvd] = '\0';
-  if ((ptr = strchr(buffer, ':')) == NULL || strtol(ptr + 1, &ptr, 16) != 5 || *ptr != ':' || strtol(ptr + 1, NULL, 16) != 0x85) {
+  ok = ((ptr = strchr(buffer, ':')) != NULL && strtol(ptr + 1, &ptr, 16) != 5 && *ptr == ':');
+  if (ok) {
+    long ep = strtol(ptr + 1, NULL, 16);
+    ok = (ep > 0x80); /* this must be an IN enpoint, so high bit must be set */
+    if (endpoint != NULL)
+      *endpoint = (unsigned char)ep;
+  }
+  if (!ok) {
     notice(BMPERR_MONITORCMD, "Trace setup failed");
     return 0;
   }

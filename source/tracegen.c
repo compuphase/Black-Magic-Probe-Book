@@ -43,10 +43,12 @@
   #define sizearray(a)  (sizeof(a) / sizeof((a)[0]))
 #endif
 
-#if defined _WIN32
+#if defined WIN32 || defined _WIN32
   #define DIR_SEPARATOR "\\"
+  #define IS_OPTION(s)  ((s)[0] == '-' || (s)[0] == '/')
 #else
   #define DIR_SEPARATOR "/"
+  #define IS_OPTION(s)  ((s)[0] == '-')
 #endif
 
 #define FLAG_MACRO      0x0001
@@ -54,6 +56,7 @@
 #define FLAG_BASICTYPES 0x0004
 #define FLAG_STREAMID   0x0008
 #define FLAG_C99        0x0010
+#define FLAG_NO_INSTR   0x0020
 
 
 int ctf_error_notify(int code, int linenr, const char *message)
@@ -149,6 +152,12 @@ static int generate_functionheader(FILE *fp, const CTF_EVENT *evt, unsigned flag
   char streamname[128], funcname[128];
   int paramcount;
 
+  if (flags & FLAG_NO_INSTR) {
+    if (flags & FLAG_INDENT)
+      fprintf(fp, "  ");
+    fprintf(fp, "__attribute__((no_instrument_function))\n");
+  }
+
   if (flags & FLAG_INDENT)
     fprintf(fp, "  ");
 
@@ -237,6 +246,7 @@ void generate_prototypes(FILE *fp, unsigned flags, const char *trace_func, const
   }
   fprintf(fp, "\n");
 
+  flags &= ~FLAG_NO_INSTR;  /* set the attribute only on the implementation */
   for (evt = event_next(NULL); evt != NULL; evt = event_next(evt)) {
     /* #ifdef NTRACE wrapper */
     fprintf(fp, "#ifdef NTRACE\n");
@@ -387,13 +397,13 @@ void generate_funcstubs(FILE *fp, unsigned flags, const char *trace_func, const 
     } else {
       /* create a variable for the buffer (the stringcount count is added to the
          fixed size because the zero byte of each string must be allocated too */
-      if (flags & FLAG_C99)
+      if ((flags & FLAG_C99) == 0 || stringcount == 0)
         fprintf(fp, "  unsigned char buffer[%d", headersz + fixedsz + stringcount);
       else
         fprintf(fp, "  unsigned char *buffer = alloca(%d", headersz + fixedsz + stringcount);
       if (stringcount > 0)
         fprintf(fp, " + %s", var_totallength);
-      if (flags & FLAG_C99)
+      if ((flags & FLAG_C99) == 0 || stringcount == 0)
         fprintf(fp, "];\n");
       else
         fprintf(fp, ");\n");
@@ -447,13 +457,14 @@ static void usage(void)
          "           for tracing in the Common Trace Format.\n\n"
          "Usage: tracegen [options] inputfile\n\n"
          "Options:\n"
-         "-c99     Generate C99-compatible code (default is C90).\n"
-         "-fs=name Set the name for the time stamo function, default = trace_timestamp\n"
-         "-fx=name Set the name for the trace transmit function, default = trace_xmit\n"
-         "-i=path  Generate an #include directive with this path.\n"
-         "-o=name  Base output filename; a .c and .h suffix is added to this name.\n"
-         "-s       Pass stream ID as separate parameter (SWO tracing).\n"
-         "-t       Force basic C types on arguments, if available.\n");
+         "-c99      Generate C99-compatible code (default is C90).\n"
+         "-fs=name  Set the name for the time stamo function, default = trace_timestamp\n"
+         "-fx=name  Set the name for the trace transmit function, default = trace_xmit\n"
+         "-i=path   Generate an #include directive with this path.\n"
+         "-no-instr Add a \"no_instrument_function\" attribute to the generated functions.\n"
+         "-o=name   Base output filename; a .c and .h suffix is added to this name.\n"
+         "-s        Pass stream ID as separate parameter (SWO tracing).\n"
+         "-t        Force basic C types on arguments, if available.\n");
 }
 
 static void unknown_option(const char *option)
@@ -482,7 +493,7 @@ int main(int argc, char *argv[])
   strcpy(trace_func, "trace_xmit");
   opt_flags = 0;
   for (idx = 1; idx < argc; idx++) {
-    if (argv[idx][0] == '-' || argv[idx][0] == '/') {
+    if (IS_OPTION(argv[idx])) {
       switch (argv[idx][1]) {
       case '?':
       case 'h':
@@ -517,6 +528,12 @@ int main(int argc, char *argv[])
         if (*ptr == '=' || *ptr == ':')
           ptr++;
         strlcpy(includepath, ptr, sizearray(includepath));
+        break;
+      case 'n':
+        if (strcmp(argv[idx]+1, "no-instr") == 0)
+          opt_flags |= FLAG_NO_INSTR;
+        else
+          unknown_option(argv[idx]);
         break;
       case 'o':
         ptr = &argv[idx][2];

@@ -30,6 +30,7 @@ enum {
   TRACESTAT_NO_THREAD,    /* thread could not be created */
   TRACESTAT_INIT_FAILED,  /* WunUSB / libusb initialization failed */
   TRACESTAT_NO_CONNECT,   /* Failed to connect to Black Magic Probe */
+  TRACESTAT_NOT_INIT,     /* not yet initialized */
 };
 
 enum {
@@ -45,7 +46,7 @@ void channel_setname(int index, const char *name);
 struct nk_color channel_getcolor(int index);
 void channel_setcolor(int index, struct nk_color color);
 
-int    trace_init(void);
+int    trace_init(unsigned char endpoint);
 void   trace_close(void);
 unsigned long trace_errno(void);
 

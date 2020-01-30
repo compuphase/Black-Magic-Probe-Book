@@ -91,11 +91,14 @@
   #define sizearray(e)    (sizeof(e) / sizeof((e)[0]))
 #endif
 
-#if defined _WIN32
+#if defined WIN32 || defined _WIN32
   #define DIRSEP_CHAR '\\'
+  #define IS_OPTION(s)  ((s)[0] == '-' || (s)[0] == '/')
 #else
   #define DIRSEP_CHAR '/'
+  #define IS_OPTION(s)  ((s)[0] == '-')
 #endif
+
 
 static const char *lastdirsep(const char *path);
 static char *translate_path(char *path, int native);
@@ -2926,6 +2929,7 @@ int main(int argc, char *argv[])
   int refreshflags, trace_status, warn_source_tstamps;
   int atprompt, insplitter, console_activate, cont_is_run, exitcode, monitor_cmd_active;
   int idx, result, highlight;
+  unsigned char trace_endpoint = BMP_EP_TRACE;
   unsigned semihosting_lines, swo_lines;
   int prev_clicked_line;
   unsigned watchseq;
@@ -2987,7 +2991,7 @@ int main(int argc, char *argv[])
   strcpy(txtEntryPoint, "main");
   for (idx = 1; idx < argc; idx++) {
     const char *ptr;
-    if (argv[idx][0] == '-' || argv[idx][0] == '/') {
+    if (IS_OPTION(argv[idx])) {
       switch (argv[idx][1]) {
       case '?':
       case 'h':
@@ -3271,7 +3275,7 @@ int main(int argc, char *argv[])
           FILE *fp = fopen(txtFilename, "rb");
           if (fp != NULL) {
             int address_size;
-            dwarf_read(fp,&dwarf_linetable,&dwarf_symboltable,&dwarf_filetable,&address_size);
+            dwarf_read(fp, &dwarf_linetable, &dwarf_symboltable, &dwarf_filetable, &address_size);
             fclose(fp);
           }
           /* clear source files (if any were loaded); these will be reloaded
@@ -3615,14 +3619,6 @@ int main(int argc, char *argv[])
         if (!atprompt)
           break;
         if (prevstate != curstate) {
-          /* initial setup */
-          if (trace_status != TRACESTAT_OK) {
-            trace_status = trace_init();
-            if (trace_status != TRACESTAT_OK)
-              console_add("Failed to initialize SWO tracing\n", STRFLG_ERROR);
-            else
-              trace_setdatasize(opt_swo.datasize);
-          }
           ctf_parse_cleanup();
           ctf_decode_cleanup();
           tracestring_clear();
@@ -3647,6 +3643,22 @@ int main(int argc, char *argv[])
           atprompt = 0;
           prevstate = curstate;
         } else if (gdbmi_isresult() != NULL) {
+          /* check the reply of "monitor traceswo" to get the endpoint */
+          STRINGLIST *item = stringlist_getlast(&consolestring_root, STRFLG_STATUS, 0);
+          char *ptr;
+          if ((ptr = strchr(item->text, ':'))!= NULL && strtol(ptr + 1,&ptr, 16)!= 5 && *ptr == ':') {
+            long ep = strtol(ptr + 1, NULL, 16);
+            if (ep > 0x80)
+              trace_endpoint = (unsigned char)ep;
+          }
+          /* initial setup (only needs to be done once) */
+          if (trace_status != TRACESTAT_OK) {
+            trace_status = trace_init(trace_endpoint);
+            if (trace_status != TRACESTAT_OK)
+              console_add("Failed to initialize SWO tracing\n", STRFLG_ERROR);
+            else
+              trace_setdatasize(opt_swo.datasize);
+          }
           /* GDB may have reset the "mem inaccessible-by-default off" setting,
              so we jump back to the state, after making sure that the state
              that follows this is the one to run the SWO script */
@@ -4116,8 +4128,8 @@ int main(int argc, char *argv[])
           if (nk_button_symbol(ctx, NK_SYMBOL_TRIPLE_DOT)) {
             const char *s;
             s = noc_file_dialog_open(NOC_FILE_DIALOG_OPEN,
-                                     "ELF Executables\0*.elf;*.bin;*.\0All files\0*.*\0",
-                                     NULL, txtGDBpath, "Select ELF Executable",
+                                     "Executables\0*.elf;*.\0All files\0*.*\0",
+                                     NULL, txtGDBpath, "Select GDB program",
                                      guidriver_apphandle());
             if (s != NULL && strlen(s) < sizearray(txtGDBpath)) {
               strcpy(txtGDBpath, s);

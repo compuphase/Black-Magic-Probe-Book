@@ -81,8 +81,8 @@ OBJLIST_BMFLASH = bmflash.o bmp-scan.o bmp-script.o bmp-support.o crc32.o \
                   nuklear.o nuklear_gdip.o noc_file_dialog.o
 
 OBJLIST_BMTRACE = bmtrace.o bmp-scan.o bmp-script.o bmp-support.o crc32.o \
-                  elf.o gdb-rsp.o guidriver.o minIni.o nuklear_tooltip.o rs232.o \
-                  specialfolder.o xmltractor.o strlcpy.o \
+                  dwarf.o elf.o gdb-rsp.o guidriver.o minIni.o nuklear_tooltip.o \
+                  rs232.o specialfolder.o xmltractor.o strlcpy.o \
                   decodectf.o parsetsdl.o swotrace.o \
                   nuklear.o nuklear_gdip.o noc_file_dialog.o
 
