@@ -571,7 +571,7 @@ int bmp_enabletrace(int async_bitrate, unsigned char *endpoint)
      Black Magic Probe) */
   assert(rcvd >= 0);
   buffer[rcvd] = '\0';
-  ok = ((ptr = strchr(buffer, ':')) != NULL && strtol(ptr + 1, &ptr, 16) != 5 && *ptr == ':');
+  ok = ((ptr = strchr(buffer, ':')) != NULL && strtol(ptr + 1, &ptr, 16) == 5 && *ptr == ':');
   if (ok) {
     long ep = strtol(ptr + 1, NULL, 16);
     ok = (ep > 0x80); /* this must be an IN enpoint, so high bit must be set */
