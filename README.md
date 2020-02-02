@@ -22,7 +22,11 @@ Prerequisites are
 * libusb-1.0-dev
 * glfw-3.3
 
-The development packages for these modules must be present. If you build glfw from source (as a static library), you can configure the path to the include files and the library in makefile.cfg.
+The development packages for these modules must be present. If you build glfw from source (as a static library), you can configure the path to the include files and the library in makefile.cfg. In particular, on some Linux distributions the library is called `glfw` rather than `glfw3`; in this case, create a `makefile.cfg` file in the same directory as `Makefile.linux` and add the following line to it:
+```
+GLFW_LIBNAME := glfw3
+```
+(Again, see the top of `Makefile.linux` for other options.)
 ### Windows with MingW
 A common stumbling block with the MingW compiler is that it lacks the header and library files for WinUSB. However the [MingW-w64](https://mingw-w64.org) fork should come with these files. The original header files are in the Microsoft WDK (and they may come with Visual Studio too). These files have the typical "All rights reserved" copyright banner in the header comment, so I cannot distribute them. If your installation lacks these files, you will have to get them from the WDK or another source.
 
