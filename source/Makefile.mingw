@@ -46,6 +46,7 @@ INCLUDE   := $(WINUSB_INC)
 ####### Linker
 LNK       := $(CDIR_BIN)gcc
 LFLAGS    := $(WINUSB_LIB)
+LFLAGS_GUI:= -Wl,-subsystem,windows
 
 
 ifdef NDEBUG
@@ -169,13 +170,13 @@ bmtrace.res : bmtrace.rc
 ##### Executables #####
 
 bmdebug.exe : $(OBJLIST_BMDEBUG)
-	$(LNK) $(LFLAGS) -o$@ $^ -lm -lcomdlg32 -lgdi32 -lgdiplus -lsetupapi -lshlwapi -lwinusb
+	$(LNK) $(LFLAGS) $(LFLAGS_GUI) -o$@ $^ -lm -lcomdlg32 -lgdi32 -lgdiplus -lsetupapi -lshlwapi -lwinusb
 
 bmflash.exe : $(OBJLIST_BMFLASH)
-	$(LNK) $(LFLAGS) -o$@ $^ -lm -lcomdlg32 -lgdi32 -lgdiplus -lshlwapi
+	$(LNK) $(LFLAGS) $(LFLAGS_GUI) -o$@ $^ -lm -lcomdlg32 -lgdi32 -lgdiplus -lshlwapi
 
 bmtrace.exe : $(OBJLIST_BMTRACE)
-	$(LNK) $(LFLAGS) -o$@ $^ -lm -lcomdlg32 -lgdi32 -lgdiplus -lsetupapi -lshlwapi -lwinusb
+	$(LNK) $(LFLAGS) $(LFLAGS_GUI) -o$@ $^ -lm -lcomdlg32 -lgdi32 -lgdiplus -lsetupapi -lshlwapi -lwinusb
 
 bmscan.exe : $(OBJLIST_BMSCAN)
 	$(LNK) $(LFLAGS) -o$@ $^
