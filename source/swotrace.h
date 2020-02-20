@@ -48,7 +48,7 @@ void channel_setcolor(int index, struct nk_color color);
 
 int    trace_init(unsigned char endpoint);
 void   trace_close(void);
-unsigned long trace_errno(void);
+unsigned long trace_errno(int *loc);
 
 void   trace_setdatasize(short size);
 short  trace_getdatasize();

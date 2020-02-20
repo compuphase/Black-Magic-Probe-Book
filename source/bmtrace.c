@@ -211,8 +211,9 @@ int main(int argc, char *argv[])
   unsigned long channelmask = 0;
   enum { MODE_MANCHESTER = 1, MODE_ASYNC } opt_mode = MODE_MANCHESTER;
   unsigned char trace_endpoint = BMP_EP_TRACE;
-  int opt_init_target = 1;
-  int opt_init_bmp = 1;
+  int opt_init_target = nk_true;
+  int opt_init_bmp = nk_true;
+  int opt_connect_srst = nk_false;
   int opt_datasize = 0;
   int opt_fontsize = FONT_HEIGHT;
   int trace_status = TRACESTAT_NOT_INIT;
@@ -254,6 +255,7 @@ int main(int argc, char *argv[])
     opt_init_target = 0;
     opt_init_bmp = 0;
   }
+  opt_connect_srst = (int)ini_getl("Settings", "connect-srst", 0, txtConfigFile);
   opt_datasize = (int)ini_getl("Settings", "datasize", 1, txtConfigFile);
   ini_gets("Settings", "tsdl", "", txtTSDLfile, sizearray(txtTSDLfile), txtConfigFile);
   ini_gets("Settings", "elf", "", txtELFfile, sizearray(txtELFfile), txtConfigFile);
@@ -365,7 +367,7 @@ int main(int argc, char *argv[])
           bmp_break();
         result = bmp_connect(); /* this function also opens the (virtual) serial port/device */
         if (result)
-          result = bmp_attach(2, mcu_driver, sizearray(mcu_driver), NULL, 0);
+          result = bmp_attach(2, opt_connect_srst, mcu_driver, sizearray(mcu_driver), NULL, 0);
         else
           trace_status = TRACESTAT_NO_CONNECT;
         if (result && opt_init_target) {
@@ -398,7 +400,7 @@ int main(int argc, char *argv[])
         bmp_restart();
       }
       tracestring_clear();
-      trace_running = (trace_status != TRACESTAT_OK);
+      trace_running = (trace_status == TRACESTAT_OK);
       switch (trace_status) {
       case TRACESTAT_OK:
         recent_statuscode = BMPSTAT_SUCCESS;
@@ -419,12 +421,18 @@ int main(int argc, char *argv[])
         break;
       case TRACESTAT_NO_ACCESS:
         recent_statuscode = BMPERR_GENERAL;
-        sprintf(msg, "Trace access denied (error %lu)", trace_errno());
+        { int loc;
+          unsigned long error = trace_errno(&loc);
+          sprintf(msg, "Trace access denied (error loc:%lu)", loc, error);
+        }
         tracelog_statusmsg(TRACESTATMSG_BMP, msg, recent_statuscode);
         break;
       case TRACESTAT_NO_THREAD:
         recent_statuscode = BMPERR_GENERAL;
-        sprintf(msg, "Multithreading failed (error %lu)", trace_errno());
+        { int loc;
+          unsigned long error = trace_errno(&loc);
+          sprintf(msg, "Trace access denied (error loc:%lu)", loc, error);
+        }
         tracelog_statusmsg(TRACESTATMSG_BMP, msg, recent_statuscode);
         break;
       case TRACESTAT_NO_CONNECT:
@@ -600,6 +608,13 @@ int main(int argc, char *argv[])
           if (nk_checkbox_label(ctx, "Configure Debug Probe", &opt_init_bmp))
             reinitialize = 1;
           tooltip(ctx, bounds, "Activate SWO trace capture in the Black Magic Probe", &rc_canvas);
+          if (opt_init_target || opt_init_bmp) {
+            nk_layout_row_dynamic(ctx, ROW_HEIGHT, 1);
+            bounds = nk_widget_bounds(ctx);
+            if (nk_checkbox_label(ctx, "Reset target during connect", &opt_connect_srst))
+              reinitialize = 1;
+            tooltip(ctx, bounds, "Keep the target in reset state while scanning and attaching", &rc_canvas);
+          }
           if (opt_init_target) {
             nk_layout_row_begin(ctx, NK_STATIC, ROW_HEIGHT, 2);
             nk_layout_row_push(ctx, LABEL_WIDTH);
@@ -663,30 +678,28 @@ int main(int argc, char *argv[])
             }
           }
           nk_layout_row_end(ctx);
-          if (strlen(txtTSDLfile)> 0 && access(txtTSDLfile, 0) == 0) {
-            nk_layout_row_begin(ctx, NK_STATIC, ROW_HEIGHT, 3);
-            nk_layout_row_push(ctx, LABEL_WIDTH);
-            nk_label(ctx, "ELF file", NK_TEXT_ALIGN_LEFT | NK_TEXT_ALIGN_MIDDLE);
-            nk_layout_row_push(ctx, VALUE_WIDTH - BROWSEBTN_WIDTH - 5);
-            bounds = nk_widget_bounds(ctx);
-            result = nk_edit_string_zero_terminated(ctx, NK_EDIT_FIELD | NK_EDIT_SIG_ENTER, txtELFfile, sizearray(txtELFfile), nk_filter_ascii);
-            if (result & (NK_EDIT_COMMITED | NK_EDIT_DEACTIVATED))
+          nk_layout_row_begin(ctx, NK_STATIC, ROW_HEIGHT, 3);
+          nk_layout_row_push(ctx, LABEL_WIDTH);
+          nk_label(ctx, "ELF file", NK_TEXT_ALIGN_LEFT | NK_TEXT_ALIGN_MIDDLE);
+          nk_layout_row_push(ctx, VALUE_WIDTH - BROWSEBTN_WIDTH - 5);
+          bounds = nk_widget_bounds(ctx);
+          result = nk_edit_string_zero_terminated(ctx, NK_EDIT_FIELD | NK_EDIT_SIG_ENTER, txtELFfile, sizearray(txtELFfile), nk_filter_ascii);
+          if (result & (NK_EDIT_COMMITED | NK_EDIT_DEACTIVATED))
+            reload_format = 1;
+          tooltip(ctx, bounds, "ELF file for symbol lookup", &rc_canvas);
+          nk_layout_row_push(ctx, BROWSEBTN_WIDTH);
+          if (nk_button_symbol(ctx, NK_SYMBOL_TRIPLE_DOT)) {
+            const char *s = noc_file_dialog_open(NOC_FILE_DIALOG_OPEN,
+                                                 "ELF Executables\0*.elf;*.bin;*.\0All files\0*.*\0",
+                                                 NULL, txtELFfile, "Select ELF Executable",
+                                                 guidriver_apphandle());
+            if (s != NULL && strlen(s) < sizearray(txtELFfile)) {
+              strcpy(txtELFfile, s);
               reload_format = 1;
-            tooltip(ctx, bounds, "ELF file for symbol lookup", &rc_canvas);
-            nk_layout_row_push(ctx, BROWSEBTN_WIDTH);
-            if (nk_button_symbol(ctx, NK_SYMBOL_TRIPLE_DOT)) {
-              const char *s = noc_file_dialog_open(NOC_FILE_DIALOG_OPEN,
-                                                   "ELF Executables\0*.elf;*.bin;*.\0All files\0*.*\0",
-                                                   NULL, txtELFfile, "Select ELF Executable",
-                                                   guidriver_apphandle());
-              if (s != NULL && strlen(s) < sizearray(txtELFfile)) {
-                strcpy(txtELFfile, s);
-                reload_format = 1;
-                free((void*)s);
-              }
+              free((void*)s);
             }
-            nk_layout_row_end(ctx);
           }
+          nk_layout_row_end(ctx);
           nk_tree_state_pop(ctx);
         }
 
@@ -837,6 +850,7 @@ int main(int argc, char *argv[])
   ini_putl("Settings", "mode", opt_mode, txtConfigFile);
   ini_putl("Settings", "init-target", opt_init_target, txtConfigFile);
   ini_putl("Settings", "init-bmp", opt_init_bmp, txtConfigFile);
+  ini_putl("Settings", "connect-srst", opt_connect_srst, txtConfigFile);
   ini_putl("Settings", "datasize", opt_datasize, txtConfigFile);
   ini_puts("Settings", "tsdl", txtTSDLfile, txtConfigFile);
   ini_puts("Settings", "elf", txtELFfile, txtConfigFile);

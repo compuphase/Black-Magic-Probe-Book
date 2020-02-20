@@ -167,23 +167,25 @@ int bmp_break(void)
  *  The name of the driver for the MCU (that the Black Magic Probe uses) is
  *  returned.
  *
- *  \param tpwr       Set to 1 to power up the voltage-sense pin, 0 to power-down,
- *                    or 2 to optionally power this pin if the initial scan returns
- *                    a power of 0.0V.
- *  \param name       Will be set to the name of the driver for the MCU (the MCU
- *                    series name) on output. This parameter may be NULL.
- *  \param namelength The maximum length of the name, including the \0 byte.
- *  \param arch       Will be set to the architecture of the MCU on output. This
- *                    is typically M0, M3, M3/M4, or similar. This parameter may
- *                    be NULL. Note that Black Magic Probe firmware 1.6 does not
- *                    return an architecture name.
- *  \param archlength The maximum length of the architecture name, including the
- *                    \0 byte.
+ *  \param tpwr         Set to 1 to power up the voltage-sense pin, 0 to
+ *                      power-down, or 2 to optionally power this pin if the
+ *                      initial scan returns a power of 0.0V.
+ *  \param connect_srst Set to 1 to let the Black Magic Probe keep the target
+ *                      MCU in reset while scanning and attaching.
+ *  \param name         Will be set to the name of the driver for the MCU (the
+ *                      MCU series name) on output. This parameter may be NULL.
+ *  \param namelength   The maximum length of the name, including the \0 byte.
+ *  \param arch         Will be set to the architecture of the MCU on output.
+ *                      This is typically M0, M3, M3/M4, or similar. This
+ *                      parameter may be NULL. Note that Black Magic Probe
+ *                      firmware 1.6 does not return an architecture name.
+ *  \param archlength   The maximum length of the architecture name, including
+ *                      the \0 byte.
  *
  *  \return 1 on success, 0 on failure. Status and error messages are passed via
  *          the callback.
  */
-int bmp_attach(int tpwr, char *name, size_t namelength, char *arch, size_t archlength)
+int bmp_attach(int tpwr, int connect_srst, char *name, size_t namelength, char *arch, size_t archlength)
 {
   if (name != NULL && namelength > 0)
     *name = '\0';
@@ -195,6 +197,14 @@ restart:
     char buffer[512];
     size_t size;
     int ok;
+    if (connect_srst != 0) {
+      gdbrsp_xmit("qRcmd,connect_srst enable", -1);
+      do {
+        size = gdbrsp_recv(buffer, sizearray(buffer), 1000);
+      } while (size > 0 && buffer[0] == 'o'); /* ignore console output */
+      if (size != 2 || memcmp(buffer, "OK", size) != 0)
+        notice(BMPERR_MONITORCMD, "Setting connect-with-reset option failed");
+    }
     if (tpwr == 1) {
       gdbrsp_xmit("qRcmd,tpwr enable", -1);
       do {

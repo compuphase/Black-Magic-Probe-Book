@@ -16,7 +16,8 @@ specialfolder.obj : specialfolder.h strlcpy.h
 decodectf.obj : decodectf.h parsetsdl.h dwarf.h strlcpy.h
 parsetsdl.obj : parsetsdl.h strlcpy.h
 swotrace.obj : bmp-scan.h decodectf.h guidriver.h nuklear.h \
-	 nuklear_config.h parsetsdl.h strlcpy.h swotrace.h
+	 nuklear_config.h parsetsdl.h strlcpy.h swotrace.h \
+	 usb-support.h
 nuklear.obj : nuklear.h nuklear_config.h
 nuklear_gdip.obj : nuklear.h nuklear_config.h nuklear_gdip.h
 noc_file_dialog.obj : noc_file_dialog.h
@@ -34,6 +35,7 @@ bmtrace.obj : bmp-script.h bmp-support.h bmp-scan.h \
 	 parsetsdl.h rs232.h specialfolder.h strlcpy.h swotrace.h
 elf-postlink.obj : elf.h
 tracegen.obj : parsetsdl.h strlcpy.h
+usb-support.obj : usb-support.h
 
 bmdebug.o : bmp-scan.h bmp-script.h dwarf.h guidriver.h nuklear.h \
 	nuklear_config.h noc_file_dialog.h minIni.h minGlue.h nuklear_tooltip.h \
@@ -50,7 +52,7 @@ specialfolder.o : specialfolder.h
 decodectf.o : parsetsdl.h decodectf.h dwarf.h
 parsetsdl.o : parsetsdl.h
 swotrace.o : bmp-scan.h guidriver.h nuklear.h nuklear_config.h parsetsdl.h \
-	decodectf.h swotrace.h
+	decodectf.h swotrace.h usb-support.h
 nuklear.o : nuklear.h nuklear_config.h
 nuklear_gdip.o : nuklear.h nuklear_config.h nuklear_gdip.h
 nuklear_glfw_gl2.o : nuklear_config.h nuklear.h nuklear_glfw_gl2.h
@@ -71,4 +73,5 @@ bmtrace.o : guidriver.h nuklear.h nuklear_config.h bmp-script.h \
 	swotrace.h res/icon_download_64.h
 elf-postlink.o : elf.h
 tracegen.o : parsetsdl.h
+usb-support.o : usb-support.h
 

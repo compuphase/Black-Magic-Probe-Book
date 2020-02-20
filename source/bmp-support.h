@@ -47,7 +47,7 @@ typedef int (*BMP_STATCALLBACK)(int code, const char *message);
 void bmp_setcallback(BMP_STATCALLBACK func);
 int bmp_connect(void);
 
-int bmp_attach(int tpwr, char *name, size_t namelength, char *arch, size_t archlength);
+int bmp_attach(int tpwr, int connect_srst, char *name, size_t namelength, char *arch, size_t archlength);
 int bmp_detach(int powerdown);
 
 int bmp_fullerase(void);

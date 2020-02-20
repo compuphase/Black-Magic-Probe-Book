@@ -573,6 +573,7 @@ int main(int argc, char *argv[])
   FILE *fpTgt, *fpWork;
   int opt_tpwr = nk_false;
   int opt_fullerase = nk_false;
+  int opt_connect_srst = nk_false;
   int opt_architecture = 0;
   int opt_serialize = SER_NONE;
   int opt_format = FMT_BIN;
@@ -679,6 +680,7 @@ int main(int argc, char *argv[])
           strcpy(field, architectures[opt_architecture]);
         else
           field[0] = '\0';
+        ini_putl("Settings", "connect-srst", opt_connect_srst, txtParamFile);
         ini_puts("Flash", "architecture", field, txtParamFile);
         ini_putl("Flash", "tpwr", opt_tpwr, txtParamFile);
         ini_putl("Flash", "full-erase", opt_fullerase, txtParamFile);
@@ -701,7 +703,7 @@ int main(int argc, char *argv[])
       if (result) {
         char mcufamily[32];
         int arch;
-        result = bmp_attach(opt_tpwr, mcufamily, sizearray(mcufamily), NULL, 0);
+        result = bmp_attach(opt_tpwr, opt_connect_srst, mcufamily, sizearray(mcufamily), NULL, 0);
         for (arch = 0; arch < sizearray(architectures); arch++)
           if (stricmp(architectures[arch], mcufamily) == 0)
             break;
@@ -836,9 +838,11 @@ int main(int argc, char *argv[])
           rcwidget = nk_widget_bounds(ctx);
           opt_architecture = nk_combo(ctx, architectures, NK_LEN(architectures), opt_architecture, (int)COMBOROW_CY, nk_vec2(rcwidget.w, 4.5*ROW_HEIGHT));
 
+          //??? tooltips on options
           nk_layout_row_dynamic(ctx, ROW_HEIGHT, 1);
           nk_checkbox_label(ctx, "Power Target (3.3V)", &opt_tpwr);
           nk_checkbox_label(ctx, "Full Flash erase before download", &opt_fullerase);
+          nk_checkbox_label(ctx, "Reset target during connect", &opt_connect_srst);
 
           nk_tree_state_pop(ctx);
         }
@@ -893,6 +897,7 @@ int main(int argc, char *argv[])
         strlcat(txtParamFile, ".bmcfg", sizearray(txtParamFile));
         if (access(txtParamFile, 0) == 0) {
           char field[80], *ptr;
+          opt_connect_srst = ini_getl("Settings", "connect-srst", 0, txtParamFile);
           ini_gets("Flash", "architecture", "", field, sizearray(field), txtParamFile);
           for (opt_architecture = 0; opt_architecture < sizearray(architectures); opt_architecture++)
             if (stricmp(architectures[opt_architecture], field) == 0)

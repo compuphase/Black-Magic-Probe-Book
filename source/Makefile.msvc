@@ -65,7 +65,7 @@ LFLAGS_C  = $(L_DEBUG) /NOLOGO /SUBSYSTEM:console
 
 OBJLIST_BMDEBUG = bmdebug.obj bmp-scan.obj bmp-script.obj dwarf.obj elf.obj \
                   guidriver.obj minini.obj nuklear_tooltip.obj rs232.obj \
-                  specialfolder.obj strlcpy.obj \
+                  specialfolder.obj strlcpy.obj usb-support.obj \
                   decodectf.obj parsetsdl.obj swotrace.obj \
                   nuklear.obj nuklear_gdip.obj noc_file_dialog.obj
 
@@ -77,6 +77,7 @@ OBJLIST_BMFLASH = bmflash.obj bmp-scan.obj bmp-script.obj bmp-support.obj crc32.
 OBJLIST_BMTRACE = bmtrace.obj bmp-scan.obj bmp-script.obj bmp-support.obj crc32.obj \
                   dwarf.obj elf.obj gdb-rsp.obj guidriver.obj minini.obj \
                   nuklear_tooltip.obj rs232.obj specialfolder.obj strlcpy.obj \
+                  usb-support.obj \
                   xmltractor.obj decodectf.obj parsetsdl.obj swotrace.obj \
                   nuklear.obj nuklear_gdip.obj noc_file_dialog.obj
 
@@ -141,6 +142,8 @@ parsetsdl.obj : parsetsdl.c
 
 tracegen.obj : tracegen.c
 
+usb-support.obj : usb-support.c
+
 noc_file_dialog.obj : noc_file_dialog.c
 
 nuklear.obj : nuklear.c
@@ -160,13 +163,13 @@ bmtrace.res : bmtrace.rc
 ##### Executables #####
 
 bmdebug.exe : $(OBJLIST_BMDEBUG) bmdebug.res
-	$(LNK) $(LFLAGS_W) /ENTRY:mainCRTStartup /OUT:$@ $** advapi32.lib comdlg32.lib gdi32.lib gdiplus.lib user32.lib winmm.lib shell32.lib shlwapi.lib setupapi.lib winusb.lib
+	$(LNK) $(LFLAGS_W) /ENTRY:mainCRTStartup /OUT:$@ $** advapi32.lib comdlg32.lib gdi32.lib gdiplus.lib user32.lib winmm.lib shell32.lib shlwapi.lib setupapi.lib
 
 bmflash.exe : $(OBJLIST_BMFLASH) bmflash.res
 	$(LNK) $(LFLAGS_W) /ENTRY:mainCRTStartup /OUT:$@ $** advapi32.lib comdlg32.lib gdi32.lib gdiplus.lib user32.lib winmm.lib shell32.lib shlwapi.lib
 
 bmtrace.exe : $(OBJLIST_BMTRACE) bmtrace.res
-	$(LNK) $(LFLAGS_W) /ENTRY:mainCRTStartup /OUT:$@ $** advapi32.lib comdlg32.lib gdi32.lib gdiplus.lib user32.lib winmm.lib shell32.lib shlwapi.lib setupapi.lib winusb.lib
+	$(LNK) $(LFLAGS_W) /ENTRY:mainCRTStartup /OUT:$@ $** advapi32.lib comdlg32.lib gdi32.lib gdiplus.lib user32.lib winmm.lib shell32.lib shlwapi.lib setupapi.lib
 
 bmscan.exe : $(OBJLIST_BMSCAN)
 	$(LNK) $(LFLAGS_C) /OUT:$@ $** advapi32.lib

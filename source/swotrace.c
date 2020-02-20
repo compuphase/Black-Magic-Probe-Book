@@ -1,5 +1,6 @@
 /*
- * Shared code for SWO Trace for the bmtrace and bmdebug utilities.
+ * Shared code for SWO Trace for the bmtrace and bmdebug utilities. It uses
+ * WinUSB under Microsoft Windows and libusb 1.0 under Linux.
  *
  * Copyright 2019-2020 CompuPhase
  *
@@ -27,8 +28,8 @@
   #include <tchar.h>
   #include <initguid.h>
   #include <setupapi.h>
-  #include <winusb.h>
   #include <malloc.h>
+  #include "usb-support.h"
   #if defined __MINGW32__ || defined __MINGW64__ || defined _MSC_VER
     #include "strlcpy.h"
   #endif
@@ -549,9 +550,11 @@ int trace_getpacketerrors(void)
 #if defined WIN32 || defined _WIN32
 
 static unsigned long win_errno = 0;
+static int loc_errno = 0;
 static HANDLE hThread = NULL;
 static HANDLE hUSBdev = INVALID_HANDLE_VALUE;
-static WINUSB_INTERFACE_HANDLE hUSBiface = INVALID_HANDLE_VALUE;
+static USB_INTERFACE_HANDLE hUSBiface = INVALID_HANDLE_VALUE;
+static KLST_DEVINFO *usbk_Device = NULL;
 static unsigned char usbTraceEP = BMP_EP_TRACE;
 static LARGE_INTEGER pcfreq;
 
@@ -616,6 +619,7 @@ static BOOL usb_GetDevicePath(const TCHAR *guid, TCHAR *path, size_t pathsize)
        ERROR_NO_MORE_ITEMS (with call the dwMemberIdx value needs to be
        incremented to retrieve the next device interface information */
     DevIntfData.cbSize = sizeof(SP_DEVICE_INTERFACE_DATA);
+    loc_errno = 1;
     result = SetupDiEnumDeviceInterfaces(hDevInfo, NULL, &ClsId, 0, &DevIntfData);
 
     if (result) {
@@ -637,7 +641,8 @@ static BOOL usb_GetDevicePath(const TCHAR *guid, TCHAR *path, size_t pathsize)
         DevIntfDetailData->cbSize = 5; // sizeof(SP_INTERFACE_DEVICE_DETAIL_DATA);
       #endif
 
-      if (SetupDiGetDeviceInterfaceDetail(hDevInfo, &DevIntfData, DevIntfDetailData, dwSize,&dwSize,&DevData)) {
+      loc_errno = 2;
+      if (SetupDiGetDeviceInterfaceDetail(hDevInfo, &DevIntfData, DevIntfDetailData, dwSize, &dwSize, &DevData)) {
         NK_ASSERT(path!=NULL);
         NK_ASSERT(pathsize>0);
         #if defined _UNICODE
@@ -661,54 +666,112 @@ static BOOL usb_GetDevicePath(const TCHAR *guid, TCHAR *path, size_t pathsize)
   return result;
 }
 
-static BOOL usb_OpenDevice(const TCHAR *path, HANDLE *hdevUSB, WINUSB_INTERFACE_HANDLE *hifaceUSB)
+static BOOL __stdcall USBK_Enumerate(KLST_HANDLE DeviceList, KLST_DEVINFO *DeviceInfo, PVOID Context)
 {
-  BOOL result;
+  (void)DeviceList;
+  assert(DeviceInfo != NULL);
+  assert(Context != NULL);
+  if (DeviceInfo->DevicePath != NULL && stricmp(DeviceInfo->DevicePath, (TCHAR*)Context) == 0) {
+    usbk_Device = DeviceInfo;
+    return FALSE; /* no need to look further */
+  }
+  return TRUE;
+}
+
+static BOOL usb_OpenDevice(const TCHAR *path, HANDLE *hdevUSB, USB_INTERFACE_HANDLE *hifaceUSB)
+{
+  BOOL result = FALSE;
 
   assert(hdevUSB != NULL);
   assert(hifaceUSB != NULL);
-  *hifaceUSB = INVALID_HANDLE_VALUE;  /* preset, in case CreateFile() fails */
+  *hdevUSB = *hifaceUSB = INVALID_HANDLE_VALUE;  /* preset, in case initialization fails */
 
-  *hdevUSB = CreateFile(path, GENERIC_WRITE | GENERIC_READ,
-                        FILE_SHARE_WRITE | FILE_SHARE_READ,
-                        NULL, OPEN_EXISTING,
-                        FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OVERLAPPED, NULL);
-  if (*hdevUSB == INVALID_HANDLE_VALUE) {
-    win_errno = GetLastError();
-    return FALSE;
+  /* try WinUSB first */
+  if (WinUsb_Load()) {
+    loc_errno = 3;
+    *hdevUSB = CreateFile(path, GENERIC_WRITE | GENERIC_READ,
+                          FILE_SHARE_WRITE | FILE_SHARE_READ,
+                          NULL, OPEN_EXISTING,
+                          FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OVERLAPPED, NULL);
+    if (*hdevUSB != INVALID_HANDLE_VALUE) {
+      assert(WinUsb_IsActive());
+      loc_errno = 4;
+      result = _WinUsb_Initialize(*hdevUSB, hifaceUSB);
+      if (!result) {
+        win_errno = GetLastError();
+        CloseHandle(*hdevUSB);
+        WinUsb_Unload();
+        *hdevUSB = *hifaceUSB = INVALID_HANDLE_VALUE;
+      }
+    } else {
+      win_errno = GetLastError();
+    }
   }
 
-  result = WinUsb_Initialize(*hdevUSB, hifaceUSB);
-  if (!result) {
-    win_errno = GetLastError();
-    CloseHandle(*hdevUSB);
-    *hdevUSB = *hifaceUSB = INVALID_HANDLE_VALUE;
-    return FALSE;
+  /* try libusbK next */
+  if (!result && UsbK_Load()) {
+    KLST_DEVINFO *DeviceList;
+    uint32_t count;
+    loc_errno = 5;
+    if (_LstK_Init(&DeviceList, 0) && _LstK_Count(DeviceList, &count) && count > 0) {
+      usbk_Device = NULL;
+      _LstK_Enumerate(DeviceList, USBK_Enumerate, (void*)path);
+      if (usbk_Device != NULL) {
+        *hdevUSB = usbk_Device;
+        loc_errno = 6;
+        result = _UsbK_Init(hifaceUSB, usbk_Device);
+        if (!result) {
+          win_errno = GetLastError();
+          _LstK_Free(DeviceList);
+          UsbK_Unload();
+          *hdevUSB = *hifaceUSB = INVALID_HANDLE_VALUE;
+        }
+      }
+      _LstK_Free(DeviceList);
+    }
   }
 
-  return TRUE;
+  return result;
 }
 
 /* endpoint: use 0x85 for input endpoint #5
  */
-static BOOL usb_ConfigEndpoint(WINUSB_INTERFACE_HANDLE hUSB, unsigned char endpoint)
+static BOOL usb_ConfigEndpoint(USB_INTERFACE_HANDLE hUSB, unsigned char endpoint)
 {
   BOOL result;
   USB_INTERFACE_DESCRIPTOR ifaceDescriptor;
 
-  NK_ASSERT(hUSB != INVALID_HANDLE_VALUE);
+  assert(hUSB != INVALID_HANDLE_VALUE);
   usbTraceEP = endpoint;
 
-  if (WinUsb_QueryInterfaceSettings(hUSB, 0, &ifaceDescriptor)) {
-    WINUSB_PIPE_INFORMATION pipeInfo;
-    int idx;
-    for (idx=0; idx<ifaceDescriptor.bNumEndpoints; idx++) {
-      memset(&pipeInfo, 0, sizeof(pipeInfo));
-      result = WinUsb_QueryPipe(hUSB, 0, (unsigned char)idx, &pipeInfo);
-      if (result && pipeInfo.PipeId == endpoint)
-        return TRUE;
+  if (WinUsb_IsActive()) {
+    loc_errno = 7;
+    if (_WinUsb_QueryInterfaceSettings(hUSB, 0, &ifaceDescriptor)) {
+      USB_PIPE_INFORMATION pipeInfo;
+      int idx;
+      for (idx=0; idx<ifaceDescriptor.bNumEndpoints; idx++) {
+        memset(&pipeInfo, 0, sizeof(pipeInfo));
+        loc_errno = 8;
+        result = _WinUsb_QueryPipe(hUSB, 0, (unsigned char)idx, &pipeInfo);
+        if (result && pipeInfo.PipeId == endpoint)
+          return TRUE;
+      }
+    }
+  } else if (UsbK_IsActive()) {
+    loc_errno = 9;
+    if (_UsbK_QueryInterfaceSettings(hUSB, 0, &ifaceDescriptor)) {
+      USB_PIPE_INFORMATION pipeInfo;
+      int idx;
+      for (idx=0; idx<ifaceDescriptor.bNumEndpoints; idx++) {
+        memset(&pipeInfo, 0, sizeof(pipeInfo));
+        loc_errno = 10;
+        result = _UsbK_QueryPipe(hUSB, 0, (unsigned char)idx, &pipeInfo);
+        if (result && pipeInfo.PipeId == endpoint)
+          return TRUE;
+      }
     }
   }
+
   win_errno = GetLastError();
   return FALSE;
 }
@@ -728,24 +791,44 @@ static double get_timestamp(void)
 static DWORD __stdcall trace_read(LPVOID arg)
 {
   unsigned char buffer[PACKET_SIZE];
-  unsigned long numread = 0;
+  uint32_t numread = 0;
 
   (void)arg;
-  for ( ;; ) {
-    if (WinUsb_ReadPipe(hUSBiface, usbTraceEP, buffer, sizearray(buffer), &numread, NULL)) {
-      /* add the packet to the queue */
-      int next = (tracequeue_tail + 1) % PACKET_NUM;
-      if (numread > 0 && next != tracequeue_head) {
-        memcpy(trace_queue[tracequeue_tail].data, buffer, numread);
-        trace_queue[tracequeue_tail].length = numread;
-        trace_queue[tracequeue_tail].timestamp = get_timestamp();
-        tracequeue_tail = next;
-        PostMessage((HWND)guidriver_apphandle(), WM_USER, 0, 0L); /* just a flag to wake up the GUI */
+
+  if (WinUsb_IsActive()) {
+    for ( ;; ) {
+      if (_WinUsb_ReadPipe(hUSBiface, usbTraceEP, buffer, sizearray(buffer), &numread, NULL)) {
+        /* add the packet to the queue */
+        int next = (tracequeue_tail + 1) % PACKET_NUM;
+        if (numread > 0 && next != tracequeue_head) {
+          memcpy(trace_queue[tracequeue_tail].data, buffer, numread);
+          trace_queue[tracequeue_tail].length = numread;
+          trace_queue[tracequeue_tail].timestamp = get_timestamp();
+          tracequeue_tail = next;
+          PostMessage((HWND)guidriver_apphandle(), WM_USER, 0, 0L); /* just a flag to wake up the GUI */
+        }
+      } else {
+        Sleep(100);
       }
-    } else {
-      Sleep(100);
+    }
+  } else if (UsbK_IsActive()) {
+    for ( ;; ) {
+      if (_UsbK_ReadPipe(hUSBiface, usbTraceEP, buffer, sizearray(buffer), &numread, NULL)) {
+        /* add the packet to the queue */
+        int next = (tracequeue_tail + 1) % PACKET_NUM;
+        if (numread > 0 && next != tracequeue_head) {
+          memcpy(trace_queue[tracequeue_tail].data, buffer, numread);
+          trace_queue[tracequeue_tail].length = numread;
+          trace_queue[tracequeue_tail].timestamp = get_timestamp();
+          tracequeue_tail = next;
+          PostMessage((HWND)guidriver_apphandle(), WM_USER, 0, 0L); /* just a flag to wake up the GUI */
+        }
+      } else {
+        Sleep(100);
+      }
     }
   }
+
   return 0;
 }
 
@@ -753,6 +836,7 @@ int trace_init(unsigned char endpoint)
 {
   TCHAR guid[100], path[_MAX_PATH];
 
+  loc_errno = 0;
   win_errno = 0;
   if (hThread != NULL && hUSBiface != INVALID_HANDLE_VALUE)
     return TRACESTAT_OK;            /* double initialization */
@@ -773,6 +857,7 @@ int trace_init(unsigned char endpoint)
 
   hThread = CreateThread(NULL, 0, trace_read, NULL, 0, NULL);
   if (hThread == NULL) {
+    loc_errno = 11;
     win_errno = GetLastError();
     return TRACESTAT_NO_THREAD;
   }
@@ -783,6 +868,7 @@ int trace_init(unsigned char endpoint)
 
 void trace_close(void)
 {
+  loc_errno = 0;
   win_errno = 0;
   if (hThread != NULL) {
     TerminateThread(hThread, 0);
@@ -790,14 +876,22 @@ void trace_close(void)
   }
   if (hUSBiface != INVALID_HANDLE_VALUE) {
     assert(hUSBdev != INVALID_HANDLE_VALUE);  /* if hUSBiface is valid, hUSBdev must be too */
-    CloseHandle(hUSBdev);
-    WinUsb_Free(hUSBiface);
+    if (WinUsb_IsActive()) {
+      CloseHandle(hUSBdev);
+      _WinUsb_Free(hUSBiface);
+      WinUsb_Unload();
+    } else if (UsbK_IsActive()) {
+      _UsbK_Free(hUSBiface);
+      UsbK_Unload();
+    }
     hUSBdev = hUSBiface = INVALID_HANDLE_VALUE;
   }
 }
 
-unsigned long trace_errno(void)
+unsigned long trace_errno(int *loc)
 {
+  if (loc != NULL)
+    *loc = loc_errno;
   return win_errno;
 }
 
