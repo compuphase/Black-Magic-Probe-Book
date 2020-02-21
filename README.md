@@ -28,17 +28,9 @@ GLFW_LIBNAME := glfw3
 ```
 (Again, see the top of `Makefile.linux` for other options.)
 ### Windows with MingW
-A common stumbling block with the MingW compiler is that it lacks the header and library files for WinUSB. However the [MingW-w64](https://mingw-w64.org) fork should come with these files. The original header files are in the Microsoft WDK (and they may come with Visual Studio too). These files have the typical "All rights reserved" copyright banner in the header comment, so I cannot distribute them. If your installation lacks these files, you will have to get them from the WDK or another source.
+A makefile is provided for MingW, called `makefile/mingw`.
 
-The files that it concerns are:
-* usb.h
-* usb100.h
-* usb200.h
-* winusb.h
-* winusbio.h
+The current release links to either WinUSB or libusbK dynamically. It is no longer necessary to get the headers for WinUSB from the Windows DDK or create an import library from a .def file. However, for the libusbK option, you will need to download the appropriate libusbK.dll and place it into the directory where the binaries are built. See the [libusbK project](https://sourceforge.net/projects/libusbk/).
 
-The repository for this project contains the file `winusb.def`. You can use this file to create an import library for MingW using `dlltool`. The command line options to use are documented on top of the file `winusb.def`.
-
-The location of the header and library files for WinUSB can be set in `makefile.cfg`, see the `Makefile.mingw` for details.
 ### Windows with Visual C/C++
 The makefile for Visual C/C++ uses Microsoft's `nmake`, which is a bare-bones `make` clone.
