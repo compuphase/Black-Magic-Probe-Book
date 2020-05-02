@@ -596,9 +596,9 @@ int main(int argc, char *argv[])
 
   txtFilename[0] = '\0';
   for (idx = 1; idx < argc; idx++) {
-    const char *ptr;
-    int value;
     if (IS_OPTION(argv[idx])) {
+      const char *ptr;
+      int value;
       switch (argv[idx][1]) {
       case '?':
       case 'h':

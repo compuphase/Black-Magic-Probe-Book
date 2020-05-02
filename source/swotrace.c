@@ -1257,6 +1257,7 @@ void timeline_rebuild(void)
       int idx;
       float pos;
       chan = item->channel;
+      assert(chan > 0 && chan < NUM_CHANNELS);
       if (!channels[chan].enabled)
         continue;
       /* make sure array is big enough for another mark */

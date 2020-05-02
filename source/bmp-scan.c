@@ -305,7 +305,7 @@ int find_bmp(int seqnr, int iface, char *name, size_t namelen)
                   closedir(ddev);
                 }
               } else {
-                char *ptr = path + strlen(path) - 4;  /* -4 for "/tty" */
+                ptr = path + strlen(path) - 4;  /* -4 for "/tty" */
                 assert(strlen(path) > 4);
                 assert(*ptr == '/' && *(ptr - 1) == (iface + '0'));
                 *ptr = '\0';  /* remove "/tty" */

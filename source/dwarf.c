@@ -373,7 +373,6 @@ static ABBREVLIST *abbrev_insert(ABBREVLIST *root,int unit,int id,int tag,int ha
                                  int num_attributes,const ATTRIBUTE attributes[])
 {
   ABBREVLIST *cur;
-  int idx;
 
   assert(root!=NULL);
   assert(attributes!=NULL || num_attributes==0);
@@ -385,6 +384,7 @@ static ABBREVLIST *abbrev_insert(ABBREVLIST *root,int unit,int id,int tag,int ha
   cur->has_children=has_children;
   cur->count=num_attributes;
   if (num_attributes>0) {
+    int idx;
     if ((cur->attributes=malloc(num_attributes*sizeof(ATTRIBUTE)))==NULL) {
       free(cur);
       return NULL;      /* insufficient memory */
@@ -619,8 +619,10 @@ static DWARF_SYMBOLLIST *symname_insert(DWARF_SYMBOLLIST *root,const char *name,
   assert(name!=NULL);
   if ((cur=(DWARF_SYMBOLLIST*)malloc(sizeof(DWARF_SYMBOLLIST)))==NULL)
     return NULL;      /* insufficient memory */
-  if ((cur->name=strdup(name))==NULL)
+  if ((cur->name=strdup(name))==NULL) {
+    free(cur);
     return NULL;      /* insufficient memory */
+  }
   cur->address=address;
   cur->fileindex=file;
   cur->line=line;

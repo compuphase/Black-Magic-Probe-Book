@@ -31,6 +31,8 @@
 
 ifdef CDIR
     CDIR_BIN := $(CDIR)/bin/
+else
+    CDIR_BIN :=
 endif
 
 ####### C compiler
@@ -184,7 +186,7 @@ elf-postlink.exe : $(OBJLIST_POSTLINK)
 	$(LNK) $(LFLAGS) -o$@ $^
 
 tracegen.exe : $(OBJLIST_TRACEGEN)
-	$(LNK) $(LFLAGS) -o@ $^
+	$(LNK) $(LFLAGS) -o$@ $^
 
 
 # put generated dependencies at the end, otherwise it does not blend well with

@@ -371,7 +371,7 @@ int bmp_fullerase(void)
       free(cmd);
       return 0;
     } else {
-      sprintf(cmd, "Erased Flash at 0x%08x, size %d KiB",
+      sprintf(cmd, "Erased Flash at 0x%08x, size %u KiB",
               (unsigned)FlashRgn[rgn].address, (unsigned)size / 1024);
       notice(BMPSTAT_SUCCESS, cmd);
     }

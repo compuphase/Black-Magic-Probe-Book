@@ -2561,13 +2561,11 @@ static int handle_display_cmd(const char *command, int *param, char *symbol, siz
 
 static int handle_file_cmd(const char *command, char *filename, size_t namelength)
 {
-  const char *ptr;
-
   assert(command != NULL);
   assert(filename != NULL && namelength > 0);
   command = skipwhite(command);
   if (strncmp(command, "file ", 5) == 0) {
-    ptr = strchr(command, ' ');
+    const char *ptr = strchr(command, ' ');
     assert(ptr != NULL);
     strlcpy(filename, skipwhite(ptr), namelength);
     translate_path(filename, 1);
@@ -3049,6 +3047,7 @@ int main(int argc, char *argv[])
     load_settings(txtParamFile, txtEntryPoint, sizearray(txtEntryPoint), &opt_tpwr, &opt_autodownload, &opt_swo);
   }
 
+  memset(&task, 0, sizeof task);
   insplitter = SPLITTER_NONE;
   curstate = STATE_INIT;
   prevstate = nextstate = -1;

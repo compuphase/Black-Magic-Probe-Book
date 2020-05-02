@@ -43,11 +43,11 @@ BOOL WinUsb_Load(void)
   if (hinstWinUSB == NULL)
     return FALSE;
 
-  _WinUsb_Initialize = GetProcAddress(hinstWinUSB, "WinUsb_Initialize");
-  _WinUsb_Free = GetProcAddress(hinstWinUSB, "WinUsb_Free");
-  _WinUsb_QueryInterfaceSettings = GetProcAddress(hinstWinUSB, "WinUsb_QueryInterfaceSettings");
-  _WinUsb_QueryPipe = GetProcAddress(hinstWinUSB, "WinUsb_QueryPipe");
-  _WinUsb_ReadPipe = GetProcAddress(hinstWinUSB, "WinUsb_ReadPipe");
+  _WinUsb_Initialize = (void*)GetProcAddress(hinstWinUSB, "WinUsb_Initialize");
+  _WinUsb_Free = (void*)GetProcAddress(hinstWinUSB, "WinUsb_Free");
+  _WinUsb_QueryInterfaceSettings = (void*)GetProcAddress(hinstWinUSB, "WinUsb_QueryInterfaceSettings");
+  _WinUsb_QueryPipe = (void*)GetProcAddress(hinstWinUSB, "WinUsb_QueryPipe");
+  _WinUsb_ReadPipe = (void*)GetProcAddress(hinstWinUSB, "WinUsb_ReadPipe");
   assert(_WinUsb_Initialize != NULL && _WinUsb_Free != NULL && _WinUsb_QueryInterfaceSettings != NULL
          && _WinUsb_QueryPipe != NULL && _WinUsb_ReadPipe != NULL);
   return TRUE;
@@ -100,15 +100,15 @@ BOOL UsbK_Load(void)
   if (hinstUsbK == NULL)
     return FALSE;
 
-  _UsbK_Init = GetProcAddress(hinstUsbK, "UsbK_Init");
-  _UsbK_Free = GetProcAddress(hinstUsbK, "UsbK_Free");
-  _UsbK_QueryInterfaceSettings = GetProcAddress(hinstUsbK, "UsbK_QueryInterfaceSettings");
-  _UsbK_QueryPipe = GetProcAddress(hinstUsbK, "UsbK_QueryPipe");
-  _UsbK_ReadPipe = GetProcAddress(hinstUsbK, "UsbK_ReadPipe");
-  _LstK_Init = GetProcAddress(hinstUsbK, "LstK_Init");
-  _LstK_Free = GetProcAddress(hinstUsbK, "LstK_Free");
-  _LstK_Count = GetProcAddress(hinstUsbK, "LstK_Count");
-  _LstK_Enumerate = GetProcAddress(hinstUsbK, "LstK_Enumerate");
+  _UsbK_Init = (void*)GetProcAddress(hinstUsbK, "UsbK_Init");
+  _UsbK_Free = (void*)GetProcAddress(hinstUsbK, "UsbK_Free");
+  _UsbK_QueryInterfaceSettings = (void*)GetProcAddress(hinstUsbK, "UsbK_QueryInterfaceSettings");
+  _UsbK_QueryPipe = (void*)GetProcAddress(hinstUsbK, "UsbK_QueryPipe");
+  _UsbK_ReadPipe = (void*)GetProcAddress(hinstUsbK, "UsbK_ReadPipe");
+  _LstK_Init = (void*)GetProcAddress(hinstUsbK, "LstK_Init");
+  _LstK_Free = (void*)GetProcAddress(hinstUsbK, "LstK_Free");
+  _LstK_Count = (void*)GetProcAddress(hinstUsbK, "LstK_Count");
+  _LstK_Enumerate = (void*)GetProcAddress(hinstUsbK, "LstK_Enumerate");
   assert(_UsbK_Init != NULL && _UsbK_Free != NULL && _UsbK_QueryInterfaceSettings != NULL
          && _UsbK_QueryPipe != NULL && _UsbK_ReadPipe != NULL && _LstK_Init != NULL
          && _LstK_Free != NULL  && _LstK_Count != NULL  && _LstK_Enumerate != NULL);

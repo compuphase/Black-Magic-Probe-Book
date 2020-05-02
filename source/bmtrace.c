@@ -293,9 +293,9 @@ int main(int argc, char *argv[])
   }
 
   for (idx = 1; idx < argc; idx++) {
-    const char *ptr;
-    int value;
     if (IS_OPTION(argv[idx])) {
+      const char *ptr;
+      int value;
       switch (argv[idx][1]) {
       case '?':
       case 'h':
@@ -423,7 +423,7 @@ int main(int argc, char *argv[])
         recent_statuscode = BMPERR_GENERAL;
         { int loc;
           unsigned long error = trace_errno(&loc);
-          sprintf(msg, "Trace access denied (error loc:%lu)", loc, error);
+          sprintf(msg, "Trace access denied (error %d:%lu)", loc, error);
         }
         tracelog_statusmsg(TRACESTATMSG_BMP, msg, recent_statuscode);
         break;
@@ -431,7 +431,7 @@ int main(int argc, char *argv[])
         recent_statuscode = BMPERR_GENERAL;
         { int loc;
           unsigned long error = trace_errno(&loc);
-          sprintf(msg, "Trace access denied (error loc:%lu)", loc, error);
+          sprintf(msg, "Trace access denied (error %d:%lu)", loc, error);
         }
         tracelog_statusmsg(TRACESTATMSG_BMP, msg, recent_statuscode);
         break;
@@ -583,8 +583,8 @@ int main(int argc, char *argv[])
       if (nk_group_begin(ctx, "right", NK_WINDOW_BORDER)) {
         #define LABEL_WIDTH (4.5 * FONT_HEIGHT)
         #define VALUE_WIDTH (splitter_columns[2] - LABEL_WIDTH - 26)
-        int result;
         if (nk_tree_state_push(ctx, NK_TREE_TAB, "Configuration", &tab_states[TAB_CONFIGURATION])) {
+          int result;
           nk_layout_row_begin(ctx, NK_STATIC, ROW_HEIGHT, 2);
           nk_layout_row_push(ctx, LABEL_WIDTH);
           nk_label(ctx, "Mode", NK_TEXT_ALIGN_LEFT | NK_TEXT_ALIGN_MIDDLE);

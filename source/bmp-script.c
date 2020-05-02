@@ -21,6 +21,9 @@
   #define WIN32_LEAN_AND_MEAN
   #include <windows.h>
   #include <direct.h>
+  #if defined __MINGW32__ || defined __MINGW64__ || defined _MSC_VER
+    #include "strlcpy.h"
+  #endif
   #if defined _MSC_VER
     #define strdup(s)         _strdup(s)
     #define stricmp(s1,s2)    _stricmp((s1),(s2))
