@@ -7,7 +7,7 @@
  * Build this file with the macro STANDALONE defined on the command line to
  * create a self-contained executable.
  *
- * Copyright 2019 CompuPhase
+ * Copyright 2019-2020 CompuPhase
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -48,17 +48,24 @@ int main(int argc, char *argv[])
 #if !(defined WIN32 || defined _WIN32)
   typedef char TCHAR;
 #endif
-  TCHAR port_gdb[64], port_term[64], port_swo[128];
-  int seqnr = 0;
+  TCHAR port_gdb[64], port_term[64], port_swo[128], serial[64];
+  const TCHAR *iface = NULL;
+  TCHAR *ptr;
+  int argbase = 1;
+  long seqnr = 0;
   int print_all = 1;
 
   if (argc >= 2 && (argv[1][0] == '-' || argv[1][0] == '/' || argv[1][0] == '?')) {
     printf("bmscan detects the ports used by Black Magic Probe devices that are connected.\n\n"
            "There are two options:\n"
            "* The sequence number of the Black Magic Probe (if multiple are connected).\n"
+           "  Alternatively, you may specify the serial number of the Black Magic Probe, in\n"
+           "  hexadecimal.\n"
            "* The port name or device name to return, one of \"gdbserver\", \"uart\" or \"swo\".\n\n"
            "Examples: bmscan             - list all ports of all connected devices\n"
            "          bmscan 2           - list all ports of the second Black Magic Probe.\n"
+           "          bmscan 7bb180b4    - list all ports of the Black Magic Probe with the\n"
+           "                               serial number in the parameter.\n"
            "          bmscan gdbserver   - list the COM-port / tty device for GDB-server of\n"
            "                               the first device.\n"
            "          bmscan 2 swo       - list the GUID / device for the SWO trace output\n"
@@ -66,19 +73,42 @@ int main(int argc, char *argv[])
     return 0;
   }
 
-  if (argc >= 3) {
-    seqnr = atoi(argv[2]) - 1;
-  } else if (argc >= 2 && isdigit(argv[1][0])) {
-    seqnr = atoi(argv[1]) - 1;
+  /* check command line arguments */
+  serial[0] = '\0';
+  if (argc >= 2 && (seqnr = strtol(argv[1], &ptr, 16)) != 0 && *ptr == '\0') {
+    /* if sequence number > 9 assume a serial number */
+    if (seqnr > 9)
+      strcpy(serial, argv[1]);
+    else
+      seqnr -= 1;
     print_all = 0;
-    argc -= 1;
+    argbase = 2;
+  } else {
+    seqnr = 0;
   }
+  if (argbase < argc)
+    iface = argv[argbase];
+
+  /* if a serial number was passed, look it up */
+  if (strlen(serial) > 0) {
+    TCHAR match[64];
+    int idx;
+    seqnr = -1;
+    for (idx = 0; seqnr == -1 && find_bmp(idx, BMP_IF_SERIAL, match, sizearray(match)); idx++)
+      if (stricmp(match, serial) == 0)
+        seqnr = idx;
+    if (seqnr == -1) {
+      printf("\nBlack Magic Probe with serial number %s is not found.\n", serial);
+      return 1;
+    }
+  }
+
   if (seqnr < 0) {
     printf("\nInvalid sequence number %d, sequence numbers start at 1.\n", seqnr + 1);
     return 1;
   }
 
-  if (argc >= 2) {
+  if (iface != NULL) {
     if (strcmp(argv[1], "gdbserver")== 0) {
       /* print out only the gdbserver port */
       if (!find_bmp(seqnr, BMP_IF_GDB, port_gdb, sizearray(port_gdb)))
@@ -97,6 +127,8 @@ int main(int argc, char *argv[])
         printf("unavailable");
       else
         print_port(port_swo);
+    } else {
+      printf("Unknown interface \"%s\"\n", iface);
     }
   } else {
     assert(!print_all || seqnr == 0); /* if seqnr were set, print_all is false */
@@ -125,8 +157,10 @@ int main(int argc, char *argv[])
         strcpy(port_term, "not detected");
       if (!find_bmp(seqnr, BMP_IF_TRACE, port_swo, sizearray(port_swo)))
         strcpy(port_swo, "not detected");
+      if (!find_bmp(seqnr, BMP_IF_SERIAL, serial, sizearray(serial)))
+        strcpy(serial, "(unknown)");
 
-      printf("\nBlack Magic Probe found:\n");
+      printf("\nBlack Magic Probe found, serial %s:\n", serial);
       printf("  gdbserver port: %s\n", port_gdb);
       printf("  TTL UART port:  %s\n", port_term);
       printf("  SWO interface:  %s\n", port_swo);

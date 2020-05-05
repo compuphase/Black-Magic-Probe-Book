@@ -4,7 +4,7 @@
  * it scans the registry for the Black Magic Probe device, under Linux, it
  * browses through sysfs.
  *
- * Copyright 2019 CompuPhase
+ * Copyright 2019-2020 CompuPhase
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -34,8 +34,11 @@
 #define BMP_IF_TRACE      5
 #define BMP_EP_TRACE      0x85  /* endpoint 5 is bulk data endpoint for trace interface */
 
+#define BMP_IF_SERIAL     9     /* pseudo-interface for getting the serial number */
+
 /* find_bmp() returns 1 on success and 0 on failure; the interface must be either
-   BMP_IF_GDB or BMP_IF_UART. */
+   BMP_IF_GDB, BMP_IF_UART or BMP_IF_TRACE (or BMP_IF_SERIAL to get the serial
+   number of the attached Black Magic Probe). */
 #if defined WIN32 || defined _WIN32
   #include <tchar.h>
   int find_bmp(int seqnr, int iface, TCHAR *name, size_t namelen);

@@ -1031,8 +1031,9 @@ void trace_close(void)
   }
 }
 
-unsigned long trace_errno(void)
+unsigned long trace_errno(int *loc)
 {
+  (void)loc;  /* parameter currently only relevant for Windows */
   return errno;
 }
 #endif

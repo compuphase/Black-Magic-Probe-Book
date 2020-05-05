@@ -4,7 +4,7 @@
  * it scans the registry for the Black Magic Probe device, under Linux, it
  * browses through sysfs.
  *
- * Copyright 2019 CompuPhase
+ * Copyright 2019-2020 CompuPhase
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -62,6 +62,8 @@
  *  \param name     The COM-port name (or interface GUID) will be copied in
  *                  this parameter.
  *  \param namelen  The size of the "name" parameter (in characters).
+ *
+ *  \return 1 on success, 0 on failure.
  */
 int find_bmp(int seqnr, int iface, TCHAR *name, size_t namelen)
 {
@@ -161,8 +163,68 @@ int find_bmp(int seqnr, int iface, TCHAR *name, size_t namelen)
     return _tcslen(name) > 0;
   }
 
-  /* otherwise, now open the key to the correct interface, and get a handle to
-     the same subkey as the one for GDB-server */
+  /* for the serial number, get the Container ID one level up, then look up
+     the composite device with the same Container ID */
+  if (iface == BMP_IF_SERIAL) {
+    TCHAR cid_iface[128], cid_device[128];
+    LSTATUS stat;
+    _stprintf(regpath, _T("SYSTEM\\CurrentControlSet\\Enum\\USB\\VID_%04X&PID_%04X&MI_%02X"),
+              BMP_VID, BMP_PID, BMP_IF_GDB);
+    if (RegOpenKeyEx(HKEY_LOCAL_MACHINE, regpath, 0, KEY_READ, &hkeySection) != ERROR_SUCCESS)
+      return 0; /* this should not happen, because we opened it just a while ago */
+    ptr = _tcschr(subkey, '\\');
+    assert(ptr != NULL);
+    *ptr = '\0';
+    if (RegOpenKeyEx(hkeySection, subkey, 0, KEY_READ, &hkeyItem) != ERROR_SUCCESS) {
+      RegCloseKey(hkeySection);
+      return 0;
+    }
+    maxlen = sizearray(cid_iface);
+    memset(cid_iface, 0, maxlen);
+    stat = RegQueryValueEx(hkeyItem, _T("ContainerID"), NULL, NULL, (LPBYTE)cid_iface, &maxlen);
+    RegCloseKey(hkeyItem);
+    RegCloseKey(hkeySection);
+    if (stat != ERROR_SUCCESS)
+      return 0;
+    /* go to the entry for the composite device */
+    _stprintf(regpath, _T("SYSTEM\\CurrentControlSet\\Enum\\USB\\VID_%04X&PID_%04X"),
+              BMP_VID, BMP_PID);
+    if (RegOpenKeyEx(HKEY_LOCAL_MACHINE, regpath, 0, KEY_READ, &hkeySection) != ERROR_SUCCESS)
+      return 0;
+    idx_device = 0;
+    for ( ;; ) {
+      maxlen = sizearray(subkey);
+      if (RegEnumKeyEx(hkeySection, idx_device, subkey, &maxlen, NULL, NULL, NULL, NULL) != ERROR_SUCCESS) {
+        RegCloseKey(hkeySection);
+        return 0;
+      }
+      if (RegOpenKeyEx(hkeySection, subkey, 0, KEY_READ, &hkeyItem) != ERROR_SUCCESS) {
+        RegCloseKey(hkeySection);
+        return 0;
+      }
+      /* read the Container ID of this device */
+      maxlen = sizearray(cid_device);
+      memset(cid_device, 0, maxlen);
+      stat = RegQueryValueEx(hkeyItem, _T("ContainerID"), NULL, NULL, (LPBYTE)cid_device, &maxlen);
+      RegCloseKey(hkeyItem);
+      if (stat != ERROR_SUCCESS) {
+        RegCloseKey(hkeySection);
+        return 0;
+      }
+      if (_tcsicmp(cid_iface, cid_device) == 0) {
+        /* if we found the Container IDs match, the subkey is the serial number */
+        RegCloseKey(hkeySection);
+        _tcsncpy(name, subkey, namelen);
+        name[namelen - 1] = '\0';
+        return _tcslen(name) > 0;
+      }
+      idx_device++;
+    }
+  }
+
+  /* at this point, neither the GDB-server, nor the serial number were requested,
+     now open the key to the correct interface, and get a handle to the same
+     subkey as the one for GDB-server */
   _stprintf(regpath, _T("SYSTEM\\CurrentControlSet\\Enum\\USB\\VID_%04X&PID_%04X&MI_%02X"),
             BMP_VID, BMP_PID, iface);
   if (RegOpenKeyEx(HKEY_LOCAL_MACHINE, regpath, 0, KEY_READ, &hkeySection) != ERROR_SUCCESS)
@@ -304,7 +366,7 @@ int find_bmp(int seqnr, int iface, char *name, size_t namelen)
                   }
                   closedir(ddev);
                 }
-              } else {
+              } else if (iface == BMP_IF_TRACE) {
                 ptr = path + strlen(path) - 4;  /* -4 for "/tty" */
                 assert(strlen(path) > 4);
                 assert(*ptr == '/' && *(ptr - 1) == (iface + '0'));
@@ -315,6 +377,25 @@ int find_bmp(int seqnr, int iface, char *name, size_t namelen)
                   *ptr = '\0';  /* erase "/modalias" again */
                   ptr = path + strlen(SYSFS_ROOT) + 1;  /* skip root */
                   strlcpy(name, ptr, namelen);  /* return <bus> '-' <port> ':' <???> '.' <iface> */
+                }
+              } else {
+                char *ptr;
+                FILE *fp;
+                assert(iface == BMP_IF_SERIAL);
+                assert(strlen(path) > 4);
+                ptr = path + strlen(path) - 4;  /* -4 for "/tty" */
+                assert(*ptr == '/');
+                while (ptr>path && *ptr != ':' && *(ptr - 1) != '/')
+                  ptr--;
+                assert(ptr > path && *ptr == ':');
+                *ptr = '\0';  /* remove sub-path */
+                strlcat(path, "/serial", sizearray(path));
+                fp = fopen(path, "r");
+                if (fp != NULL) {
+                  fgets(name, namelen, fp);
+                  if ((ptr = strchr(name, '\n')) != NULL)
+                    *ptr = '\0';  /* drop trailing newline */
+                  fclose(fp);
                 }
               }
             }
