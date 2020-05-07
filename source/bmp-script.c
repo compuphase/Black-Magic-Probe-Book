@@ -561,6 +561,7 @@ int bmscript_load(const char *mcu)
 
 void bmscript_clear(void)
 {
+  bmscript_clearcache();
   while (script_root.next != NULL) {
     SCRIPT *script = script_root.next;
     script_root.next = script->next;
@@ -583,10 +584,6 @@ void bmscript_clear(void)
  */
 void bmscript_clearcache(void)
 {
-  if (cache.name != NULL)
-    free((void*)cache.name);
-  if (cache.lines != NULL)
-    free((void*)cache.lines);
   cache.name = NULL;
   cache.lines = NULL;
   cache.count = 0;
@@ -636,9 +633,7 @@ int bmscript_line(const char *name, char *oper, uint32_t *address, uint32_t *val
     if (script == NULL)
       return 0;     /* no script with matching name is found */
 
-    if (cache.name != NULL)
-      free((void*)cache.name);
-    cache.name = strdup(name);
+    cache.name = script->name;
     cache.lines = script->lines;
     cache.count = script->count;
     cache.index = 0;

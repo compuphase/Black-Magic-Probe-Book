@@ -28,6 +28,11 @@
 #include <string.h>
 #include "bmp-scan.h"
 
+#if defined _MSC_VER
+  #define stricmp(s1,s2)  _stricmp((s1),(s2))
+#elif defined __linux__ || defined __FreeBSD__ || defined __APPLE__
+  #define stricmp(s1,s2)  strcasecmp((s1),(s2))
+#endif
 
 #if !defined sizearray
   #define sizearray(e)    (sizeof(e) / sizeof((e)[0]))
