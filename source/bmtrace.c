@@ -125,7 +125,7 @@ static int bmp_callback(int code, const char *message)
 
 #define WINDOW_WIDTH    700     /* default window size (window is resizable) */
 #define WINDOW_HEIGHT   400
-#define FONT_HEIGHT     14
+#define FONT_HEIGHT     14      /* default font size */
 #define ROW_HEIGHT      (1.6 * opt_fontsize)
 #define BROWSEBTN_WIDTH (1.85 * opt_fontsize)
 
@@ -216,6 +216,7 @@ int main(int argc, char *argv[])
   int opt_connect_srst = nk_false;
   int opt_datasize = 0;
   int opt_fontsize = FONT_HEIGHT;
+  char opt_fontstd[64] = "", opt_fontmono[64] = "";
   int trace_status = TRACESTAT_NOT_INIT;
   int trace_running = 1;
   int reinitialize =  1;
@@ -263,6 +264,8 @@ int main(int argc, char *argv[])
   ini_gets("Settings", "bitrate", "100000", bitrate_str, sizearray(bitrate_str), txtConfigFile);
   ini_gets("Settings", "size", "", valstr, sizearray(valstr), txtConfigFile);
   opt_fontsize = (int)ini_getl("Settings", "fontsize", FONT_HEIGHT, txtConfigFile);
+  ini_gets("Settings", "fontstd", "", opt_fontstd, sizearray(opt_fontstd), txtConfigFile);
+  ini_gets("Settings", "fontmono", "", opt_fontmono, sizearray(opt_fontmono), txtConfigFile);
   if (sscanf(valstr, "%d %d", &canvas_width, &canvas_height) != 2 || canvas_width < 100 || canvas_height < 50) {
     canvas_width = WINDOW_WIDTH;
     canvas_height = WINDOW_HEIGHT;
@@ -295,7 +298,7 @@ int main(int argc, char *argv[])
   for (idx = 1; idx < argc; idx++) {
     if (IS_OPTION(argv[idx])) {
       const char *ptr;
-      int value;
+      int result;
       switch (argv[idx][1]) {
       case '?':
       case 'h':
@@ -305,9 +308,19 @@ int main(int argc, char *argv[])
         ptr = &argv[idx][2];
         if (*ptr == '=' || *ptr == ':')
           ptr++;
-        value = (int)strtol(ptr, NULL, 10);
-        if (value >= 8)
-          opt_fontsize = value;
+        result = (int)strtol(ptr, (char**)&ptr, 10);
+        if (result >= 8)
+          opt_fontsize = result;
+        if (*ptr == ',') {
+          char *mono;
+          ptr++;
+          if ((mono = strchr(ptr, ',')) != NULL)
+            *mono++ = '\0';
+          if (*ptr != '\0')
+            strlcpy(opt_fontstd, ptr, sizearray(opt_fontstd));
+          if (mono != NULL && *mono == '\0')
+            strlcpy(opt_fontmono, mono, sizearray(opt_fontmono));
+        }
         break;
       case 't':
         ptr = &argv[idx][2];
@@ -350,7 +363,8 @@ int main(int argc, char *argv[])
   recent_statuscode = BMPSTAT_SUCCESS;  /* must be a non-zero code to display anything */
   tracelog_statusmsg(TRACESTATMSG_BMP, "Initializing...", recent_statuscode);
 
-  ctx = guidriver_init("BlackMagic Trace Viewer", canvas_width, canvas_height, GUIDRV_RESIZEABLE | GUIDRV_TIMER, FONT_HEIGHT);
+  ctx = guidriver_init("BlackMagic Trace Viewer", canvas_width, canvas_height,
+                       GUIDRV_RESIZEABLE | GUIDRV_TIMER, opt_fontstd, opt_fontmono, opt_fontsize);
   set_style(ctx);
 
   for ( ;; ) {
@@ -365,7 +379,7 @@ int main(int argc, char *argv[])
         /* open/reset the serial port/device if any initialization must be done */
         if (rs232_isopen())
           bmp_break();
-        result = bmp_connect(); /* this function also opens the (virtual) serial port/device */
+        result = bmp_connect(0); /* this function also opens the (virtual) serial port/device */
         if (result)
           result = bmp_attach(2, opt_connect_srst, mcu_driver, sizearray(mcu_driver), NULL, 0);
         else
@@ -520,7 +534,7 @@ int main(int argc, char *argv[])
         }
         tracestring_process(trace_running);
         nk_layout_row_dynamic(ctx, splitter_rows[0], 1);
-        tracelog_widget(ctx, "tracelog", FONT_HEIGHT, cur_match_line, NK_WINDOW_BORDER);
+        tracelog_widget(ctx, "tracelog", opt_fontsize, cur_match_line, NK_WINDOW_BORDER);
 
         /* vertical splitter */
         nk_layout_row_dynamic(ctx, SEPARATOR_VER, 1);
@@ -534,7 +548,7 @@ int main(int argc, char *argv[])
           splitter_ver = (splitter_rows[0] + ctx->input.mouse.delta.y) / (canvas_height - EXTRA_SPACE_VER);
 
         nk_layout_row_dynamic(ctx, splitter_rows[1], 1);
-        click_time = timeline_widget(ctx, "timeline", FONT_HEIGHT, NK_WINDOW_BORDER);
+        click_time = timeline_widget(ctx, "timeline", opt_fontsize, NK_WINDOW_BORDER);
         cur_match_line = (click_time >= 0.0) ? tracestring_findtimestamp(click_time) : -1;
 
         nk_layout_row_dynamic(ctx, SEPARATOR_VER, 1);
@@ -581,7 +595,7 @@ int main(int argc, char *argv[])
 
       /* right column */
       if (nk_group_begin(ctx, "right", NK_WINDOW_BORDER)) {
-        #define LABEL_WIDTH (4.5 * FONT_HEIGHT)
+        #define LABEL_WIDTH (4.5 * opt_fontsize)
         #define VALUE_WIDTH (splitter_columns[2] - LABEL_WIDTH - 26)
         if (nk_tree_state_push(ctx, NK_TREE_TAB, "Configuration", &tab_states[TAB_CONFIGURATION])) {
           int result;
@@ -590,7 +604,7 @@ int main(int argc, char *argv[])
           nk_label(ctx, "Mode", NK_TEXT_ALIGN_LEFT | NK_TEXT_ALIGN_MIDDLE);
           nk_layout_row_push(ctx, VALUE_WIDTH);
           result = opt_mode - MODE_MANCHESTER;
-          result = nk_combo(ctx, mode_strings, NK_LEN(mode_strings), result, FONT_HEIGHT, nk_vec2(VALUE_WIDTH,4.5*FONT_HEIGHT));
+          result = nk_combo(ctx, mode_strings, NK_LEN(mode_strings), result, opt_fontsize, nk_vec2(VALUE_WIDTH,4.5*opt_fontsize));
           if (opt_mode != result + MODE_MANCHESTER) {
             /* opt_mode is 1-based, the result of nk_combo() is 0-based, which is
                we MODE_MANCHESTER is added (MODE_MANCHESTER == 1) */
@@ -645,7 +659,7 @@ int main(int argc, char *argv[])
           nk_layout_row_push(ctx, VALUE_WIDTH);
           bounds = nk_widget_bounds(ctx);
           result = opt_datasize;
-          opt_datasize = nk_combo(ctx, datasize_strings, NK_LEN(datasize_strings), opt_datasize, FONT_HEIGHT, nk_vec2(VALUE_WIDTH,5.5*FONT_HEIGHT));
+          opt_datasize = nk_combo(ctx, datasize_strings, NK_LEN(datasize_strings), opt_datasize, opt_fontsize, nk_vec2(VALUE_WIDTH,5.5*opt_fontsize));
           if (opt_datasize != result) {
             trace_setdatasize((opt_datasize == 3) ? 4 : opt_datasize);
             tracestring_clear();
@@ -704,7 +718,7 @@ int main(int argc, char *argv[])
         }
 
         if (nk_tree_state_push(ctx, NK_TREE_TAB, "Channels", &tab_states[TAB_CHANNELS])) {
-          float labelwidth = tracelog_labelwidth(FONT_HEIGHT) + 10;
+          float labelwidth = tracelog_labelwidth(opt_fontsize) + 10;
           struct nk_style_button stbtn = ctx->style.button;
           stbtn.border = 0;
           stbtn.rounding = 0;
@@ -713,8 +727,8 @@ int main(int argc, char *argv[])
             char label[32];
             int enabled;
             struct nk_color clrtxt, clrbk;
-            nk_layout_row_begin(ctx, NK_STATIC, FONT_HEIGHT, 2);
-            nk_layout_row_push(ctx, 3 * FONT_HEIGHT);
+            nk_layout_row_begin(ctx, NK_STATIC, opt_fontsize, 2);
+            nk_layout_row_push(ctx, 3 * opt_fontsize);
             sprintf(label, "%2d", chan);
             enabled = channel_getenabled(chan);
             if (nk_checkbox_label(ctx, label, &enabled)) {
@@ -744,7 +758,7 @@ int main(int argc, char *argv[])
               nk_input_button(ctx, NK_BUTTON_RIGHT, bounds.x, bounds.y + bounds.h - 1, 0);
             }
             nk_layout_row_end(ctx);
-            if (nk_contextual_begin_fitview(ctx, 0, nk_vec2(9*FONT_HEIGHT, 5*ROW_HEIGHT), bounds, &rc_canvas)) {
+            if (nk_contextual_begin_fitview(ctx, 0, nk_vec2(9*opt_fontsize, 5*ROW_HEIGHT), bounds, &rc_canvas)) {
               nk_layout_row_dynamic(ctx, ROW_HEIGHT, 1);
               clrbk.r = (nk_byte)nk_propertyi(ctx, "#R", 0, clrbk.r, 255, 1, 1);
               nk_layout_row_dynamic(ctx, ROW_HEIGHT, 1);
@@ -783,7 +797,7 @@ int main(int argc, char *argv[])
       /* popup dialogs */
       if (find_popup > 0) {
         struct nk_rect rc;
-        rc.x = canvas_width - 18 * FONT_HEIGHT;
+        rc.x = canvas_width - 18 * opt_fontsize;
         rc.y = canvas_height - 6.5 * ROW_HEIGHT;
         rc.w = 200;
         rc.h = 3.6 * ROW_HEIGHT;
@@ -792,7 +806,7 @@ int main(int argc, char *argv[])
           nk_label(ctx, "Text", NK_TEXT_ALIGN_LEFT | NK_TEXT_ALIGN_MIDDLE);
           nk_edit_focus(ctx, 0);
           nk_edit_string_zero_terminated(ctx, NK_EDIT_FIELD, findtext, sizearray(findtext), nk_filter_ascii);
-          nk_layout_row(ctx, NK_DYNAMIC, FONT_HEIGHT, 2, nk_ratio(2, 0.2, 0.8));
+          nk_layout_row(ctx, NK_DYNAMIC, opt_fontsize, 2, nk_ratio(2, 0.2, 0.8));
           nk_spacing(ctx, 1);
           if (find_popup == 2)
             nk_label_colored(ctx, "Text not found", NK_TEXT_ALIGN_LEFT | NK_TEXT_ALIGN_MIDDLE, nk_rgb(255, 100, 128));
@@ -847,6 +861,8 @@ int main(int argc, char *argv[])
     ini_puts("Settings", key, valstr, txtConfigFile);
   }
   ini_putl("Settings", "fontsize", opt_fontsize, txtConfigFile);
+  ini_puts("Settings", "fontstd", opt_fontstd, txtConfigFile);
+  ini_puts("Settings", "fontmono", opt_fontmono, txtConfigFile);
   ini_putl("Settings", "mode", opt_mode, txtConfigFile);
   ini_putl("Settings", "init-target", opt_init_target, txtConfigFile);
   ini_putl("Settings", "init-bmp", opt_init_bmp, txtConfigFile);

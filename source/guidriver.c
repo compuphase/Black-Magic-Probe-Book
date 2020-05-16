@@ -2,7 +2,7 @@
  * Helper functions for the back-end driver for the Nuklear GUI. Currently, GDI+
  * (for Windows) and GLFW with OpenGL (for Linux) are supported.
  *
- * Copyright 2019 CompuPhase
+ * Copyright 2019-2020 CompuPhase
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -65,6 +65,10 @@ static LRESULT CALLBACK WindowProc(HWND wnd, UINT msg, WPARAM wparam, LPARAM lpa
  *  \param width      The width of the client area.
  *  \param height     The height of the client area.
  *  \param flags      A combination of options.
+ *  \param fontstd    The name of the preferred standard font (may be NULL to
+ *                    use the default).
+ *  \param fontmono   The name of the preferred monospaced font (may be NULL to
+ *                    use the default).
  *  \param fontsize   The size of the main font, in pixels.
  *
  *  \note In Microsoft Windows, the application icon (in the frame window) is
@@ -73,8 +77,8 @@ static LRESULT CALLBACK WindowProc(HWND wnd, UINT msg, WPARAM wparam, LPARAM lpa
  *        with 'xd' or 'xxd'; the array must be called appicon_data, and the
  *        size variable must be appicon_datasize.
  */
-struct nk_context* guidriver_init(const char *caption, int width, int height,
-                                  int flags, int fontsize)
+struct nk_context* guidriver_init(const char *caption, int width, int height, int flags,
+                                  const char *fontstd, const char *fontmono, int fontsize)
 {
   struct nk_context *ctx;
   WNDCLASSW wc;
@@ -166,20 +170,30 @@ struct nk_context* guidriver_init(const char *caption, int width, int height,
 
   ctx = nk_gdip_init(hwndApp, width, height);
 
-  fontStd = nk_gdipfont_create("Segoe UI", fontsize);
+  fontStd = NULL;
+  if (fontstd != NULL && strlen(fontstd) > 0)
+    fontStd = nk_gdipfont_create(fontstd, fontsize);
+  if (fontStd == NULL)
+    fontStd = nk_gdipfont_create("Segoe UI", fontsize);
   if (fontStd == NULL)
     fontStd = nk_gdipfont_create("Tahoma", fontsize);
   if (fontStd == NULL)
     fontStd = nk_gdipfont_create("Arial", fontsize);
 
-  fontMono = nk_gdipfont_create("DejaVu Sans Mono", fontsize);
+  /* for unknown reasons, the Hack font displays as italics in Nuklear, which
+     is why it is not included in this list */
+  fontMono = NULL;
+  if (fontmono != NULL && strlen(fontmono) > 0)
+    fontMono = nk_gdipfont_create(fontmono, fontsize);
+  if (fontMono == NULL)
+    fontMono = nk_gdipfont_create("DejaVu Sans Mono", fontsize);
   if (fontMono == NULL)
     fontMono = nk_gdipfont_create("Consolas", fontsize);
   if (fontMono == NULL)
     fontMono = nk_gdipfont_create("Courier New", fontsize);
 
   NK_ASSERT(fontStd != NULL);
-  nk_gdipfont_set_voffset(fontStd, -3);
+  nk_gdipfont_set_voffset(fontStd, (-fontsize*0.2-0.5));
   nk_gdip_set_font(fontStd);
 
   return ctx;
@@ -288,7 +302,8 @@ static void error_callback(int e, const char *d)
   fprintf(stderr, "Error %d: %s\n", e, d);
 }
 
-struct nk_context* guidriver_init(const char *caption, int width, int height, int flags, int fontsize)
+struct nk_context* guidriver_init(const char *caption, int width, int height, int flags,
+                                  const char *fontstd, const char *fontmono, int fontsize)
 {
   extern const unsigned char appicon_data[];
   extern const unsigned int appicon_datasize;
@@ -315,7 +330,8 @@ struct nk_context* guidriver_init(const char *caption, int width, int height, in
   free(icons[0].pixels);
 
   ctx = nk_glfw3_init(winApp, NK_GLFW3_INSTALL_CALLBACKS);
-  if (font_locate(path, sizeof path, "DejaVu Sans", "")
+  if ((fontstd != NULL && strlen(fontstd) > 0 && font_locate(path, sizeof path, fontstd, ""))
+      || font_locate(path, sizeof path, "DejaVu Sans", "")
       || font_locate(path, sizeof path, "Ubuntu", "")
       || font_locate(path, sizeof path, "FreeSans", "")
       || font_locate(path, sizeof path, "Liberation Sans", ""))
@@ -329,7 +345,8 @@ struct nk_context* guidriver_init(const char *caption, int width, int height, in
     if (fontStd != NULL)
       nk_style_set_font(ctx, &fontStd->handle);
   }
-  if (font_locate(path, sizeof path, "Hack", "")
+  if ((fontmono != NULL && strlen(fontmono) > 0 && font_locate(path, sizeof path, fontmono, ""))
+      || font_locate(path, sizeof path, "Hack", "")
       || font_locate(path, sizeof path, "Andale Mono", "")
 	  || font_locate(path, sizeof path, "FreeMono", "")
       || font_locate(path, sizeof path, "Liberation Mono", ""))

@@ -1954,7 +1954,7 @@ static int is_idle(void)
 
 #define WINDOW_WIDTH    750     /* default window size (window is resizable) */
 #define WINDOW_HEIGHT   500
-#define FONT_HEIGHT     14
+#define FONT_HEIGHT     14      /* default font size */
 #define ROW_HEIGHT      (1.6 * opt_fontsize)
 #define COMBOROW_CY     (0.8 * opt_fontsize)
 #define BUTTON_WIDTH    (3 * opt_fontsize)
@@ -2917,6 +2917,7 @@ int main(int argc, char *argv[])
   int opt_allmsg = nk_false;
   int opt_autodownload = nk_true;
   int opt_fontsize = FONT_HEIGHT;
+  char opt_fontstd[64] = "", opt_fontmono[64] = "";
   SWOSETTINGS opt_swo;
   float splitter_hor = 0.75, splitter_ver = 0.75;
   char console_edit[128] = "", watch_edit[128] = "";
@@ -2974,6 +2975,8 @@ int main(int argc, char *argv[])
   }
   opt_allmsg = (int)ini_getl("Settings", "allmessages", 0, txtConfigFile);
   opt_fontsize = (int)ini_getl("Settings", "fontsize", FONT_HEIGHT, txtConfigFile);
+  ini_gets("Settings", "fontstd", "", opt_fontstd, sizearray(opt_fontstd), txtConfigFile);
+  ini_gets("Settings", "fontmono", "", opt_fontmono, sizearray(opt_fontmono), txtConfigFile);
   /* read saved recent commands */
   for (idx = 1; ; idx++) {
     char key[32];
@@ -2999,9 +3002,19 @@ int main(int argc, char *argv[])
         ptr = &argv[idx][2];
         if (*ptr == '=' || *ptr == ':')
           ptr++;
-        result = (int)strtol(ptr, NULL, 10);
+        result = (int)strtol(ptr, (char**)&ptr, 10);
         if (result >= 8)
           opt_fontsize = result;
+        if (*ptr == ',') {
+          char *mono;
+          ptr++;
+          if ((mono = strchr(ptr, ',')) != NULL)
+            *mono++ = '\0';
+          if (*ptr != '\0')
+            strlcpy(opt_fontstd, ptr, sizearray(opt_fontstd));
+          if (mono != NULL && *mono == '\0')
+            strlcpy(opt_fontmono, mono, sizearray(opt_fontmono));
+        }
         break;
       case 'g':
         ptr = &argv[idx][2];
@@ -3068,7 +3081,8 @@ int main(int argc, char *argv[])
   watchseq = 0;
   trace_status = TRACESTAT_INIT_FAILED;
 
-  ctx = guidriver_init("BlackMagic Debugger", canvas_width, canvas_height, GUIDRV_RESIZEABLE | GUIDRV_TIMER, FONT_HEIGHT);
+  ctx = guidriver_init("BlackMagic Debugger", canvas_width, canvas_height,
+                       GUIDRV_RESIZEABLE | GUIDRV_TIMER, opt_fontstd, opt_fontmono, opt_fontsize);
   set_style(ctx);
 
   while (curstate != STATE_QUIT) {
@@ -3935,10 +3949,10 @@ int main(int argc, char *argv[])
           }
           nk_layout_row_dynamic(ctx, splitter_rows[0] - ROW_HEIGHT - 4, 1);
           bounds = nk_widget_bounds(ctx);
-          source_widget(ctx, "source", FONT_HEIGHT);
+          source_widget(ctx, "source", opt_fontsize);
           if (nk_input_mouse_clicked(&ctx->input, NK_BUTTON_LEFT, bounds)) {
             int row, col;
-            source_mouse2char(ctx, "source", FONT_HEIGHT, bounds, &row, &col);
+            source_mouse2char(ctx, "source", opt_fontsize, bounds, &row, &col);
             if (col == 0) {
               /* click in the margin: set/clear/enable/disable breakpoint
                  - if there is no breakpoint on this line -> add a breakpoint
@@ -3981,7 +3995,7 @@ int main(int argc, char *argv[])
           } else if (nk_input_is_mouse_hovering_rect(&ctx->input, bounds)) {
             int row, col;
             char sym[64];
-            source_mouse2char(ctx, "source", FONT_HEIGHT, bounds, &row, &col);
+            source_mouse2char(ctx, "source", opt_fontsize, bounds, &row, &col);
             if (row != prev_clicked_line)
               prev_clicked_line = -1; /* mouse leaves the line clicked on, erase "repeat click" */
             if (source_getsymbol(sym, sizearray(sym), row, col)) {
@@ -4019,7 +4033,7 @@ int main(int argc, char *argv[])
         nk_layout_row_dynamic(ctx, splitter_rows[1], 1);
         if (nk_group_begin(ctx, "console", NK_WINDOW_NO_SCROLLBAR|NK_WINDOW_BORDER)) {
           nk_layout_row_dynamic(ctx, splitter_rows[1] - ROW_HEIGHT - SPACING, 1);
-          console_widget(ctx, "console-out", FONT_HEIGHT);
+          console_widget(ctx, "console-out", opt_fontsize);
           nk_layout_row_dynamic(ctx, ROW_HEIGHT, 1);
           if (curstate < STATE_START && !atprompt) {
             /* while initializing, say "please wait" */
@@ -4108,7 +4122,7 @@ int main(int argc, char *argv[])
       /* right column */
       if (nk_group_begin(ctx, "right", NK_WINDOW_BORDER)) {
         if (nk_tree_state_push(ctx, NK_TREE_TAB, "Configuration", &tab_states[TAB_CONFIGURATION])) {
-          #define LABEL_WIDTH (2.3 * FONT_HEIGHT)
+          #define LABEL_WIDTH (2.3 * opt_fontsize)
           float edtwidth;
           char basename[_MAX_PATH], *p;
           bounds = nk_widget_bounds(ctx);
@@ -4330,7 +4344,7 @@ int main(int argc, char *argv[])
             STRINGLIST *item;
             semihosting_lines = 0;
             for (item = semihosting_root.next; item != NULL; item = item->next) {
-              nk_layout_row_dynamic(ctx, FONT_HEIGHT, 1);
+              nk_layout_row_dynamic(ctx, opt_fontsize, 1);
               nk_label(ctx, item->text, NK_TEXT_LEFT);
               semihosting_lines += 1;
             }
@@ -4363,7 +4377,7 @@ int main(int argc, char *argv[])
         if (result) {
           tracestring_process(trace_status == TRACESTAT_OK);
           nk_layout_row_dynamic(ctx, tab_heights[TAB_SWO], 1);
-          tracelog_widget(ctx, "tracelog", FONT_HEIGHT, -1, 0);
+          tracelog_widget(ctx, "tracelog", opt_fontsize, -1, 0);
           swo_lines = tracestring_count();
           /* make view height resizeable */
           nk_layout_row_dynamic(ctx, SEPARATOR_VER, 1);
@@ -4448,6 +4462,8 @@ int main(int argc, char *argv[])
   }
   ini_putl("Settings", "allmessages", opt_allmsg, txtConfigFile);
   ini_putl("Settings", "fontsize", opt_fontsize, txtConfigFile);
+  ini_puts("Settings", "fontstd", opt_fontstd, txtConfigFile);
+  ini_puts("Settings", "fontmono", opt_fontmono, txtConfigFile);
   ini_puts("Session", "recent", txtFilename, txtConfigFile);
   /* save history of commands */
   idx = 1;

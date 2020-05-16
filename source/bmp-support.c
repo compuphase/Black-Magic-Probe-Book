@@ -89,15 +89,18 @@ void bmp_setcallback(BMP_STATCALLBACK func)
  *  it. It retrieves the essential "packet size" parameter, but does not issue
  *  any other command.
  *
+ *  \param probe  The probe sequence number, 0 if only a single probe is
+ *                connected.
+ *
  *  \return 1 on success, 0 on failure. Status and error messages are passed via
  *          the callback.
  */
-int bmp_connect(void)
+int bmp_connect(int probe)
 {
   if (!rs232_isopen()) {
     char devname[128];
     FlashRgnCount = 0;
-    if (find_bmp(0, BMP_IF_GDB, devname, sizearray(devname))) {
+    if (find_bmp(probe, BMP_IF_GDB, devname, sizearray(devname))) {
       char buffer[256], *ptr;
       size_t size;
       /* connect to the port */
@@ -532,7 +535,7 @@ int bmp_verify(FILE *fp)
     }
     fseek(fp, offset, SEEK_SET);
     fread(data, 1, filesize, fp);
-    crc_src = (unsigned)crc32((uint32_t)~0, data, filesize);
+    crc_src = (unsigned)gdb_crc32((uint32_t)~0, data, filesize);
     free(data);
     /* request CRC from Black Magic Probe */
     sprintf(cmd, "qCRC:%lx,%lx",paddr,filesize);

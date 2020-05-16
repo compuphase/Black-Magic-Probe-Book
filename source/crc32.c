@@ -71,7 +71,7 @@ static const unsigned long crc_table[256] =
   0xbcb4666d, 0xb8757bda, 0xb5365d03, 0xb1f740b4
 };
 
-/** crc32()
+/** gdb_crc32()
  *  \param crc    The initial CRC, set to ~0 on the first call.
  *  \param data   The data block to calculate the CRC on.
  *  \param size   The size of the data block in bytes.
@@ -83,7 +83,7 @@ static const unsigned long crc_table[256] =
  *        first call, the value of the crc param is set to ~0, on every next
  *        call, it is set the the output of the previous call.
  */
-uint32_t crc32(uint32_t crc, const unsigned char *data, unsigned size)
+uint32_t gdb_crc32(uint32_t crc, const unsigned char *data, unsigned size)
 {
   while (size--)
     crc = (crc << 8) ^ crc_table[((crc >> 24) ^ *data++) & 0xff];

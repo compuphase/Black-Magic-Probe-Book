@@ -411,3 +411,13 @@ int find_bmp(int seqnr, int iface, char *name, size_t namelen)
 
 #endif
 
+int get_bmp_count(void)
+{
+  int idx;
+  char portname[64];
+
+  for (idx = 0; find_bmp(idx, BMP_IF_GDB, portname, sizearray(portname)); idx++)
+    {}
+  return idx;
+}
+

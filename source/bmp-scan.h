@@ -46,6 +46,10 @@
   int find_bmp(int seqnr, int iface, char *name, size_t namelen);
 #endif
 
+/* get_bmp_count() returns the number of detected probes (only probes on the
+   USB port are detected) */
+int get_bmp_count(void);
+
 #if defined __cplusplus
   }
 #endif

@@ -47,6 +47,7 @@
 #include "guidriver.h"
 #include "noc_file_dialog.h"
 #include "nuklear_tooltip.h"
+#include "bmp-scan.h"
 #include "bmp-script.h"
 #include "bmp-support.h"
 #include "elf.h"
@@ -84,11 +85,11 @@
 #endif
 
 
-#define FONT_HEIGHT     14
+#define FONT_HEIGHT     14              /* default font size */
 #define WINDOW_WIDTH    (30 * opt_fontsize)
 #define WINDOW_HEIGHT   (21 * opt_fontsize)
 #define ROW_HEIGHT      (2 * opt_fontsize)
-#define COMBOROW_CY     (0.65 * opt_fontsize)
+#define COMBOROW_CY     (0.8 * opt_fontsize)
 #define BROWSEBTN_WIDTH (1.85 * opt_fontsize)
 
 
@@ -571,6 +572,8 @@ int main(int argc, char *argv[])
   char txtSection[32] = "", txtAddress[32] = "", txtMatch[64] = "", txtOffset[32] = "";
   char txtSerial[32] = "", txtSerialSize[32] = "";
   FILE *fpTgt, *fpWork;
+  int probe, usbprobes, netprobe;
+  const char **probelist;
   int opt_tpwr = nk_false;
   int opt_fullerase = nk_false;
   int opt_connect_srst = nk_false;
@@ -580,6 +583,7 @@ int main(int argc, char *argv[])
   int help_active = 0;
   int load_options = 0;
   int opt_fontsize = FONT_HEIGHT;
+  char opt_fontstd[64] = "", opt_fontmono[64] = "";
 
   /* locate the configuration file */
   if (folder_AppConfig(txtConfigFile, sizearray(txtConfigFile))) {
@@ -592,13 +596,16 @@ int main(int argc, char *argv[])
     strlcat(txtConfigFile, DIR_SEPARATOR "bmflash.ini", sizearray(txtConfigFile));
   }
 
+  probe = (int)ini_getl("Settings", "probe", 0, txtConfigFile);
   opt_fontsize = (int)ini_getl("Settings", "fontsize", FONT_HEIGHT, txtConfigFile);
+  ini_gets("Settings", "fontstd", "", opt_fontstd, sizearray(opt_fontstd), txtConfigFile);
+  ini_gets("Settings", "fontmono", "", opt_fontmono, sizearray(opt_fontmono), txtConfigFile);
 
   txtFilename[0] = '\0';
   for (idx = 1; idx < argc; idx++) {
     if (IS_OPTION(argv[idx])) {
       const char *ptr;
-      int value;
+      int result;
       switch (argv[idx][1]) {
       case '?':
       case 'h':
@@ -608,9 +615,19 @@ int main(int argc, char *argv[])
         ptr = &argv[idx][2];
         if (*ptr == '=' || *ptr == ':')
           ptr++;
-        value = (int)strtol(ptr, NULL, 10);
-        if (value >= 8)
-          opt_fontsize = value;
+        result = (int)strtol(ptr, (char**)&ptr, 10);
+        if (result >= 8)
+          opt_fontsize = result;
+        if (*ptr == ',') {
+          char *mono;
+          ptr++;
+          if ((mono = strchr(ptr, ',')) != NULL)
+            *mono++ = '\0';
+          if (*ptr != '\0')
+            strlcpy(opt_fontstd, ptr, sizearray(opt_fontstd));
+          if (mono != NULL && *mono == '\0')
+            strlcpy(opt_fontmono, mono, sizearray(opt_fontmono));
+        }
         break;
       default:
         fprintf(stderr, "Unknown option %s; use option -h for help.\n", argv[idx]);
@@ -640,11 +657,31 @@ int main(int argc, char *argv[])
   strcpy(txtSerial, "1");
   strcpy(txtSerialSize, "4");
 
-  /* check presence of the debug probe */
+  /* collect debug probes, connect to the selected one */
+  usbprobes = get_bmp_count();
+  netprobe = (usbprobes > 0) ? usbprobes : 1;
+  probelist = malloc((netprobe+1)*sizeof(char*));
+  if (probelist != NULL) {
+    char portname[64];
+    if (usbprobes == 0) {
+      probelist[0] = strdup("-");
+    } else {
+      for (idx = 0; idx < usbprobes; idx++) {
+        find_bmp(idx, BMP_IF_GDB, portname, sizearray(portname));
+        probelist[idx] = strdup(portname);
+      }
+    }
+    probelist[netprobe] = strdup("TCP/IP");
+  }
+  if (probe == 99)
+    probe = netprobe;
+  else if (probe > usbprobes)
+    probe = 0;
   bmp_setcallback(bmp_callback);
-  bmp_connect();
+  bmp_connect(probe);
 
-  ctx = guidriver_init("BlackMagic Flash Programmer", WINDOW_WIDTH, WINDOW_HEIGHT, 0, FONT_HEIGHT);
+  ctx = guidriver_init("BlackMagic Flash Programmer", WINDOW_WIDTH, WINDOW_HEIGHT, GUIDRV_TIMER,
+                       opt_fontstd, opt_fontmono, opt_fontsize);
   set_style(ctx);
 
   tab_states[TAB_OPTIONS] = NK_MINIMIZED;
@@ -699,7 +736,7 @@ int main(int argc, char *argv[])
       waitidle = 0;
       break;
     case STATE_ATTACH:
-      result = bmp_connect();
+      result = bmp_connect(probe);
       if (result) {
         char mcufamily[32];
         int arch;
@@ -810,7 +847,7 @@ int main(int argc, char *argv[])
     /* GUI */
     if (nk_begin(ctx, "MainPanel", nk_rect(0, 0, WINDOW_WIDTH, WINDOW_HEIGHT), 0)) {
       nk_layout_row_begin(ctx, NK_STATIC, ROW_HEIGHT, 2);
-      nk_layout_row_push(ctx, WINDOW_WIDTH - 4 * FONT_HEIGHT);
+      nk_layout_row_push(ctx, WINDOW_WIDTH - 4 * opt_fontsize);
       result = nk_edit_string_zero_terminated(ctx, NK_EDIT_FIELD | NK_EDIT_SIG_ENTER, txtFilename, sizearray(txtFilename), nk_filter_ascii);
       if (result & NK_EDIT_COMMITED)
         load_options = 2;
@@ -833,16 +870,28 @@ int main(int argc, char *argv[])
       nk_layout_row_dynamic(ctx, 7.5*ROW_HEIGHT, 1);
       if (nk_group_begin(ctx, "options", 0)) {
         if (nk_tree_state_push(ctx, NK_TREE_TAB, "Options", &tab_states[TAB_OPTIONS])) {
+          struct nk_rect rc_canvas = nk_rect(0, 0, WINDOW_WIDTH, WINDOW_HEIGHT);
+          struct nk_rect bounds;
+          nk_layout_row(ctx, NK_DYNAMIC, ROW_HEIGHT * 0.8, 2, nk_ratio(2, 0.45, 0.55));
+          nk_label(ctx, "Black Magic Probe", NK_TEXT_ALIGN_LEFT | NK_TEXT_ALIGN_MIDDLE);
+          rcwidget = nk_widget_bounds(ctx);
+          probe = nk_combo(ctx, probelist, netprobe+1, probe,(int)COMBOROW_CY, nk_vec2(rcwidget.w, 4.5*ROW_HEIGHT));
+
           nk_layout_row(ctx, NK_DYNAMIC, ROW_HEIGHT * 0.8, 2, nk_ratio(2, 0.45, 0.55));
           nk_label(ctx, "MCU Family", NK_TEXT_ALIGN_LEFT | NK_TEXT_ALIGN_MIDDLE);
           rcwidget = nk_widget_bounds(ctx);
           opt_architecture = nk_combo(ctx, architectures, NK_LEN(architectures), opt_architecture, (int)COMBOROW_CY, nk_vec2(rcwidget.w, 4.5*ROW_HEIGHT));
 
-          //??? tooltips on options
           nk_layout_row_dynamic(ctx, ROW_HEIGHT, 1);
+          bounds = nk_widget_bounds(ctx);
           nk_checkbox_label(ctx, "Power Target (3.3V)", &opt_tpwr);
+          tooltip(ctx, bounds, " Let the debug probe provide power to the target", &rc_canvas);
+          bounds = nk_widget_bounds(ctx);
           nk_checkbox_label(ctx, "Full Flash erase before download", &opt_fullerase);
+          tooltip(ctx, bounds, " Required to remove code-protection on NXP LPC-series MCUs", &rc_canvas);
+          bounds = nk_widget_bounds(ctx);
           nk_checkbox_label(ctx, "Reset target during connect", &opt_connect_srst);
+          tooltip(ctx, bounds, " Keep target MCU reset while debug probe attaches", &rc_canvas);
 
           nk_tree_state_pop(ctx);
         }
@@ -883,7 +932,7 @@ int main(int argc, char *argv[])
 
         if (nk_tree_state_push(ctx, NK_TREE_TAB, "Status", &tab_states[TAB_STATUS])) {
           nk_layout_row_dynamic(ctx, 4*ROW_HEIGHT, 1);
-          log_widget(ctx, "status", logtext, FONT_HEIGHT, &loglines);
+          log_widget(ctx, "status", logtext, opt_fontsize, &loglines);
           nk_tree_state_pop(ctx);
         }
 
@@ -954,7 +1003,7 @@ int main(int argc, char *argv[])
         struct nk_rect rc = nk_rect(10, 10, WINDOW_WIDTH - 20, WINDOW_HEIGHT - 20);
         if (nk_popup_begin(ctx, NK_POPUP_STATIC, "Help", NK_WINDOW_NO_SCROLLBAR, rc)) {
           nk_layout_row_dynamic(ctx, 8*ROW_HEIGHT, 1);
-          log_widget(ctx, "help", helptext, FONT_HEIGHT, NULL);
+          log_widget(ctx, "help", helptext, opt_fontsize, NULL);
           nk_layout_row_dynamic(ctx, ROW_HEIGHT, 4);
           nk_spacing(ctx, 3);
           if (nk_button_label(ctx, "Close") || nk_input_is_key_pressed(&ctx->input, NK_KEY_ESCAPE)) {
@@ -975,9 +1024,17 @@ int main(int argc, char *argv[])
   }
 
   ini_putl("Settings", "fontsize", opt_fontsize, txtConfigFile);
+  ini_puts("Settings", "fontstd", opt_fontstd, txtConfigFile);
+  ini_puts("Settings", "fontmono", opt_fontmono, txtConfigFile);
   if (strlen(txtConfigFile) > 0)
     ini_puts("Session", "recent", txtFilename, txtConfigFile);
 
+  ini_putl("Settings", "probe", (probe == netprobe) ? 99 : probe, txtConfigFile);
+  if (probelist != NULL) {
+    for (idx = 0; idx < netprobe + 1; idx++)
+      free((void*)probelist[idx]);
+    free(probelist);
+  }
   guidriver_close();
   bmscript_clear();
   gdbrsp_packetsize(0);

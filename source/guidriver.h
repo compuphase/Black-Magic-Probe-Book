@@ -30,8 +30,8 @@ enum {
   FONT_MONO,
 };
 
-struct nk_context* guidriver_init(const char *caption, int width, int height,
-                                  int flags, int fontsize);
+struct nk_context* guidriver_init(const char *caption, int width, int height, int flags,
+                                  const char *fontstd, const char *fontmono, int fontsize);
 void  guidriver_close(void);
 int   guidriver_appsize(int *width, int *height);
 void  guidriver_render(struct nk_color clear);
