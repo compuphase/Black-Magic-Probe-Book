@@ -65,6 +65,7 @@
 #include "nuklear_tooltip.h"
 #include "minIni.h"
 #include "specialfolder.h"
+#include "tcpip.h"
 
 #include "parsetsdl.h"
 #include "decodectf.h"
@@ -76,10 +77,6 @@
 
 #if !defined _MAX_PATH
   #define _MAX_PATH 260
-#endif
-
-#ifndef NK_ASSERT
-  #define NK_ASSERT(expr) assert(expr)
 #endif
 
 #if defined __linux__ || defined __FreeBSD__ || defined __APPLE__
@@ -1428,8 +1425,9 @@ static int ctf_findmetadata(const char *target, char *metadata, size_t metadata_
       *ptr = '\0';
     strlcat(basename, ".tsdl", sizearray(basename));
   } else {
-    ptr = (char*)lastdirsep(metadata);
-    if (ptr != NULL && strchr(ptr, '.') != NULL) {
+    if ((ptr = (char*)lastdirsep(metadata)) == NULL)
+      ptr = metadata;
+    if (strchr(ptr, '.') != NULL) {
       /* there is a filename in the metadata parameter already */
       strlcpy(basename, metadata, sizearray(basename));
     } else {
@@ -1956,7 +1954,7 @@ static int is_idle(void)
 #define WINDOW_HEIGHT   500
 #define FONT_HEIGHT     14      /* default font size */
 #define ROW_HEIGHT      (1.6 * opt_fontsize)
-#define COMBOROW_CY     (0.8 * opt_fontsize)
+#define COMBOROW_CY     (0.9 * opt_fontsize)
 #define BUTTON_WIDTH    (3 * opt_fontsize)
 #define BROWSEBTN_WIDTH (1.85 * opt_fontsize)
 
@@ -2016,14 +2014,14 @@ static void console_widget(struct nk_context *ctx, const char *id, float rowheig
       float textwidth;
       if (item->flags & console_hiddenflags)
         continue;
-      NK_ASSERT(item->text != NULL);
+      assert(item->text != NULL);
       nk_layout_row_begin(ctx, NK_STATIC, rowheight, 1);
       if (lineheight <= 0.1) {
         struct nk_rect rcline = nk_layout_widget_bounds(ctx);
         lineheight = rcline.h;
       }
       /* calculate size of the text */
-      NK_ASSERT(font != NULL && font->width != NULL);
+      assert(font != NULL && font->width != NULL);
       textwidth = font->width(font->userdata, font->height, item->text, strlen(item->text)) + 10;
       nk_layout_row_push(ctx, textwidth);
       if (item->flags & (STRFLG_INPUT | STRFLG_MI_INPUT))
@@ -2107,7 +2105,7 @@ static void source_widget(struct nk_context *ctx, const char *id, float rowheigh
       float textwidth;
       BREAKPOINT *bkpt;
       lines++;
-      NK_ASSERT(item->text != NULL);
+      assert(item->text != NULL);
       nk_layout_row_begin(ctx, NK_STATIC, rowheight, 4);
       if (source_lineheight <= 0.1) {
         struct nk_rect rcline = nk_layout_widget_bounds(ctx);
@@ -2149,7 +2147,7 @@ static void source_widget(struct nk_context *ctx, const char *id, float rowheigh
         nk_spacing(ctx, 1);
       }
       /* calculate size of the text */
-      NK_ASSERT(font != NULL && font->width != NULL);
+      assert(font != NULL && font->width != NULL);
       textwidth = font->width(font->userdata, font->height, item->text, strlen(item->text));
       if (textwidth > maxwidth) {
         maxwidth = textwidth;
@@ -2320,6 +2318,13 @@ static int source_getsymbol(char *symname, size_t symlen, int row, int col)
   return 1;
 }
 
+static int is_ip_address(const char *address)
+{
+  int a, b, c, d;
+  return sscanf(address, "%d.%d.%d.%d", &a, &b, &c, &d) == 4
+         && a > 0 && a < 255 && b >= 0 && b < 255 && c >= 0 && c < 255 && d >= 0 && d < 255;
+}
+
 
 enum {
   STATE_INIT,
@@ -2388,6 +2393,7 @@ typedef struct tagSWOSETTINGS {
   unsigned clock;
   unsigned datasize;
   char metadata[_MAX_PATH];
+  int force_plain;
 } SWOSETTINGS;
 
 enum { SWOMODE_NONE, SWOMODE_MANCHESTER, SWOMODE_ASYNC };
@@ -2444,6 +2450,7 @@ static int load_settings(const char *filename, char *entrypoint, size_t entrypoi
   swo->bitrate = (unsigned)ini_getl("SWO trace", "bitrate", 100000, filename);
   swo->clock = (unsigned)ini_getl("SWO trace", "clock", 48000000, filename);
   swo->datasize = (unsigned)ini_getl("SWO trace", "datasize", 8, filename) / 8;
+  swo->force_plain = 0;
   ini_gets("SWO trace", "ctf", "", swo->metadata, sizearray(swo->metadata), filename);
   for (idx = 0; idx < NUM_CHANNELS; idx++) {
     char key[32], value[128];
@@ -2458,6 +2465,39 @@ static int load_settings(const char *filename, char *entrypoint, size_t entrypoi
   }
 
   return 1;
+}
+
+static int handle_help_cmd(const char *command)
+{
+  command = skipwhite(command);
+  if (strncmp(command, "help", 4) == 0 && TERM_END(command, 4)) {
+    /* always add a extra line as a separator, to make the help stand out more */
+    console_add(command, STRFLG_INPUT);
+    command = skipwhite(command + 4);
+    if (strncmp(command, "find", 4) == 0 && TERM_END(command, 4)) {
+      console_add("Find text in the current source file (case-insensitive).\n", 0);
+      console_add("find [text]\n", 0);
+      console_add("Without parameter, the find command repeats the previous search.\n", 0);
+      return 1;
+    } else if (strncmp(command, "trace", 5) == 0 && TERM_END(command, 5)) {
+      console_add("Configure SWO tracing.\n", 0);
+      console_add("trace [target-clock] [bitrate]   - configure Manchester tracing.\n", 0);
+      console_add("trace passive   - activate Manchester tracing, without configuration.\n", 0);
+      console_add("trace async [target-clock] [bitrate]   - configure asynchronous tracing.\n", 0);
+      console_add("trace async passive [bitrate]   - activate asynchronous tracing, without configuration.\n", 0);
+      console_add("trace enable   - enable SWO tracing with previously configured settings.\n", 0);
+      console_add("trace disable   - disable SWO tracing.\n", 0);
+      console_add("trace [filename]   - configure CTF decoding using the given TSDL file.\n", 0);
+      console_add("trace plain   - disable CTF decoding, trace plain input data.\n", 0);
+      console_add("trace channel [index] enable   - enable a channel (0..31).\n", 0);
+      console_add("trace channel [index] disable   - disable a channel (0..31).\n", 0);
+      console_add("trace channel [index] [name]   - set the name of a channel.\n", 0);
+      console_add("trace channel [index] #[colour]   - set the colour of a channel.\n", 0);
+      console_add("trace info   - show current status and configuration.\n", 0);
+      return 1;
+    }
+  }
+  return 0;
 }
 
 static int handle_list_cmd(const char *command, const DWARF_SYMBOLLIST *symboltable,
@@ -2708,7 +2748,8 @@ static void trace_info_mode(const SWOSETTINGS *swo)
   strlcat(msg, "\n", sizearray(msg));
   console_add(msg, STRFLG_STATUS);
 
-  if (swo->metadata != NULL && strlen(swo->metadata) > 0) {
+  assert(swo->metadata != NULL);
+  if (strlen(swo->metadata) > 0) {
     const char *basename = lastdirsep(swo->metadata);
     sprintf(msg, "CTF / TSDL = %s\n", (basename != NULL) ? basename + 1 : swo->metadata);
     console_add(msg, STRFLG_STATUS);
@@ -2723,7 +2764,7 @@ static void trace_info_mode(const SWOSETTINGS *swo)
  *        * clock      target clock rate; this is set to zero for passive mode.
  *        * bitrate    transmission speed.
  *        * datasize   payload data size in bytes (not bits).
- *        * tsdlfile   definition file for CTF.
+ *        * metadata   definition file for CTF.
  *  \return 0=unchanged, 1=protocol settings changed, 2=channels changed,
  *          3="info"
  */
@@ -2814,6 +2855,13 @@ static int handle_trace_cmd(const char *command, SWOSETTINGS *swo)
     memset(ptr, ' ', 4);    /* erase the setting from the string */
   }
 
+  /* optionally clear a TSDL file */
+  ptr = (char*)skipwhite(cmdcopy + 6);  /* reset to start */
+  if (strncmp(ptr, "plain", 5) == 0 && TERM_END(ptr, 5)) {
+    swo->metadata[0] = '\0';
+    memset(ptr, ' ', 5);    /* erase the setting from the string */
+    swo->force_plain = 1;
+  }
   /* check whether any of the parameters is a TSDL file */
   ptr = (char*)skipwhite(cmdcopy + 6);  /* reset to start */
   while (*ptr != '\0' && !tsdl_set) {
@@ -2829,6 +2877,7 @@ static int handle_trace_cmd(const char *command, SWOSETTINGS *swo)
       strncpy(swo->metadata, ptr, len);
       swo->metadata[len] = '\0';
       memset(ptr, ' ', len);    /* erase the filename from the string */
+      swo->force_plain = 0;
     }
     ptr =(char*)skipwhite(endptr);
   }
@@ -2909,6 +2958,9 @@ int main(int argc, char *argv[])
        txtParamFile[_MAX_PATH];
   char txtEntryPoint[64];
   char port_gdb[64], mcu_family[64], mcu_architecture[64];
+  char txtIPaddr[64] = "";
+  int probe, usbprobes, netprobe;
+  const char **probelist;
   char valstr[128];
   int canvas_width, canvas_height;
   enum nk_collapse_states tab_states[TAB_COUNT];
@@ -2977,6 +3029,9 @@ int main(int argc, char *argv[])
   opt_fontsize = (int)ini_getl("Settings", "fontsize", FONT_HEIGHT, txtConfigFile);
   ini_gets("Settings", "fontstd", "", opt_fontstd, sizearray(opt_fontstd), txtConfigFile);
   ini_gets("Settings", "fontmono", "", opt_fontmono, sizearray(opt_fontmono), txtConfigFile);
+  /* selected interface */
+  probe = (int)ini_getl("Settings", "probe", 0, txtConfigFile);
+  ini_gets("Settings", "ip-address", "127.0.0.1", txtIPaddr, sizearray(txtIPaddr), txtConfigFile);
   /* read saved recent commands */
   for (idx = 1; ; idx++) {
     char key[32];
@@ -3060,6 +3115,28 @@ int main(int argc, char *argv[])
     load_settings(txtParamFile, txtEntryPoint, sizearray(txtEntryPoint), &opt_tpwr, &opt_autodownload, &opt_swo);
   }
 
+  /* collect debug probes, connect to the selected one */
+  usbprobes = get_bmp_count();
+  netprobe = (usbprobes > 0) ? usbprobes : 1;
+  probelist = malloc((netprobe+1)*sizeof(char*));
+  if (probelist != NULL) {
+    char portname[64];
+    if (usbprobes == 0) {
+      probelist[0] = strdup("-");
+    } else {
+      for (idx = 0; idx < usbprobes; idx++) {
+        find_bmp(idx, BMP_IF_GDB, portname, sizearray(portname));
+        probelist[idx] = strdup(portname);
+      }
+    }
+    probelist[netprobe] = strdup("TCP/IP");
+  }
+  if (probe == 99)
+    probe = netprobe;
+  else if (probe > usbprobes)
+    probe = 0;
+  tcpip_init();
+
   memset(&task, 0, sizeof task);
   insplitter = SPLITTER_NONE;
   curstate = STATE_INIT;
@@ -3116,15 +3193,34 @@ int main(int argc, char *argv[])
         }
         break;
       case STATE_SCAN_BMP:
-        if (find_bmp(0, BMP_IF_GDB, port_gdb, sizearray(port_gdb))) {
-          if (strncmp(port_gdb, "COM", 3) == 0 && strlen(port_gdb) >= 5) {
-            memmove(port_gdb + 4, port_gdb, strlen(port_gdb) + 1);
-            memmove(port_gdb, "\\\\.\\", 4);
+        port_gdb[0] = '\0';
+        if (probe == netprobe) {
+          if (is_ip_address(txtIPaddr)) {
+            char portnr[20];
+            sprintf(portnr, ":%d", BMP_PORT_GDB);
+            strlcpy(port_gdb, txtIPaddr, sizearray(port_gdb));
+            strlcat(port_gdb, portnr, sizearray(port_gdb));
           }
+        } else {
+          const char *ptr;
+          assert(probe < usbprobes || (probe == 0 && usbprobes == 0));
+          ptr = probelist[probe];
+          if (*ptr != '\0' && *ptr != '-') {
+            if (strncmp(ptr, "COM", 3)== 0 && strlen(ptr)>= 5) {
+              /* special case for Microsoft Windows, for COM ports >= 10 */
+              strlcpy(port_gdb, "\\\\.\\", sizearray(port_gdb));
+            }
+            strlcat(port_gdb, ptr, sizearray(port_gdb));
+          }
+        }
+        if (port_gdb[0] != '\0') {
           curstate = STATE_TARGET_EXT;
         } else if (atprompt) {
           if (prevstate != curstate) {
-            console_add("Black Magic Probe not found\n", STRFLG_ERROR);
+            if (probe == netprobe)
+              console_add("ctxLink Probe not found, invalid IP address\n", STRFLG_ERROR);
+            else
+              console_add("Black Magic Probe not found\n", STRFLG_ERROR);
             prevstate = curstate;
           }
           set_idle_time(1000); /* repeat scan on timeout (but don't sleep the GUI thread) */
@@ -3637,7 +3733,8 @@ int main(int argc, char *argv[])
           tracestring_clear();
           tracelog_statusmsg(TRACESTATMSG_CTF, NULL, 0);
           ctf_error_notify(CTFERR_NONE, 0, NULL);
-          if (ctf_findmetadata(txtFilename, opt_swo.metadata, sizearray(opt_swo.metadata))
+          if (!opt_swo.force_plain
+              && ctf_findmetadata(txtFilename, opt_swo.metadata, sizearray(opt_swo.metadata))
               && ctf_parse_init(opt_swo.metadata) && ctf_parse_run())
           {
             const CTF_STREAM *stream;
@@ -3666,11 +3763,18 @@ int main(int argc, char *argv[])
           }
           /* initial setup (only needs to be done once) */
           if (trace_status != TRACESTAT_OK) {
-            trace_status = trace_init(trace_endpoint);
-            if (trace_status != TRACESTAT_OK)
-              console_add("Failed to initialize SWO tracing\n", STRFLG_ERROR);
+            /* trace_status() does nothing if initialization had already succeeded */
+            if (probe == netprobe)
+              trace_status = trace_init(BMP_PORT_TRACE, txtIPaddr);
             else
+              trace_status = trace_init(trace_endpoint, NULL);
+            if (trace_status != TRACESTAT_OK) {
+              console_add("Failed to initialize SWO tracing\n", STRFLG_ERROR);
+              if ((probe == netprobe && opt_swo.mode != SWOMODE_ASYNC) || (probe != netprobe && opt_swo.mode != SWOMODE_MANCHESTER))
+                console_add("Check trace mode (manchester versus async)\n", STRFLG_ERROR);
+            } else {
               trace_setdatasize(opt_swo.datasize);
+            }
           }
           /* GDB may have reset the "mem inaccessible-by-default off" setting,
              so we jump back to the state, after making sure that the state
@@ -4078,7 +4182,8 @@ int main(int argc, char *argv[])
                 }
                 tab_states[TAB_SWO] = nk_true;  /* make sure the SWO tracing view is open */
               } else if (!handle_list_cmd(console_edit, &dwarf_symboltable, &dwarf_filetable)
-                         && !handle_find_cmd(console_edit))
+                         && !handle_find_cmd(console_edit)
+                         && !handle_help_cmd(console_edit))
               {
                 /* check monitor command, to avoid that the output should goes
                    to the semihosting view */
@@ -4122,11 +4227,56 @@ int main(int argc, char *argv[])
       /* right column */
       if (nk_group_begin(ctx, "right", NK_WINDOW_BORDER)) {
         if (nk_tree_state_push(ctx, NK_TREE_TAB, "Configuration", &tab_states[TAB_CONFIGURATION])) {
-          #define LABEL_WIDTH (2.3 * opt_fontsize)
-          float edtwidth;
+          #define LABEL_WIDTH (2.5 * opt_fontsize)
+          float edtwidth, newprobe;
           char basename[_MAX_PATH], *p;
           bounds = nk_widget_bounds(ctx);
           edtwidth = bounds.w - LABEL_WIDTH - BROWSEBTN_WIDTH - (2 * 5);
+          /* debug probe (and IP address) */
+          nk_layout_row_begin(ctx, NK_STATIC, ROW_HEIGHT, 2);
+          nk_layout_row_push(ctx, LABEL_WIDTH);
+          nk_label(ctx, "Probe", NK_TEXT_ALIGN_LEFT | NK_TEXT_ALIGN_MIDDLE);
+          nk_layout_row_push(ctx, edtwidth);
+          bounds = nk_widget_bounds(ctx);
+          newprobe = nk_combo(ctx, probelist, netprobe+1, probe, (int)COMBOROW_CY, nk_vec2(bounds.w, 4.5*ROW_HEIGHT));
+          if (newprobe == netprobe) {
+            int reconnect = 0;
+            nk_layout_row_begin(ctx, NK_STATIC, ROW_HEIGHT, 3);
+            nk_layout_row_push(ctx, LABEL_WIDTH);
+            nk_label(ctx, "IP", NK_TEXT_ALIGN_LEFT | NK_TEXT_ALIGN_MIDDLE);
+            nk_layout_row_push(ctx, edtwidth);
+            bounds = nk_widget_bounds(ctx);
+            result = nk_edit_string_zero_terminated(ctx, NK_EDIT_FIELD, txtIPaddr, sizearray(txtIPaddr), nk_filter_ascii);
+            if ((result & NK_EDIT_COMMITED) != 0 && is_ip_address(txtIPaddr))
+              reconnect = 1;
+            tooltip(ctx, bounds, "IP address of the ctxLink", &rc_canvas);
+            nk_layout_row_push(ctx, BROWSEBTN_WIDTH);
+            bounds = nk_widget_bounds(ctx);
+            if (nk_button_symbol(ctx, NK_SYMBOL_TRIPLE_DOT)) {
+              #if defined WIN32 || defined _WIN32
+                HCURSOR hcur = SetCursor(LoadCursor(NULL, IDC_WAIT));
+              #endif
+              unsigned long addr;
+              int count = scan_network(&addr, 1);
+              #if defined WIN32 || defined _WIN32
+                SetCursor(hcur);
+              #endif
+              if (count == 1) {
+                sprintf(txtIPaddr, "%d.%d.%d.%d",
+                       addr & 0xff, (addr >> 8) & 0xff, (addr >> 16) & 0xff, (addr >> 24) & 0xff);
+                reconnect = 1;
+              } else {
+                strlcpy(txtIPaddr, "none found", sizearray(txtIPaddr));
+              }
+            }
+            tooltip(ctx, bounds, "Scan network for ctxLink probes.", &rc_canvas);
+            if (reconnect)
+              curstate = STATE_SCAN_BMP;
+          }
+          if (newprobe != probe) {
+            probe = newprobe;
+            curstate = STATE_SCAN_BMP;
+          }
           /* GDB */
           p = strrchr(txtGDBpath, DIRSEP_CHAR);
           strlcpy(basename,(p == NULL)? txtGDBpath : p + 1, sizearray(basename));
@@ -4474,6 +4624,15 @@ int main(int argc, char *argv[])
     if (idx++ > 50)
       break;  /* limit the number of memorized commands */
   }
+  /* save selected debug probe */
+  if (is_ip_address(txtIPaddr))
+    ini_puts("Settings", "ip-address", txtIPaddr, txtConfigFile);
+  ini_putl("Settings", "probe", (probe == netprobe) ? 99 : probe, txtConfigFile);
+  if (probelist != NULL) {
+    for (idx = 0; idx < netprobe + 1; idx++)
+      free((void*)probelist[idx]);
+    free(probelist);
+  }
 
   guidriver_close();
   stringlist_clear(&consolestring_root);
@@ -4483,6 +4642,7 @@ int main(int argc, char *argv[])
   sources_clear(nk_true);
   bmscript_clear();
   dwarf_cleanup(&dwarf_linetable,&dwarf_symboltable,&dwarf_filetable);
+  tcpip_cleanup();
   return exitcode;
 }
 

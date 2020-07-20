@@ -188,6 +188,9 @@ static int recent_error = -1;
   case CTFERR_STREAM_NOTSET:
     vsprintf(message, "Event '%s' is not assigned to a stream", args);
     break;
+  case CTFERR_STREAM_NO_DEF:
+    vsprintf(message, "No definition for stream id %d (required for event header)", args);
+    break;
   case CTFERR_TYPE_REDEFINE:
     vsprintf(message, "Type %s is already defined", args);
     break;
@@ -709,6 +712,11 @@ static void stream_cleanup(void)
   }
 }
 
+int stream_isactive(int stream_id)
+{
+  return (ctf_trace.stream_mask & (1 << stream_id)) != 0;
+}
+
 int stream_count(void)
 {
   int count = 0;
@@ -758,12 +766,16 @@ static void event_cleanup(void)
   }
 }
 
-int event_count(void)
+/** event_count() returns the number of events in a stream; set parameter
+ *  stream_id to -1 to return the total over all streams.
+ */
+int event_count(int stream_id)
 {
   int count = 0;
   CTF_EVENT *event;
   for (event = ctf_event_root.next; event != NULL; event = event->next)
-    count++;
+    if (stream_id == -1 || event->stream_id == stream_id)
+      count++;
   return count;
 }
 
@@ -1821,7 +1833,7 @@ static void parse_event(void)
       if (iter != event && event->id == iter->id)
         ctf_error(CTFERR_DUPLICATE_ID);
   } else {
-    /* assign stream_id to be 1 higher than the current highest */
+    /* assign the id to be 1 higher than the current highest */
     for (iter = ctf_event_root.next; iter != NULL; iter = iter->next)
       if (iter != event && event->id >= iter->id)
         event->id = iter->id + 1;
@@ -1834,12 +1846,18 @@ static void parse_event(void)
     int count = stream_count();
     if (count == 1) {
       stream = ctf_stream_root.next;
-      if (stream->stream_id)
+      if (stream->stream_id != 0)
         ctf_error(CTFERR_STREAM_NOTSET, event->name);
     } else if (count > 0) {
       ctf_error(CTFERR_STREAM_NOTSET, event->name);
     }
   }
+
+  /* mark stream that this event is part of as active */
+  if (stream_by_id(event->stream_id) == NULL
+      && event_count(event->stream_id) == 2) /* warn for the 2nd event in this stream, but not for the 3rd, 4th, etc, */
+    ctf_error(CTFERR_STREAM_NO_DEF, event->stream_id);
+  ctf_trace.stream_mask |= (1 << event->stream_id);
 }
 
 /** ctf_parse_init() initializes the TSDL parser and sets up default types.
@@ -1878,6 +1896,7 @@ void ctf_parse_cleanup(void)
   stream_cleanup();
   event_cleanup();
   type_cleanup(&type_root);
+  memset(&ctf_trace, 0, sizeof ctf_trace); /* to reset the active streams mask */
 }
 
 /** ctf_parse_run() runs the TSDL parser. It returns 1 on success and 0 if one

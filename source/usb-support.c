@@ -26,11 +26,11 @@
  * Part 1: WinUSB
  */
 
-BOOL __stdcall (*_WinUsb_Initialize)(HANDLE DeviceHandle, USB_INTERFACE_HANDLE *InterfaceHandle) = NULL;
-BOOL __stdcall (*_WinUsb_Free)(USB_INTERFACE_HANDLE InterfaceHandle) = NULL;
-BOOL __stdcall (*_WinUsb_QueryInterfaceSettings)(USB_INTERFACE_HANDLE InterfaceHandle, uint8_t AlternateInterfaceNumber, USB_INTERFACE_DESCRIPTOR *UsbAltInterfaceDescriptor) = NULL;
-BOOL __stdcall (*_WinUsb_QueryPipe)(USB_INTERFACE_HANDLE InterfaceHandle, uint8_t AlternateInterfaceNumber, uint8_t PipeIndex, USB_PIPE_INFORMATION *PipeInformation) = NULL;
-BOOL __stdcall (*_WinUsb_ReadPipe)(USB_INTERFACE_HANDLE InterfaceHandle, uint8_t PipeID, uint8_t *Buffer, uint32_t BufferLength, uint32_t *LengthTransferred, LPOVERLAPPED Overlapped) = NULL;
+BOOL (__stdcall *_WinUsb_Initialize)(HANDLE DeviceHandle, USB_INTERFACE_HANDLE *InterfaceHandle) = NULL;
+BOOL (__stdcall *_WinUsb_Free)(USB_INTERFACE_HANDLE InterfaceHandle) = NULL;
+BOOL (__stdcall *_WinUsb_QueryInterfaceSettings)(USB_INTERFACE_HANDLE InterfaceHandle, uint8_t AlternateInterfaceNumber, USB_INTERFACE_DESCRIPTOR *UsbAltInterfaceDescriptor) = NULL;
+BOOL (__stdcall *_WinUsb_QueryPipe)(USB_INTERFACE_HANDLE InterfaceHandle, uint8_t AlternateInterfaceNumber, uint8_t PipeIndex, USB_PIPE_INFORMATION *PipeInformation) = NULL;
+BOOL (__stdcall *_WinUsb_ReadPipe)(USB_INTERFACE_HANDLE InterfaceHandle, uint8_t PipeID, uint8_t *Buffer, uint32_t BufferLength, uint32_t *LengthTransferred, LPOVERLAPPED Overlapped) = NULL;
 
 static HMODULE hinstWinUSB = NULL;
 
@@ -78,16 +78,16 @@ BOOL WinUsb_IsActive(void)
  * Part 2: libusbK
  */
 
-BOOL __stdcall (*_UsbK_Init)(USB_INTERFACE_HANDLE* InterfaceHandle, const KLST_DEVINFO *DevInfo) = NULL;
-BOOL __stdcall (*_UsbK_Free)(USB_INTERFACE_HANDLE InterfaceHandle) = NULL;
-BOOL __stdcall (*_UsbK_QueryInterfaceSettings)(USB_INTERFACE_HANDLE InterfaceHandle, uint8_t AlternateInterfaceNumber, USB_INTERFACE_DESCRIPTOR *UsbAltInterfaceDescriptor) = NULL;
-BOOL __stdcall (*_UsbK_QueryPipe)(USB_INTERFACE_HANDLE InterfaceHandle, uint8_t AlternateInterfaceNumber, uint8_t PipeIndex, USB_PIPE_INFORMATION *PipeInformation) = NULL;
-BOOL __stdcall (*_UsbK_ReadPipe)(USB_INTERFACE_HANDLE InterfaceHandle, uint8_t PipeID, uint8_t *Buffer, uint32_t BufferLength, uint32_t *LengthTransferred, LPOVERLAPPED Overlapped) = NULL;
+BOOL (__stdcall *_UsbK_Init)(USB_INTERFACE_HANDLE* InterfaceHandle, const KLST_DEVINFO *DevInfo) = NULL;
+BOOL (__stdcall *_UsbK_Free)(USB_INTERFACE_HANDLE InterfaceHandle) = NULL;
+BOOL (__stdcall *_UsbK_QueryInterfaceSettings)(USB_INTERFACE_HANDLE InterfaceHandle, uint8_t AlternateInterfaceNumber, USB_INTERFACE_DESCRIPTOR *UsbAltInterfaceDescriptor) = NULL;
+BOOL (__stdcall *_UsbK_QueryPipe)(USB_INTERFACE_HANDLE InterfaceHandle, uint8_t AlternateInterfaceNumber, uint8_t PipeIndex, USB_PIPE_INFORMATION *PipeInformation) = NULL;
+BOOL (__stdcall *_UsbK_ReadPipe)(USB_INTERFACE_HANDLE InterfaceHandle, uint8_t PipeID, uint8_t *Buffer, uint32_t BufferLength, uint32_t *LengthTransferred, LPOVERLAPPED Overlapped) = NULL;
 
-BOOL __stdcall (*_LstK_Init)(KLST_DEVINFO **DeviceList, int Flags) = NULL;
-BOOL __stdcall (*_LstK_Free)(KLST_DEVINFO *DeviceList) = NULL;
-BOOL __stdcall (*_LstK_Count)(const KLST_DEVINFO *DeviceList, uint32_t *Count) = NULL;
-BOOL __stdcall (*_LstK_Enumerate)(const KLST_DEVINFO *DeviceList, KLST_ENUM_DEVINFO_CB *EnumDevListCB, void *Context) = NULL;
+BOOL (__stdcall *_LstK_Init)(KLST_DEVINFO **DeviceList, int Flags) = NULL;
+BOOL (__stdcall *_LstK_Free)(KLST_DEVINFO *DeviceList) = NULL;
+BOOL (__stdcall *_LstK_Count)(const KLST_DEVINFO *DeviceList, uint32_t *Count) = NULL;
+BOOL (__stdcall *_LstK_Enumerate)(const KLST_DEVINFO *DeviceList, KLST_ENUM_DEVINFO_CB *EnumDevListCB, void *Context) = NULL;
 
 static HMODULE hinstUsbK = NULL;
 

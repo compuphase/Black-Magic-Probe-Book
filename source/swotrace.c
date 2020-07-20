@@ -16,6 +16,8 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
+#include <assert.h>
 #include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -25,6 +27,7 @@
   #define STRICT
   #define WIN32_LEAN_AND_MEAN
   #include <windows.h>
+  #include <winsock2.h>
   #include <tchar.h>
   #include <initguid.h>
   #include <setupapi.h>
@@ -44,6 +47,9 @@
   #include <bsd/string.h>
   #include <sys/stat.h>
   #include <libusb-1.0/libusb.h>
+
+  typedef int SOCKET;
+  #define INVALID_SOCKET (-1)
 #endif
 
 #include "bmp-scan.h"
@@ -54,14 +60,11 @@
 #include "swotrace.h"
 
 
-#ifndef NK_ASSERT
-  #include <assert.h>
-  #define NK_ASSERT(expr) assert(expr)
-#endif
-
 #if defined __linux__ || defined __FreeBSD__ || defined __APPLE__
   #define stricmp(s1,s2)    strcasecmp((s1),(s2))
   static int memicmp(const unsigned char *p1, const unsigned char *p2, size_t count);
+#elif defined _MSC_VER
+  #define stricmp(a,b)      _stricmp((a),(b))
 #endif
 
 #if !defined sizearray
@@ -163,6 +166,8 @@ typedef struct tagTRACESTRING {
   unsigned char flags;    /* used to keep state while decoding plain trace messages */
 } TRACESTRING;
 
+static SOCKET TraceSocket = INVALID_SOCKET;
+
 #define TRACESTRING_MAXLENGTH 256
 #define TRACESTRING_INITSIZE  32
 static TRACESTRING tracestring_root = { NULL, NULL };
@@ -182,9 +187,9 @@ static int itm_packet_errors = 0;
 
 void tracestring_add(unsigned channel, const unsigned char *buffer, size_t length, double timestamp)
 {
-  NK_ASSERT(channel < NUM_CHANNELS);
-  NK_ASSERT(buffer != NULL);
-  NK_ASSERT(length > 0);
+  assert(channel < NUM_CHANNELS);
+  assert(buffer != NULL);
+  assert(length > 0);
 
   /* check whether the channel is enabled (in passive mode, the target that
      sends the trace messages is oblivious of the settings in this viewer,
@@ -192,12 +197,12 @@ void tracestring_add(unsigned channel, const unsigned char *buffer, size_t lengt
   if (!channels[channel].enabled)
     return;
 
-  if (stream_by_id(channel) != NULL) {
+  if (stream_isactive(channel)) {
     /* CTF mode */
     int count = ctf_decode(buffer, length, channel);
     if (count > 0) {
       uint16_t streamid;
-      double tstamp;
+      double tstamp, tstamp_relative;
       const char *message;
       while (msgstack_peek(&streamid, &tstamp, &message)) {
         TRACESTRING *item = malloc(sizeof(TRACESTRING));
@@ -213,15 +218,15 @@ void tracestring_add(unsigned channel, const unsigned char *buffer, size_t lengt
             if (tstamp > 0.001)
               timestamp = tstamp; /* use precision timestamp from remote host */
             item->timestamp = timestamp;
-            if (tracestring_root.next != NULL)
-              timestamp -= tracestring_root.next->timestamp;
-            else
-              timestamp = 0.0;
             /* create formatted timestamp */
-            if (tstamp > 0.001)
-              sprintf(item->timefmt, "%.6f", timestamp);
+            if (tracestring_root.next != NULL)
+              tstamp_relative = timestamp - tracestring_root.next->timestamp;
             else
-              sprintf(item->timefmt, "%.3f", timestamp);
+              tstamp_relative = 0.0;
+            if (tstamp > 0.001)
+              sprintf(item->timefmt, "%.6f", tstamp_relative);
+            else
+              sprintf(item->timefmt, "%.3f", tstamp_relative);
             item->timefmt_len = (unsigned short)strlen(item->timefmt);
             assert(item->timefmt_len < sizearray(item->timefmt));
             /* append to tail */
@@ -230,6 +235,8 @@ void tracestring_add(unsigned channel, const unsigned char *buffer, size_t lengt
             else
               tracestring_root.next = item;
             tracestring_tail = item;
+          } else {
+            free((void*)item);
           }
         }
         msgstack_pop(NULL, NULL, NULL, 0);
@@ -237,6 +244,7 @@ void tracestring_add(unsigned channel, const unsigned char *buffer, size_t lengt
     }
   } else {
     /* plain text mode */
+    double tstamp_relative;
     unsigned idx;
     while (length > 0 && buffer[length - 1] == '\0')
       length--; /* this can happen with expansion from zero-compression */
@@ -284,12 +292,12 @@ void tracestring_add(unsigned channel, const unsigned char *buffer, size_t lengt
           if (item->text != NULL) {
             item->channel = (unsigned char)channel;
             item->timestamp = timestamp;
-            if (tracestring_root.next != NULL)
-              timestamp -= tracestring_root.next->timestamp;
-            else
-              timestamp = 0.0;
             /* create formatted timestamp */
-            sprintf(item->timefmt, "%.3f", timestamp);
+            if (tracestring_root.next != NULL)
+              tstamp_relative = timestamp - tracestring_root.next->timestamp;
+            else
+              tstamp_relative = 0.0;
+            sprintf(item->timefmt, "%.3f", tstamp_relative);
             item->timefmt_len = (unsigned short)strlen(item->timefmt);
             assert(item->timefmt_len < sizearray(item->timefmt));
             /* append to tail */
@@ -643,8 +651,8 @@ static BOOL usb_GetDevicePath(const TCHAR *guid, TCHAR *path, size_t pathsize)
 
       loc_errno = 2;
       if (SetupDiGetDeviceInterfaceDetail(hDevInfo, &DevIntfData, DevIntfDetailData, dwSize, &dwSize, &DevData)) {
-        NK_ASSERT(path!=NULL);
-        NK_ASSERT(pathsize>0);
+        assert(path!=NULL);
+        assert(pathsize>0);
         #if defined _UNICODE
           memset(path, 0, pathsize*sizeof(TCHAR));
           _tcsncpy(path, (TCHAR*)DevIntfDetailData->DevicePath, pathsize-1);
@@ -791,12 +799,26 @@ static double get_timestamp(void)
 static DWORD __stdcall trace_read(LPVOID arg)
 {
   unsigned char buffer[PACKET_SIZE];
-  uint32_t numread = 0;
 
   (void)arg;
 
-  if (WinUsb_IsActive()) {
+  if (TraceSocket != INVALID_SOCKET) {
     for ( ;; ) {
+      int result = recv(TraceSocket, buffer, sizearray(buffer), 0);
+      int next = (tracequeue_tail + 1) % PACKET_NUM;
+      if (result > 0 && next != tracequeue_head) {
+        memcpy(trace_queue[tracequeue_tail].data, buffer, result);
+        trace_queue[tracequeue_tail].length = result;
+        trace_queue[tracequeue_tail].timestamp = get_timestamp();
+        tracequeue_tail = next;
+        PostMessage((HWND)guidriver_apphandle(), WM_USER, 0, 0L); /* just a flag to wake up the GUI */
+      } else if (result < 0) {
+        break;
+      }
+    }
+  } else if (WinUsb_IsActive()) {
+    for ( ;; ) {
+      uint32_t numread = 0;
       if (_WinUsb_ReadPipe(hUSBiface, usbTraceEP, buffer, sizearray(buffer), &numread, NULL)) {
         /* add the packet to the queue */
         int next = (tracequeue_tail + 1) % PACKET_NUM;
@@ -813,6 +835,7 @@ static DWORD __stdcall trace_read(LPVOID arg)
     }
   } else if (UsbK_IsActive()) {
     for ( ;; ) {
+      uint32_t numread = 0;
       if (_UsbK_ReadPipe(hUSBiface, usbTraceEP, buffer, sizearray(buffer), &numread, NULL)) {
         /* add the packet to the queue */
         int next = (tracequeue_tail + 1) % PACKET_NUM;
@@ -832,7 +855,11 @@ static DWORD __stdcall trace_read(LPVOID arg)
   return 0;
 }
 
-int trace_init(unsigned char endpoint)
+/** trace_init() opens the SWO tracing channel. If ipaddress is NULL, the USB
+ *  channel is opened and endpoint is the USB endpoint. If ipaddress is a valid
+ *  IP address, endpoint is the port number.
+ */
+int trace_init(unsigned short endpoint, const char *ipaddress)
 {
   TCHAR guid[100], path[_MAX_PATH];
 
@@ -845,15 +872,32 @@ int trace_init(unsigned char endpoint)
      retrying */
   trace_close();
 
-  if (!find_bmp(0, BMP_IF_TRACE, guid, sizearray(guid)))
-    return TRACESTAT_NO_INTERFACE;  /* Black Magic Probe not found (trace interface not found) */
-  if (!usb_GetDevicePath(guid, path, sizearray(path)))
-    return TRACESTAT_NO_DEVPATH;    /* device path to trace interface not found (should not occur) */
+  if (ipaddress != NULL) {
+    struct sockaddr_in server;
+    if ((TraceSocket = socket(AF_INET, SOCK_STREAM, 0)) == INVALID_SOCKET) {
+      win_errno = WSAGetLastError();
+      return TRACESTAT_NO_INTERFACE;
+    }
+    server.sin_addr.s_addr = inet_addr(ipaddress);
+    server.sin_family = AF_INET;
+    server.sin_port = htons(endpoint);
+    if (connect(TraceSocket, (struct sockaddr*)&server, sizeof(server)) != 0) {
+      win_errno = WSAGetLastError();
+      closesocket(TraceSocket);
+      TraceSocket = INVALID_SOCKET;
+      return TRACESTAT_NO_PIPE;
+    }
+  } else {
+    if (!find_bmp(0, BMP_IF_TRACE, guid, sizearray(guid)))
+      return TRACESTAT_NO_INTERFACE;  /* Black Magic Probe not found (trace interface not found) */
+    if (!usb_GetDevicePath(guid, path, sizearray(path)))
+      return TRACESTAT_NO_DEVPATH;    /* device path to trace interface not found (should not occur) */
 
-  if (!usb_OpenDevice(path, &hUSBdev, &hUSBiface))
-    return TRACESTAT_NO_ACCESS;     /* failure opening the device interface */
-  if (!usb_ConfigEndpoint(hUSBiface, endpoint))
-    return TRACESTAT_NO_PIPE;       /* endpoint pipe could not be found -> not a Black Magic Probe? */
+    if (!usb_OpenDevice(path, &hUSBdev, &hUSBiface))
+      return TRACESTAT_NO_ACCESS;     /* failure opening the device interface */
+    if (!usb_ConfigEndpoint(hUSBiface, endpoint))
+      return TRACESTAT_NO_PIPE;       /* endpoint pipe could not be found -> not a Black Magic Probe? */
+  }
 
   hThread = CreateThread(NULL, 0, trace_read, NULL, 0, NULL);
   if (hThread == NULL) {
@@ -885,6 +929,10 @@ void trace_close(void)
       UsbK_Unload();
     }
     hUSBdev = hUSBiface = INVALID_HANDLE_VALUE;
+  }
+  if (TraceSocket != INVALID_SOCKET) {
+    closesocket(TraceSocket);
+    TraceSocket = INVALID_SOCKET;
   }
 }
 
@@ -1102,7 +1150,7 @@ void tracelog_widget(struct nk_context *ctx, const char *id, float rowheight, in
     for (item = tracestring_root.next; item != NULL; item = item->next) {
       int textwidth;
       struct nk_color clrtxt;
-      NK_ASSERT(item->text != NULL);
+      assert(item->text != NULL);
       nk_layout_row_begin(ctx, NK_STATIC, rowheight, 4);
       if (lineheight <= 0.1) {
         struct nk_rect rcline = nk_layout_widget_bounds(ctx);
@@ -1120,7 +1168,7 @@ void tracelog_widget(struct nk_context *ctx, const char *id, float rowheight, in
         nk_spacing(ctx, 1);
       }
       /* channel label */
-      NK_ASSERT(item->channel < NUM_CHANNELS);
+      assert(item->channel < NUM_CHANNELS);
       stbtn.normal.data.color = stbtn.hover.data.color
         = stbtn.active.data.color = stbtn.text_background
         = channels[item->channel].color;
@@ -1135,8 +1183,8 @@ void tracelog_widget(struct nk_context *ctx, const char *id, float rowheight, in
       nk_layout_row_push(ctx, tstampwidth);
       nk_label_colored(ctx, item->timefmt, NK_TEXT_RIGHT, nk_rgb(255, 255, 128));
       /* calculate size of the text */
-      NK_ASSERT(font != NULL && font->width != NULL);
-      textwidth = font->width(font->userdata, font->height, item->text, item->length) + 10;
+      assert(font != NULL && font->width != NULL);
+      textwidth = (int)font->width(font->userdata, font->height, item->text, item->length) + 10;
       nk_layout_row_push(ctx, textwidth);
       if (lines == markline)
         nk_text_colored(ctx, item->text, item->length, NK_TEXT_LEFT, nk_rgb(255, 255, 128));
@@ -1203,7 +1251,7 @@ typedef struct tagTIMELINE {
 #define EPSILON     0.001
 #define FLTEQ(a,b)  ((a)-EPSILON<(b) && (a)+EPSILON>(b))  /* test whether floating-point values are equal within a small margin */
 #define MARK_SECOND   1000000
-static double mark_spacing = 100.0;             /* spacing between two mark_deltatime positions */
+static float mark_spacing = 100.0;              /* spacing between two mark_deltatime positions */
 static unsigned long mark_scale = MARK_SECOND;  /* 1 -> us, 1000 -> ms, 1000000 -> s, 60000000 -> min, etc. */
 static unsigned long mark_deltatime = 1;        /* in seconds / mark_scale */
 static TRACESTRING *tracestring_tail_prev = NULL;
@@ -1258,7 +1306,7 @@ void timeline_rebuild(void)
       int idx;
       float pos;
       chan = item->channel;
-      assert(chan > 0 && chan < NUM_CHANNELS);
+      assert(chan >= 0 && chan < NUM_CHANNELS);
       if (!channels[chan].enabled)
         continue;
       /* make sure array is big enough for another mark */
@@ -1311,9 +1359,9 @@ double timeline_widget(struct nk_context *ctx, const char *id, float rowheight, 
   struct nk_rect rcwidget;
   struct nk_style_button stbtn;
 
-  NK_ASSERT(ctx != NULL);
-  NK_ASSERT(ctx->current != NULL);
-  NK_ASSERT(ctx->current->layout != NULL);
+  assert(ctx != NULL);
+  assert(ctx->current != NULL);
+  assert(ctx->current->layout != NULL);
   if (ctx == NULL || ctx->current == NULL || ctx->current->layout == NULL)
     return click_time;
 
@@ -1493,8 +1541,8 @@ double timeline_widget(struct nk_context *ctx, const char *id, float rowheight, 
         if (nk_input_mouse_clicked(&ctx->input, NK_BUTTON_LEFT, rc)) {
           float pos;
           struct nk_mouse *mouse = &ctx->input.mouse;
-          NK_ASSERT(mouse != NULL);
-          NK_ASSERT(NK_INBOX(mouse->pos.x, mouse->pos.y, rc.x, rc.y, rc.w, rc.h));
+          assert(mouse != NULL);
+          assert(NK_INBOX(mouse->pos.x, mouse->pos.y, rc.x, rc.y, rc.w, rc.h));
           pos = mouse->pos.x - labelwidth - 2 * HORPADDING + xscroll;
           if (pos >= 0.0)
             click_time = pos * (mark_scale * mark_deltatime) / (mark_spacing * MARK_SECOND) + timeoffset;

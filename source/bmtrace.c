@@ -18,6 +18,7 @@
  * limitations under the License.
  */
 
+#include <assert.h>
 #include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -56,6 +57,7 @@
 #include "nuklear_tooltip.h"
 #include "rs232.h"
 #include "specialfolder.h"
+#include "tcpip.h"
 
 #include "dwarf.h"
 #include "elf.h"
@@ -67,13 +69,13 @@
   #include "res/icon_download_64.h"
 #endif
 
-#if !defined _MAX_PATH
-  #define _MAX_PATH 260
+#if defined _MSC_VER
+  #define stricmp(a,b)    _stricmp((a),(b))
+  #define strdup(s)       _strdup(s)
 #endif
 
-#ifndef NK_ASSERT
-  #include <assert.h>
-  #define NK_ASSERT(expr) assert(expr)
+#if !defined _MAX_PATH
+  #define _MAX_PATH 260
 #endif
 
 #if defined __linux__ || defined __FreeBSD__ || defined __APPLE__
@@ -127,6 +129,7 @@ static int bmp_callback(int code, const char *message)
 #define WINDOW_HEIGHT   400
 #define FONT_HEIGHT     14      /* default font size */
 #define ROW_HEIGHT      (1.6 * opt_fontsize)
+#define COMBOROW_CY     (0.9 * opt_fontsize)
 #define BROWSEBTN_WIDTH (1.85 * opt_fontsize)
 
 
@@ -137,7 +140,7 @@ static float *nk_ratio(int count, ...)
   va_list ap;
   int i;
 
-  NK_ASSERT(count < MAX_ROW_FIELDS);
+  assert(count < MAX_ROW_FIELDS);
   va_start(ap, count);
   for (i = 0; i < count; i++)
     r_array[i] = (float) va_arg(ap, double);
@@ -205,10 +208,13 @@ int main(int argc, char *argv[])
   char mcu_driver[32];
   char txtConfigFile[_MAX_PATH], findtext[128] = "", valstr[128] = "";
   char txtTSDLfile[_MAX_PATH] = "", txtELFfile[_MAX_PATH] = "";
+  char txtIPaddr[64] = "";
   char cpuclock_str[15] = "", bitrate_str[15] = "";
   unsigned long cpuclock = 0, bitrate = 0;
   int chan, cur_chan_edit = -1;
   unsigned long channelmask = 0;
+  int probe, usbprobes, netprobe;
+  const char **probelist;
   enum { MODE_MANCHESTER = 1, MODE_ASYNC } opt_mode = MODE_MANCHESTER;
   unsigned char trace_endpoint = BMP_EP_TRACE;
   int opt_init_target = nk_true;
@@ -248,6 +254,8 @@ int main(int argc, char *argv[])
       channel_set(chan, enabled, (result >= 3) ? key : NULL, nk_rgb(clr >> 16,(clr >> 8) & 0xff, clr & 0xff));
   }
   /* other configuration */
+  probe = (int)ini_getl("Settings", "probe", 0, txtConfigFile);
+  ini_gets("Settings", "ip-address", "127.0.0.1", txtIPaddr, sizearray(txtIPaddr), txtConfigFile);
   opt_mode = (int)ini_getl("Settings", "mode", MODE_MANCHESTER, txtConfigFile);
   opt_init_target = (int)ini_getl("Settings", "init-target", 1, txtConfigFile);
   opt_init_bmp = (int)ini_getl("Settings", "init-bmp", 1, txtConfigFile);
@@ -357,7 +365,29 @@ int main(int argc, char *argv[])
     }
   }
 
+  /* collect debug probes, connect to the selected one */
+  usbprobes = get_bmp_count();
+  netprobe = (usbprobes > 0) ? usbprobes : 1;
+  probelist = malloc((netprobe+1)*sizeof(char*));
+  if (probelist != NULL) {
+    char portname[64];
+    if (usbprobes == 0) {
+      probelist[0] = strdup("-");
+    } else {
+      for (idx = 0; idx < usbprobes; idx++) {
+        find_bmp(idx, BMP_IF_GDB, portname, sizearray(portname));
+        probelist[idx] = strdup(portname);
+      }
+    }
+    probelist[netprobe] = strdup("TCP/IP");
+  }
+  if (probe == 99)
+    probe = netprobe;
+  else if (probe > usbprobes)
+    probe = 0;
+
   trace_setdatasize((opt_datasize == 3) ? 4 : opt_datasize);
+  tcpip_init();
   bmp_setcallback(bmp_callback);
   reinitialize = 2; /* skip first iteration, so window is updated */
   recent_statuscode = BMPSTAT_SUCCESS;  /* must be a non-zero code to display anything */
@@ -373,14 +403,14 @@ int main(int argc, char *argv[])
       char msg[100];
       if ((cpuclock = strtol(cpuclock_str, NULL, 10)) == 0)
         cpuclock = 48000000;
-      if ((bitrate = strtol(bitrate_str, NULL, 10)) == 0)
+      if (opt_mode == MODE_MANCHESTER || (bitrate = strtol(bitrate_str, NULL, 10)) == 0)
         bitrate = 100000;
       if (opt_init_target || opt_init_bmp) {
         /* open/reset the serial port/device if any initialization must be done */
         if (rs232_isopen())
           bmp_break();
-        result = bmp_connect(0); /* this function also opens the (virtual) serial port/device */
-        if (result)
+        result = bmp_connect(probe, (probe == netprobe) ? txtIPaddr : NULL);
+        if (result) /* bmp_connect() also opens the (virtual) serial port/device */
           result = bmp_attach(2, opt_connect_srst, mcu_driver, sizearray(mcu_driver), NULL, 0);
         else
           trace_status = TRACESTAT_NO_CONNECT;
@@ -401,16 +431,20 @@ int main(int argc, char *argv[])
           params[0] = channelmask;
           bmp_runscript("swo_channels", mcu_driver, params);
         }
-      } else if (rs232_isopen()) {
+      } else if (bmp_isopen()) {
         /* no initialization is requested, if the serial port is open, close it
            (so that the gdbserver inside the BMP is available for debugging) */
-        rs232_close();
+        bmp_disconnect();
         result = 1; /* flag status = ok, to drop into the next "if" */
       }
       if (result) {
         if (opt_init_bmp)
           bmp_enabletrace((opt_mode == MODE_ASYNC) ? bitrate : 0, &trace_endpoint);
-        trace_status = trace_init(trace_endpoint);  /* this does nothing if initialization had already succeeded */
+        /* trace_status() does nothing if initialization had already succeeded */
+        if (probe == netprobe)
+          trace_status = trace_init(BMP_PORT_TRACE, txtIPaddr);
+        else
+          trace_status = trace_init(trace_endpoint, NULL);
         bmp_restart();
       }
       tracestring_clear();
@@ -431,7 +465,10 @@ int main(int argc, char *argv[])
       case TRACESTAT_NO_DEVPATH:
       case TRACESTAT_NO_PIPE:
         recent_statuscode = BMPERR_GENERAL;
-        tracelog_statusmsg(TRACESTATMSG_BMP, "Trace interface not available", recent_statuscode);
+        strlcpy(msg, "Trace interface not available", sizearray(msg));
+        if (probe == netprobe && opt_mode != MODE_ASYNC)
+          strlcat(msg, "; try NRZ/Async mode", sizearray(msg));
+        tracelog_statusmsg(TRACESTATMSG_BMP, msg, recent_statuscode);
         break;
       case TRACESTAT_NO_ACCESS:
         recent_statuscode = BMPERR_GENERAL;
@@ -445,7 +482,7 @@ int main(int argc, char *argv[])
         recent_statuscode = BMPERR_GENERAL;
         { int loc;
           unsigned long error = trace_errno(&loc);
-          sprintf(msg, "Trace access denied (error %d:%lu)", loc, error);
+          sprintf(msg, "Multi-threading set-up failure (error %d:%lu)", loc, error);
         }
         tracelog_statusmsg(TRACESTATMSG_BMP, msg, recent_statuscode);
         break;
@@ -557,7 +594,7 @@ int main(int argc, char *argv[])
         if (nk_button_label(ctx, ptr) || nk_input_is_key_pressed(&ctx->input, NK_KEY_F5)) {
           trace_running = !trace_running;
           if (trace_running && trace_status != TRACESTAT_OK) {
-            trace_status = trace_init(trace_endpoint);
+            trace_status = trace_init(trace_endpoint, (probe == netprobe) ? txtIPaddr : NULL);
             if (trace_status != TRACESTAT_OK)
               trace_running = 0;
           }
@@ -601,6 +638,48 @@ int main(int argc, char *argv[])
           int result;
           nk_layout_row_begin(ctx, NK_STATIC, ROW_HEIGHT, 2);
           nk_layout_row_push(ctx, LABEL_WIDTH);
+          nk_label(ctx, "Probe", NK_TEXT_ALIGN_LEFT | NK_TEXT_ALIGN_MIDDLE);
+          nk_layout_row_push(ctx, VALUE_WIDTH);
+          bounds = nk_widget_bounds(ctx);
+          probe = nk_combo(ctx, probelist, netprobe+1, probe, (int)COMBOROW_CY, nk_vec2(bounds.w, 4.5*ROW_HEIGHT));
+          if (probe == netprobe) {
+            int reconnect = 0;
+            nk_layout_row_begin(ctx, NK_STATIC, ROW_HEIGHT, 3);
+            nk_layout_row_push(ctx, LABEL_WIDTH);
+            nk_label(ctx, "IP Addr", NK_TEXT_ALIGN_LEFT | NK_TEXT_ALIGN_MIDDLE);
+            nk_layout_row_push(ctx, VALUE_WIDTH - BROWSEBTN_WIDTH - 5);
+            bounds = nk_widget_bounds(ctx);
+            result = nk_edit_string_zero_terminated(ctx, NK_EDIT_FIELD, txtIPaddr, sizearray(txtIPaddr), nk_filter_ascii);
+            if ((result & NK_EDIT_COMMITED) != 0 && bmp_is_ip_address(txtIPaddr))
+              reconnect = 1;
+            tooltip(ctx, bounds, "IP address of the ctxLink", &rc_canvas);
+            nk_layout_row_push(ctx, BROWSEBTN_WIDTH);
+            bounds = nk_widget_bounds(ctx);
+            if (nk_button_symbol(ctx, NK_SYMBOL_TRIPLE_DOT)) {
+              #if defined WIN32 || defined _WIN32
+                HCURSOR hcur = SetCursor(LoadCursor(NULL, IDC_WAIT));
+              #endif
+              unsigned long addr;
+              int count = scan_network(&addr, 1);
+              #if defined WIN32 || defined _WIN32
+                SetCursor(hcur);
+              #endif
+              if (count == 1) {
+                sprintf(txtIPaddr, "%d.%d.%d.%d",
+                       addr & 0xff, (addr >> 8) & 0xff, (addr >> 16) & 0xff, (addr >> 24) & 0xff);
+                reconnect = 1;
+              } else {
+                strlcpy(txtIPaddr, "none found", sizearray(txtIPaddr));
+              }
+            }
+            tooltip(ctx, bounds, "Scan network for ctxLink probes.", &rc_canvas);
+            if (reconnect) {
+              bmp_disconnect();
+              reinitialize = 1;
+            }
+          }
+          nk_layout_row_begin(ctx, NK_STATIC, ROW_HEIGHT, 2);
+          nk_layout_row_push(ctx, LABEL_WIDTH);
           nk_label(ctx, "Mode", NK_TEXT_ALIGN_LEFT | NK_TEXT_ALIGN_MIDDLE);
           nk_layout_row_push(ctx, VALUE_WIDTH);
           result = opt_mode - MODE_MANCHESTER;
@@ -641,7 +720,7 @@ int main(int argc, char *argv[])
             tooltip(ctx, bounds, "CPU clock of the target microcontroller", &rc_canvas);
             nk_layout_row_end(ctx);
           }
-          if (opt_init_target || opt_init_bmp) {
+          if (opt_init_target || (opt_init_bmp && opt_mode == MODE_ASYNC)) {
             nk_layout_row_begin(ctx, NK_STATIC, ROW_HEIGHT, 2);
             nk_layout_row_push(ctx, LABEL_WIDTH);
             nk_label(ctx, "Bit rate", NK_TEXT_ALIGN_LEFT | NK_TEXT_ALIGN_MIDDLE);
@@ -881,6 +960,14 @@ int main(int argc, char *argv[])
     sprintf(valstr, "%.2f %lu %lu", spacing, scale, delta);
     ini_puts("Settings", "timeline", bitrate_str, txtConfigFile);
   }
+  if (bmp_is_ip_address(txtIPaddr))
+    ini_puts("Settings", "ip-address", txtIPaddr, txtConfigFile);
+  ini_putl("Settings", "probe", (probe == netprobe) ? 99 : probe, txtConfigFile);
+  if (probelist != NULL) {
+    for (idx = 0; idx < netprobe + 1; idx++)
+      free((void*)probelist[idx]);
+    free(probelist);
+  }
 
   trace_close();
   guidriver_close();
@@ -890,11 +977,8 @@ int main(int argc, char *argv[])
   ctf_parse_cleanup();
   ctf_decode_cleanup();
   dwarf_cleanup(&dwarf_linetable, &dwarf_symboltable, &dwarf_filetable);
-  if (rs232_isopen()) {
-    rs232_dtr(0);
-    rs232_rts(0);
-    rs232_close();
-  }
+  bmp_disconnect();
+  tcpip_cleanup();
   return 0;
 }
 

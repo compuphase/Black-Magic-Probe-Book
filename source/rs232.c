@@ -222,7 +222,7 @@ int rs232_isopen(void)
   #endif /* _WIN32 */
 }
 
-size_t rs232_send(const unsigned char *buffer, size_t size)
+size_t rs232_xmit(const unsigned char *buffer, size_t size)
 {
   #if defined _WIN32
     DWORD written = 0;

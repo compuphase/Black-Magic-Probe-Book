@@ -160,18 +160,20 @@ static void msgstack_grow(void)
     filled = msgstack_tail - msgstack_head;
   else
     filled = msgstack_size - (msgstack_head - msgstack_tail);
+  assert(filled <= msgstack_size);
 
   if (filled + 2 > msgstack_size) {
     TRACEMSG *curstack = msgstack;
     size_t cursize = msgstack_size;
     size_t idx;
     if (msgstack_size == 0)
-      msgstack_size = 32;
+      msgstack_size = 16;
     msgstack_size *= 2;
     assert(msgstack_size > filled + 2);
     msgstack = (TRACEMSG*)malloc(msgstack_size * sizeof(TRACEMSG));
     assert(msgstack != NULL);
     /* copy existing entries from the old stack to the new one */
+    assert(msgstack_head == msgstack_tail || curstack != NULL);
     idx = 0;
     while (msgstack_head != msgstack_tail) {
       msgstack[idx++] = curstack[msgstack_head];
@@ -180,7 +182,8 @@ static void msgstack_grow(void)
     }
     msgstack_head = 0;
     msgstack_tail = idx;
-    free((void*)curstack);
+    if (curstack != NULL)
+      free((void*)curstack);
     /* clear the new entries */
     while (idx < msgstack_size) {
       memset(msgstack + idx, 0, sizeof(TRACEMSG));
@@ -194,7 +197,7 @@ static void msgstack_clear(void)
   if (msgstack != NULL) {
     while (msgstack_head != msgstack_tail) {
       free((void*)(msgstack[msgstack_head].message));
-      if (++msgstack_head > msgstack_size)
+      if (++msgstack_head >= msgstack_size)
         msgstack_head = 0;
     }
     free((void*)msgstack);
@@ -208,14 +211,15 @@ static void msgstack_clear(void)
 static void msgstack_push(uint16_t streamid, double timestamp, const char *message)
 {
   msgstack_grow();
+  assert(msgstack_tail < msgstack_size);
   msgstack[msgstack_tail].streamid = streamid;
   msgstack[msgstack_tail].timestamp = timestamp;
   msgstack[msgstack_tail].message = strdup(message);
-  if (++msgstack_tail > msgstack_size)
+  if (++msgstack_tail >= msgstack_size)
     msgstack_tail = 0;
 }
 
-/** msgstack_pop() gets a message from a LIFO stack. It returns 0 if the
+/** msgstack_pop() gets a message from a FIFO stack/queue. It returns 0 if the
  *  stack is empty, or 1 if a message was copied. The data is not copied if the
  *  parameters are NULL (so by setting all parameters to NULL, the message at
  *  the head is dropped).
@@ -232,7 +236,7 @@ int msgstack_pop(uint16_t *streamid, double *timestamp, char *message, size_t si
   if (message != NULL && size > 0)
     strlcpy(message, msgstack[msgstack_head].message, size);
   free((void*)(msgstack[msgstack_head].message));
-  if (++msgstack_head > msgstack_size)
+  if (++msgstack_head >= msgstack_size)
     msgstack_head = 0;
   return 1;
 }
@@ -547,8 +551,11 @@ restart:
     if (idx + len <= size) {
       /* get the stream.id; this code assumes Little Endian */
       unsigned long streamid = 0;
-      if (cache_filled > 0)
+      if (cache_filled > 0) {
+        assert(cache_filled < pkt_header->header.streamid_size / 8);
         memcpy((unsigned char*)&streamid, cache, cache_filled);
+      }
+      assert(len > 0 && len <= pkt_header->header.streamid_size / 8);
       memcpy((unsigned char*)&streamid + cache_filled, stream + idx, len);
       channel = (long)streamid; /* stream id in the header overrules the parameter */
       state++;
@@ -588,8 +595,11 @@ restart:
       /* get the event.id; this code assumes Little Endian */
       unsigned long id = 0;
       assert(cache_filled + len < sizeof id);
-      if (cache_filled > 0)
+      if (cache_filled > 0) {
+        assert(cache_filled < evt_header->header.id_size / 8);
         memcpy((unsigned char*)&id, cache, cache_filled);
+      }
+      assert(len > 0 && len <= evt_header->header.id_size / 8);
       memcpy((unsigned char*)&id + cache_filled, stream + idx, len);
       /* get the event from the id */
       event = event_by_id(id);
@@ -704,7 +714,7 @@ restart:
       result += 1;  /* flag: one more trace message completed */
       state = STATE_SCAN_MAGIC;
     }
-    break;
+    goto restart;
   }
 
   return result;

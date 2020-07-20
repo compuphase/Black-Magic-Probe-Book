@@ -52,6 +52,7 @@ enum {
   CTFERR_DUPLICATE_ID,
   CTFERR_UNKNOWNSTREAM, /* stream with name ... is not defined */
   CTFERR_UNKNOWNCLOCK,  /* clock with name ... is not defined */
+  CTFERR_STREAM_NO_DEF, /* no definition for stream id ... (required for event header) */
   CTFERR_STREAM_NOTSET, /* event ... is not assigned to a stream */
   CTFERR_TYPE_REDEFINE, /* type ... was already defined */
   CTFERR_NAMEREQUIRED,  /* a name for ... is required */
@@ -95,6 +96,7 @@ typedef struct tagCTF_TRACE_GLOBAL {
   uint8_t minor;
   uint8_t byte_order;
   uint8_t uuid[CTF_UUID_LENGTH];
+  uint32_t stream_mask; /* bit mask of which streams are active */
 } CTF_TRACE_GLOBAL;
 
 typedef struct tagCTF_PACKET_HEADER {
@@ -153,12 +155,13 @@ const CTF_PACKET_HEADER *packet_header(void);
 const CTF_CLOCK *clock_by_name(const char *name);
 const CTF_CLOCK *clock_by_seqnr(int seqnr);
 
+int stream_isactive(int stream_id);
 int stream_count(void);
 const CTF_STREAM *stream_by_name(const char *name);
 const CTF_STREAM *stream_by_id(int stream_id);
 const CTF_STREAM *stream_by_seqnr(int seqnr);
 
-int event_count(void);
+int event_count(int stream_id);
 const CTF_EVENT *event_next(const CTF_EVENT *event);
 const CTF_EVENT *event_by_id(int event_id);
 

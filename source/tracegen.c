@@ -458,12 +458,12 @@ static void usage(void)
          "Usage: tracegen [options] inputfile\n\n"
          "Options:\n"
          "-c99      Generate C99-compatible code (default is C90).\n"
-         "-fs=name  Set the name for the time stamo function, default = trace_timestamp\n"
+         "-fs=name  Set the name for the time stamp function, default = trace_timestamp\n"
          "-fx=name  Set the name for the trace transmit function, default = trace_xmit\n"
          "-i=path   Generate an #include directive with this path.\n"
          "-no-instr Add a \"no_instrument_function\" attribute to the generated functions.\n"
          "-o=name   Base output filename; a .c and .h suffix is added to this name.\n"
-         "-s        Pass stream ID as separate parameter (SWO tracing).\n"
+         "-s        SWO tracing: use channels for stream ids.\n"
          "-t        Force basic C types on arguments, if available.\n");
 }
 

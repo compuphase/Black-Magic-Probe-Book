@@ -1,7 +1,7 @@
 /*
  * The GDB "Remote Serial Protocol" support.
  *
- * Copyright 2019 CompuPhase
+ * Copyright 2019-2020 CompuPhase
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -26,8 +26,11 @@
 #include <ctype.h>
 #include <stdlib.h>
 #include <string.h>
+
+#include "bmp-support.h"
 #include "gdb-rsp.h"
 #include "rs232.h"
+#include "tcpip.h"
 
 #define TIMEOUT       500
 #define POLL_INTERVAL 50
@@ -110,7 +113,7 @@ size_t gdbrsp_recv(char *buffer, size_t size, int timeout)
   size_t head, tail, idx;
   int cycles, chk_cache;
 
-  if (!rs232_isopen())
+  if (!bmp_isopen())
     return 0;
   if (cache == NULL) {
     gdbrsp_packetsize(256);
@@ -122,7 +125,11 @@ size_t gdbrsp_recv(char *buffer, size_t size, int timeout)
   chk_cache = (cache_idx > 0);  /* analyse data in the cache even if no new data is received */
   head = tail = 0;
   while (cache_idx < cache_size) {
-    size_t count = rs232_recv(cache + cache_idx, cache_size - cache_idx);
+    size_t count;
+    if (rs232_isopen())
+      count = rs232_recv(cache + cache_idx, cache_size - cache_idx);
+    else
+      count = tcpip_recv(cache + cache_idx, cache_size - cache_idx);
     cache_idx += count;
     if (count > 0 || chk_cache) {
       chk_cache = 0;
@@ -149,7 +156,10 @@ size_t gdbrsp_recv(char *buffer, size_t size, int timeout)
         sum &= 0xff;
         if (sum == chksum) {
           /* confirm reception and copy to the buffer */
-          rs232_send((const unsigned char*)"+", 1);
+          if (rs232_isopen())
+            rs232_xmit((const unsigned char*)"+", 1);
+          else
+            tcpip_xmit((const unsigned char*)"+", 1);
           count = tail - head;  /* number of payload bytes */
           if (count >= 3 && cache[head] == 'O' && isxdigit(cache[head + 1]) && isxdigit(cache[head + 2])) {
             unsigned c;
@@ -180,7 +190,10 @@ size_t gdbrsp_recv(char *buffer, size_t size, int timeout)
           return count; /* return payload size (excluding checksum) */
         } else {
           /* send NAK */
-          rs232_send((const unsigned char*)"-", 1);
+          if (rs232_isopen())
+            rs232_xmit((const unsigned char*)"-", 1);
+          else
+            tcpip_xmit((const unsigned char*)"-", 1);
           head = tail = 0;
         }
         /* remove the packet from the cache */
@@ -224,7 +237,7 @@ int gdbrsp_xmit(const char *buffer, int size)
   unsigned char buf[10], *fullbuffer;
 
   assert(buffer != NULL);
-  if (!rs232_isopen())
+  if (!bmp_isopen())
     return 0;
 
   buflen = (size == -1) ? strlen(buffer) : size;
@@ -280,10 +293,16 @@ int gdbrsp_xmit(const char *buffer, int size)
   *(fullbuffer + size - 1) = int2hex(sum & 0x0f);
 
   for (retry = 0; retry < RETRIES; retry++) {
-    rs232_send(fullbuffer, size);
+    if (rs232_isopen())
+      rs232_xmit(fullbuffer, size);
+    else
+      tcpip_xmit(fullbuffer, size);
     for (cycle = 0; cycle < TIMEOUT / POLL_INTERVAL; cycle++) {
       do {
-        count = rs232_recv(buf, 1);
+        if (rs232_isopen())
+          count = rs232_recv(buf, 1);
+        else
+          count = tcpip_recv(buf, 1);
         if (count == 1) {
           if (buf[0] == '+') {
             free(fullbuffer);

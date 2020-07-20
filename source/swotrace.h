@@ -46,7 +46,7 @@ void channel_setname(int index, const char *name);
 struct nk_color channel_getcolor(int index);
 void channel_setcolor(int index, struct nk_color color);
 
-int    trace_init(unsigned char endpoint);
+int    trace_init(unsigned short endpoint, const char *ipaddress);
 void   trace_close(void);
 unsigned long trace_errno(int *loc);
 

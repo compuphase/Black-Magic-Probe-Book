@@ -65,23 +65,23 @@ LFLAGS_C  = $(L_DEBUG) /NOLOGO /SUBSYSTEM:console
 
 OBJLIST_BMDEBUG = bmdebug.obj bmp-scan.obj bmp-script.obj dwarf.obj elf.obj \
                   guidriver.obj minini.obj nuklear_tooltip.obj rs232.obj \
-                  specialfolder.obj strlcpy.obj usb-support.obj \
+                  specialfolder.obj strlcpy.obj tcpip.obj usb-support.obj \
                   decodectf.obj parsetsdl.obj swotrace.obj \
                   nuklear.obj nuklear_gdip.obj noc_file_dialog.obj
 
 OBJLIST_BMFLASH = bmflash.obj bmp-scan.obj bmp-script.obj bmp-support.obj crc32.obj \
                   elf.obj gdb-rsp.obj guidriver.obj minIni.obj nuklear_tooltip.obj \
-                  rs232.obj specialfolder.obj strlcpy.obj xmltractor.obj \
+                  rs232.obj specialfolder.obj strlcpy.obj tcpip.obj xmltractor.obj \
                   nuklear.obj nuklear_gdip.obj noc_file_dialog.obj
 
 OBJLIST_BMTRACE = bmtrace.obj bmp-scan.obj bmp-script.obj bmp-support.obj crc32.obj \
                   dwarf.obj elf.obj gdb-rsp.obj guidriver.obj minini.obj \
                   nuklear_tooltip.obj rs232.obj specialfolder.obj strlcpy.obj \
-                  usb-support.obj \
+                  tcpip.obj usb-support.obj \
                   xmltractor.obj decodectf.obj parsetsdl.obj swotrace.obj \
                   nuklear.obj nuklear_gdip.obj noc_file_dialog.obj
 
-OBJLIST_BMSCAN = bmscan.obj bmp-scan.obj
+OBJLIST_BMSCAN = bmscan.obj bmp-scan.obj tcpip.obj
 
 OBJLIST_POSTLINK = elf-postlink.obj elf.obj
 
@@ -134,6 +134,8 @@ specialfolder.obj : specialfolder.c
 
 swotrace.obj : swotrace.c
 
+tcpip.obj : tcpip.c
+
 xmltractor.obj : xmltractor.c
 
 decodectf.obj : decodectf.c
@@ -163,16 +165,16 @@ bmtrace.res : bmtrace.rc
 ##### Executables #####
 
 bmdebug.exe : $(OBJLIST_BMDEBUG) bmdebug.res
-	$(LNK) $(LFLAGS_W) /ENTRY:mainCRTStartup /OUT:$@ $** advapi32.lib comdlg32.lib gdi32.lib gdiplus.lib user32.lib winmm.lib shell32.lib shlwapi.lib setupapi.lib
+	$(LNK) $(LFLAGS_W) /ENTRY:mainCRTStartup /OUT:$@ $** advapi32.lib comdlg32.lib gdi32.lib gdiplus.lib user32.lib winmm.lib wsock32.lib shell32.lib shlwapi.lib setupapi.lib
 
 bmflash.exe : $(OBJLIST_BMFLASH) bmflash.res
-	$(LNK) $(LFLAGS_W) /ENTRY:mainCRTStartup /OUT:$@ $** advapi32.lib comdlg32.lib gdi32.lib gdiplus.lib user32.lib winmm.lib shell32.lib shlwapi.lib
+	$(LNK) $(LFLAGS_W) /ENTRY:mainCRTStartup /OUT:$@ $** advapi32.lib comdlg32.lib gdi32.lib gdiplus.lib user32.lib winmm.lib wsock32.lib shell32.lib shlwapi.lib
 
 bmtrace.exe : $(OBJLIST_BMTRACE) bmtrace.res
-	$(LNK) $(LFLAGS_W) /ENTRY:mainCRTStartup /OUT:$@ $** advapi32.lib comdlg32.lib gdi32.lib gdiplus.lib user32.lib winmm.lib shell32.lib shlwapi.lib setupapi.lib
+	$(LNK) $(LFLAGS_W) /ENTRY:mainCRTStartup /OUT:$@ $** advapi32.lib comdlg32.lib gdi32.lib gdiplus.lib user32.lib winmm.lib wsock32.lib shell32.lib shlwapi.lib setupapi.lib
 
 bmscan.exe : $(OBJLIST_BMSCAN)
-	$(LNK) $(LFLAGS_C) /OUT:$@ $** advapi32.lib
+	$(LNK) $(LFLAGS_C) /OUT:$@ $** advapi32.lib wsock32.lib
 
 elf-postlink.exe : $(OBJLIST_POSTLINK)
 	$(LNK) $(LFLAGS_C) /OUT:$@ $**

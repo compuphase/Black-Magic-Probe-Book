@@ -39,6 +39,7 @@
 #include "elf.h"
 #include "gdb-rsp.h"
 #include "rs232.h"
+#include "tcpip.h"
 #include "xmltractor.h"
 
 #if defined __linux__ || defined __FreeBSD__ || defined __APPLE__
@@ -56,6 +57,7 @@ typedef struct tagFLASHRGN {
 } FLASHRGN;
 #define MAX_FLASHRGN  8
 
+static int CurrentProbe = -1;
 static int PacketSize = 0;
 static FLASHRGN FlashRgn[MAX_FLASHRGN];
 static int FlashRgnCount = 0;
@@ -85,23 +87,45 @@ void bmp_setcallback(BMP_STATCALLBACK func)
   stat_callback = func;
 }
 
-/** bmp_connect() scans for the port of the Black Magic Probe and connects to
- *  it. It retrieves the essential "packet size" parameter, but does not issue
- *  any other command.
+/** bmp_connect() scans for the USB port of the Black Magic Probe and connects
+ *  to it. It can also connect to a gdbserver via TCP/IP; in this case, the IP
+ *  address must be passed, and the scanning phase is skipped.
  *
- *  \param probe  The probe sequence number, 0 if only a single probe is
- *                connected.
+ *  This function retrieves the essential "packet size" parameter, but does not
+ *  issue any other command.
+ *
+ *  \param probe      The probe sequence number, 0 if only a single probe is
+ *                    connected. This parameter is ignored if ipaddress is not
+ *                    NULL.
+ *  \param ipaddress  NULL to connect to an USB probe, or a valid IP address to
+ *                    connect to a gdbserver over TCP/IP.
  *
  *  \return 1 on success, 0 on failure. Status and error messages are passed via
  *          the callback.
  */
-int bmp_connect(int probe)
+int bmp_connect(int probe, const char *ipaddress)
 {
-  if (!rs232_isopen()) {
-    char devname[128];
+  char devname[128], probename[64];
+  int initialize = 0;
+
+  /* if switching between probes, reconnect (so close the current connection) */
+  if ((probe != CurrentProbe && ipaddress == NULL) || (CurrentProbe >= 0 && ipaddress != NULL)) {
+    bmp_disconnect();
+    CurrentProbe = (ipaddress == NULL) ? probe : -1;
+  }
+
+  if (CurrentProbe >= 0) {
+    strlcpy(probename, "Black Magic Probe", sizearray(probename));
+  } else {
+    strlcpy(probename, "ctxLink", sizearray(probename));
+    strlcpy(devname, ipaddress, sizearray(devname));
+  }
+
+  if (CurrentProbe >= 0 && !rs232_isopen()) {
+    /* serial port is selected, and it is currently not open */
     FlashRgnCount = 0;
     if (find_bmp(probe, BMP_IF_GDB, devname, sizearray(devname))) {
-      char buffer[256], *ptr;
+      char buffer[256];
       size_t size;
       /* connect to the port */
       rs232_open(devname,115200,8,1,PAR_NONE);
@@ -131,30 +155,90 @@ int bmp_connect(int probe)
         rs232_close();
         return 0;
       }
-      /* query parameters */
-      gdbrsp_xmit("qSupported:multiprocess+", -1);
-      size = gdbrsp_recv(buffer, sizearray(buffer), 1000);
-      buffer[size] = '\0';
-      if ((ptr = strstr(buffer, "PacketSize=")) != NULL)
-        PacketSize = (int)strtol(ptr + 11, NULL, 16);
-      gdbrsp_packetsize(PacketSize+16); /* allow for some margin */
-      //??? check for "qXfer:memory-map:read+" as well
-      /* connect to gdbserver */
-      gdbrsp_xmit("!", -1);
-      size = gdbrsp_recv(buffer, sizearray(buffer), 1000);
-      if (size != 2 || memcmp(buffer, "OK", size) != 0) {
-        notice(BMPERR_NOCONNECT, "Connect failed on %s", devname);
-        rs232_close();
-        return 0;
-      }
-      notice(BMPSTAT_SUCCESS, "Connected to Black Magic Probe (%s)", devname);
-    } else {
-      notice(BMPERR_NODETECT, "Black Magic Probe not detected");
-      return 0;
+      initialize = 1;
     }
   }
 
+  if (CurrentProbe < 0 && ipaddress != NULL && !tcpip_isopen()) {
+    /* network interface is selected, and it is currently not open */
+    tcpip_open(ipaddress);
+    if (!tcpip_isopen()) {
+      notice(BMPERR_PORTACCESS, "Failure opening gdbserver at %s", devname);
+      return 0;
+    }
+    initialize = 1;
+  }
+
+  /* check whether opening the communication interface succeeded */
+  if ((CurrentProbe >= 0 && !rs232_isopen()) || (CurrentProbe < 0 && !tcpip_isopen())) {
+    /* initialization failed */
+    notice(BMPERR_NODETECT, "%s not detected", probename);
+    return 0;
+  }
+
+  if (initialize) {
+    char buffer[256], *ptr;
+    size_t size;
+    /* query parameters */
+    gdbrsp_xmit("qSupported:multiprocess+", -1);
+    size = gdbrsp_recv(buffer, sizearray(buffer), 1000);
+    buffer[size] = '\0';
+    if ((ptr = strstr(buffer, "PacketSize=")) != NULL)
+      PacketSize = (int)strtol(ptr + 11, NULL, 16);
+    gdbrsp_packetsize(PacketSize+16); /* allow for some margin */
+    //??? check for "qXfer:memory-map:read+" as well
+    /* connect to gdbserver */
+    gdbrsp_xmit("!", -1);
+    size = gdbrsp_recv(buffer, sizearray(buffer), 1000);
+    if (size != 2 || memcmp(buffer, "OK", size) != 0) {
+      notice(BMPERR_NOCONNECT, "Connect failed on %s", devname);
+      bmp_disconnect();
+      return 0;
+    }
+    notice(BMPSTAT_SUCCESS, "Connected to %s (%s)", probename, devname);
+  }
+
   return 1;
+}
+
+/** bmp_disconnect() closes the connection to the Black Magic Probe, it one was
+ *  active.
+ *
+ *  \return 1 on success, 0 if no connection was open.
+ */
+int bmp_disconnect(void)
+{
+  int result = 0;
+
+  if (rs232_isopen()) {
+    rs232_dtr(0);
+    rs232_rts(0);
+    rs232_close();
+    result = 1;
+  }
+  if (tcpip_isopen()) {
+    tcpip_close();
+    result = 1;
+  }
+  return result;
+}
+
+/** bmp_isopen() returns whether a connection to a Black Magic Probe or a
+ *  ctxLink is open, cia USB or TCP/IP.
+ */
+int bmp_isopen(void)
+{
+  return rs232_isopen() || tcpip_isopen();
+}
+
+/** bmp_is_ip_address() returns 1 if the input string appears to contain a
+ *  valid IP address, or 0 if the format is incorrect.
+ */
+int bmp_is_ip_address(const char *address)
+{
+  int a, b, c, d;
+  return sscanf(address, "%d.%d.%d.%d", &a, &b, &c, &d) == 4
+         && a > 0 && a < 255 && b >= 0 && b < 255 && c >= 0 && c < 255 && d >= 0 && d < 255;
 }
 
 /** bmp_break() interrupts a running target by sending a Ctrl-C byte. */
@@ -196,7 +280,7 @@ int bmp_attach(int tpwr, int connect_srst, char *name, size_t namelength, char *
     *arch = '\0';
 
 restart:
-  if (rs232_isopen()) {
+  if (bmp_isopen()) {
     char buffer[512];
     size_t size;
     int ok;
@@ -316,7 +400,7 @@ int bmp_detach(int powerdown)
 {
   int result = 1;
 
-  if (rs232_isopen()) {
+  if (bmp_isopen()) {
     char buffer[100];
     size_t size;
     /* optionally disable power */
@@ -343,7 +427,7 @@ int bmp_fullerase(void)
   char *cmd;
   int rgn, rcvd, pktsize;
 
-  if (!rs232_isopen()) {
+  if (!bmp_isopen()) {
     notice(BMPERR_NOCONNECT, "Not connected to Black Magic Probe");
     return 0;
   }
@@ -397,7 +481,7 @@ int bmp_download(FILE *fp)
   char *cmd;
   int rgn, rcvd, pktsize;
 
-  if (!rs232_isopen()) {
+  if (!bmp_isopen()) {
     notice(BMPERR_NOCONNECT, "Not connected to Black Magic Probe");
     return 0;
   }
@@ -503,7 +587,7 @@ int bmp_verify(FILE *fp)
   int segment, sector, type, allmatch;
   unsigned long offset, filesize, paddr;
 
-  if (!rs232_isopen()) {
+  if (!bmp_isopen()) {
     notice(BMPERR_NOCONNECT, "Not connected to Black Magic Probe");
     return 0;
   }
@@ -567,7 +651,7 @@ int bmp_enabletrace(int async_bitrate, unsigned char *endpoint)
   char buffer[100], *ptr;
   int rcvd, ok;
 
-  if (!rs232_isopen()) {
+  if (!bmp_isopen()) {
     notice(BMPERR_NOCONNECT, "Not connected to Black Magic Probe");
     return 0;
   }
@@ -603,7 +687,7 @@ int bmp_restart(void)
   char buffer[100];
   int rcvd;
 
-  if (!rs232_isopen()) {
+  if (!bmp_isopen()) {
     notice(BMPERR_NOCONNECT, "Not connected to Black Magic Probe");
     return 0;
   }

@@ -41,6 +41,9 @@
     #pragma option -a-  /* "pack" pragma for older Borland compilers */
   #endif
 #endif
+#if defined _MSC_VER
+  #define strdup(s)   _strdup(s)
+#endif
 
 #if !defined _MAX_PATH
   #define _MAX_PATH 260
@@ -761,7 +764,7 @@ static void read_string(FILE *fp,int format,int stringtable,char *string,int max
   case DW_FORM_string:            /* string, zero-terminated */
     while ((byte=fgetc(fp))!=EOF) {
       if (idx<max)
-        string[idx]=byte;
+        string[idx]=(char)byte;
       idx++;
       if (byte==0)
         break;
@@ -777,7 +780,7 @@ static void read_string(FILE *fp,int format,int stringtable,char *string,int max
     fseek(fp,stringtable+offs,SEEK_SET);
     while ((byte=fgetc(fp))!=EOF) {
       if (idx<max)
-        string[idx]=byte;
+        string[idx]=(char)byte;
       idx++;
       if (byte==0)
         break;
@@ -809,7 +812,7 @@ static void read_string(FILE *fp,int format,int stringtable,char *string,int max
     sz+=count;
     while (idx<count && (byte=fgetc(fp))!=EOF) {
       if (idx<max)
-        string[idx]=byte;
+        string[idx]=(char)byte;
       idx++;
     }
     break;
@@ -941,7 +944,7 @@ static int dwarf_linetable(FILE *fp,const DWARFTABLE tables[],
     /* read the includes table */
     while ((byte=fgetc(fp))!=EOF && byte!='\0') {
       for (idx=0; byte!=EOF && byte!='\0'; idx++) {
-        path[idx]=byte;
+        path[idx]=(char)byte;
         byte=fgetc(fp);
       }
       path[idx]='\0';
@@ -950,7 +953,7 @@ static int dwarf_linetable(FILE *fp,const DWARFTABLE tables[],
     /* read the filename table */
     while ((byte=fgetc(fp))!=EOF && byte!='\0') {
       for (idx=0; byte!=EOF && byte!='\0'; idx++) {
-        path[idx]=byte;
+        path[idx]=(char)byte;
         byte=fgetc(fp);
       }
       path[idx]='\0';
@@ -997,7 +1000,7 @@ static int dwarf_linetable(FILE *fp,const DWARFTABLE tables[],
             break;
           case DW_LNE_define_file:
             for (idx=0; (byte=fgetc(fp))!=EOF && byte!='\0'; idx++) {
-              path[idx]=byte;
+              path[idx]=(char)byte;
               byte=fgetc(fp);
             }
             path[idx]='\0';
@@ -1242,7 +1245,7 @@ static int dwarf_infotable(FILE *fp,const DWARFTABLE tables[],
             break;
           case DW_AT_external:
             if (abbrev->tag==DW_TAG_variable)
-              external=value;
+              external=(int)value;
             break;
           case DW_AT_location:
             //??? indirect address for variables

@@ -40,6 +40,7 @@
 #endif
 
 #include "bmp-scan.h"
+#include "tcpip.h"
 
 
 #if !defined sizearray
@@ -419,5 +420,90 @@ int get_bmp_count(void)
   for (idx = 0; find_bmp(idx, BMP_IF_GDB, portname, sizearray(portname)); idx++)
     {}
   return idx;
+}
+
+
+/* --------------------------------------------------------------------------
+   ctxLink networking code
+   -------------------------------------------------------------------------- */
+
+
+typedef struct tagPORTRANGE {
+  const char *base;
+  short start, end;
+  unsigned long mask;
+} PORTRANGE;
+
+static DWORD __stdcall scan_range(LPVOID arg)
+{
+  short idx, start, end;
+  const char *base;
+  unsigned long mask = 0, bit = 1;
+
+  assert(arg != NULL);
+  base = ((PORTRANGE*)arg)->base;
+  start = ((PORTRANGE*)arg)->start;
+  end = ((PORTRANGE*)arg)->end;
+  assert(end-start < 8*sizeof(unsigned long));  /* bit mask with matches should be sufficiently big */
+
+  for (idx = start; idx <= end; idx++) {
+    SOCKET sock;
+    char addr[20];
+    sprintf(addr, "%s%d", base, idx);
+    if ((sock = socket(AF_INET , SOCK_STREAM , 0)) == INVALID_SOCKET)
+      break;  // could not create socket, check WSAGetLastError()
+    if (connect_timeout(sock, addr, BMP_PORT_GDB, 250) >= 0)
+      mask |= bit;
+    bit <<= 1;
+    closesocket(sock);
+  }
+
+  ((PORTRANGE*)arg)->mask = mask;
+  return 0;
+}
+
+int scan_network(unsigned long *addresses, int address_count)
+{
+  #define NUM_THREADS 32
+  PORTRANGE pr[NUM_THREADS];
+  HANDLE hThread[NUM_THREADS];
+  char local_ip[30], *ptr;
+  unsigned long local_ip_addr;
+  int idx, range, count;
+
+  /* check local IP address, replace the last number by a wildcard (i.e., assume
+     that the netmask is 255.255.255.0) */
+  local_ip_addr = getlocalip(local_ip);
+  if ((ptr = strrchr(local_ip, '.')) != NULL)
+    *(ptr + 1) = '\0';
+
+  range = (254-1+NUM_THREADS/2) / NUM_THREADS;
+  for (idx=0; idx<NUM_THREADS; idx++) {
+    pr[idx].base = local_ip;
+    pr[idx].start = 1 + (idx*range);
+    pr[idx].end = 1 + (idx*range) + (range-1);
+  }
+  pr[NUM_THREADS-1].end = 254;
+
+  /* create threads to scan the network and wait for all these threads to
+     finish */
+  for (idx=0; idx<NUM_THREADS; idx++)
+    hThread[idx] = CreateThread(NULL, 0, scan_range, &pr[idx], 0, NULL);
+  WaitForMultipleObjects(NUM_THREADS, hThread, TRUE, INFINITE);
+
+  /* construct the list of matching addresses */
+  assert(addresses != NULL && address_count > 0);
+  count = 0;
+  for (idx=0; idx<NUM_THREADS; idx++) {
+    unsigned long bit = 1;
+    unsigned long j;
+    for (j = pr[idx].start; j <= pr[idx].end; j++) {
+      if (count < address_count && (pr[idx].mask & bit) != 0)
+        addresses[count++] = (local_ip_addr & 0xffffff) | (j << 24);
+      bit <<= 1;
+    }
+  }
+
+  return count;
 }
 

@@ -27,6 +27,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include "bmp-scan.h"
+#include "tcpip.h"
+
 
 #if defined _MSC_VER
   #define stricmp(s1,s2)  _stricmp((s1),(s2))
@@ -66,7 +68,9 @@ int main(int argc, char *argv[])
            "* The sequence number of the Black Magic Probe (if multiple are connected).\n"
            "  Alternatively, you may specify the serial number of the Black Magic Probe, in\n"
            "  hexadecimal.\n"
-           "* The port name or device name to return, one of \"gdbserver\", \"uart\" or \"swo\".\n\n"
+           "* The port name or device name to return, one of \"gdbserver\", \"uart\" or \"swo\".\n"
+           "  for the ctxLink probe, this may also be \"ip\" to detect debug probes on the\n"
+           "  Wi-Fi network.\n\n"
            "Examples: bmscan             - list all ports of all connected devices\n"
            "          bmscan 2           - list all ports of the second Black Magic Probe.\n"
            "          bmscan 7bb180b4    - list all ports of the Black Magic Probe with the\n"
@@ -132,6 +136,31 @@ int main(int argc, char *argv[])
         printf("unavailable");
       else
         print_port(port_swo);
+    } else if (strcmp(argv[1], "ip") == 0) {
+      unsigned long addresses[10];
+      int count;
+      int result = tcpip_init();
+      if (result != 0) {
+          printf("network initialization failure (error code %d)\n", result);
+          return 1;
+      }
+      count = scan_network(addresses, sizearray(addresses));
+      if (seqnr == 0) {
+        if (count == 0)
+          printf("\nNo ctxLink could be found on this network.\n");
+        while (seqnr < count) {
+          unsigned long addr = addresses[seqnr];
+          printf("\nctxLink found:\n  IP address %d.%d.%d.%d\n",
+                 addr & 0xff, (addr >> 8) & 0xff, (addr >> 16) & 0xff, (addr >> 24) & 0xff);
+          seqnr++;
+        }
+      } else if (seqnr < count) {
+        unsigned long addr = addresses[seqnr - 1];
+        printf("%d.%d.%d.%d", addr & 0xff, (addr >> 8) & 0xff, (addr >> 16) & 0xff, (addr >> 24) & 0xff);
+      } else {
+        printf("unavailable");
+      }
+      tcpip_cleanup();
     } else {
       printf("Unknown interface \"%s\"\n", iface);
     }

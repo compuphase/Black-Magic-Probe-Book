@@ -590,8 +590,8 @@ nk_gdip_image_to_nk(GpImage *image) {
     img = nk_image_ptr( (void*)image );
     GdipGetImageHeight(image, &uheight);
     GdipGetImageWidth(image, &uwidth);
-    img.h = uheight;
-    img.w = uwidth;
+    img.h = (unsigned short)uheight;
+    img.w = (unsigned short)uwidth;
     return img;
 }
 

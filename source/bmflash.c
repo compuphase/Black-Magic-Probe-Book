@@ -18,7 +18,7 @@
  * limitations under the License.
  */
 
-#if defined _WIN32
+#if defined WIN32 || defined _WIN32
   #define WIN32_LEAN_AND_MEAN
   #include <windows.h>
   #include <shellapi.h>
@@ -37,6 +37,7 @@
   #include <bsd/string.h>
   #include <sys/stat.h>
 #endif
+#include <assert.h>
 #include <ctype.h>
 #include <limits.h>
 #include <stdio.h>
@@ -54,6 +55,7 @@
 #include "gdb-rsp.h"
 #include "minIni.h"
 #include "rs232.h"
+#include "tcpip.h"
 #include "specialfolder.h"
 
 #if defined __linux__ || defined __unix__
@@ -62,11 +64,6 @@
 
 #if !defined _MAX_PATH
   #define _MAX_PATH 260
-#endif
-
-#ifndef NK_ASSERT
-  #include <assert.h>
-  #define NK_ASSERT(expr) assert(expr)
 #endif
 
 #if defined __linux__ || defined __FreeBSD__ || defined __APPLE__
@@ -89,7 +86,7 @@
 #define WINDOW_WIDTH    (30 * opt_fontsize)
 #define WINDOW_HEIGHT   (21 * opt_fontsize)
 #define ROW_HEIGHT      (2 * opt_fontsize)
-#define COMBOROW_CY     (0.8 * opt_fontsize)
+#define COMBOROW_CY     (0.9 * opt_fontsize)
 #define BROWSEBTN_WIDTH (1.85 * opt_fontsize)
 
 
@@ -100,7 +97,7 @@ static float *nk_ratio(int count, ...)
   va_list ap;
   int i;
 
-  NK_ASSERT(count < MAX_ROW_FIELDS);
+  assert(count < MAX_ROW_FIELDS);
   va_start(ap, count);
   for (i = 0; i < count; i++)
     r_array[i] = (float) va_arg(ap, double);
@@ -193,7 +190,7 @@ static int log_widget(struct nk_context *ctx, const char *id, const char *conten
       const char *tail;
       if ((tail = strchr(head, '\n')) == NULL)
         tail = strchr(head, '\0');
-      NK_ASSERT(tail != NULL);
+      assert(tail != NULL);
       nk_layout_row_dynamic(ctx, rowheight, 1);
       if (lineheight <= 0.1) {
         struct nk_rect rcline = nk_layout_widget_bounds(ctx);
@@ -569,6 +566,7 @@ int main(int argc, char *argv[])
   int curstate = STATE_IDLE;
   char txtFilename[_MAX_PATH] = "", txtParamFile[_MAX_PATH];
   char txtConfigFile[_MAX_PATH];
+  char txtIPaddr[64] = "";
   char txtSection[32] = "", txtAddress[32] = "", txtMatch[64] = "", txtOffset[32] = "";
   char txtSerial[32] = "", txtSerialSize[32] = "";
   FILE *fpTgt, *fpWork;
@@ -597,6 +595,7 @@ int main(int argc, char *argv[])
   }
 
   probe = (int)ini_getl("Settings", "probe", 0, txtConfigFile);
+  ini_gets("Settings", "ip-address", "127.0.0.1", txtIPaddr, sizearray(txtIPaddr), txtConfigFile);
   opt_fontsize = (int)ini_getl("Settings", "fontsize", FONT_HEIGHT, txtConfigFile);
   ini_gets("Settings", "fontstd", "", opt_fontstd, sizearray(opt_fontstd), txtConfigFile);
   ini_gets("Settings", "fontmono", "", opt_fontmono, sizearray(opt_fontmono), txtConfigFile);
@@ -677,8 +676,9 @@ int main(int argc, char *argv[])
     probe = netprobe;
   else if (probe > usbprobes)
     probe = 0;
+  tcpip_init();
   bmp_setcallback(bmp_callback);
-  bmp_connect(probe);
+  bmp_connect(probe, (probe == netprobe) ? txtIPaddr : NULL);
 
   ctx = guidriver_init("BlackMagic Flash Programmer", WINDOW_WIDTH, WINDOW_HEIGHT, GUIDRV_TIMER,
                        opt_fontstd, opt_fontmono, opt_fontsize);
@@ -736,7 +736,7 @@ int main(int argc, char *argv[])
       waitidle = 0;
       break;
     case STATE_ATTACH:
-      result = bmp_connect(probe);
+      result = bmp_connect(probe, (probe == netprobe) ? txtIPaddr : NULL);
       if (result) {
         char mcufamily[32];
         int arch;
@@ -876,6 +876,37 @@ int main(int argc, char *argv[])
           nk_label(ctx, "Black Magic Probe", NK_TEXT_ALIGN_LEFT | NK_TEXT_ALIGN_MIDDLE);
           rcwidget = nk_widget_bounds(ctx);
           probe = nk_combo(ctx, probelist, netprobe+1, probe,(int)COMBOROW_CY, nk_vec2(rcwidget.w, 4.5*ROW_HEIGHT));
+          if (probe == netprobe) {
+            int reconnect = 0;
+            nk_layout_row(ctx, NK_DYNAMIC, ROW_HEIGHT, 4, nk_ratio(4, 0.05, 0.40, 0.40, 0.15));
+            nk_spacing(ctx, 1);
+            nk_label(ctx, "IP Address", NK_TEXT_ALIGN_LEFT | NK_TEXT_ALIGN_MIDDLE);
+            result = nk_edit_string_zero_terminated(ctx, NK_EDIT_FIELD, txtIPaddr, sizearray(txtIPaddr), nk_filter_ascii);
+            if ((result & NK_EDIT_COMMITED) != 0 && bmp_is_ip_address(txtIPaddr))
+              reconnect = 1;
+            if (nk_button_label(ctx, "scan")) {
+              #if defined WIN32 || defined _WIN32
+                HCURSOR hcur = SetCursor(LoadCursor(NULL, IDC_WAIT));
+              #endif
+              unsigned long addr;
+              int count = scan_network(&addr, 1);
+              #if defined WIN32 || defined _WIN32
+                SetCursor(hcur);
+              #endif
+              if (count == 1) {
+                sprintf(txtIPaddr, "%d.%d.%d.%d",
+                       addr & 0xff, (addr >> 8) & 0xff, (addr >> 16) & 0xff, (addr >> 24) & 0xff);
+                reconnect = 1;
+              } else {
+                strlcpy(txtIPaddr, "no gdbserver found", sizearray(txtIPaddr));
+              }
+            }
+            if (reconnect) {
+              bmp_disconnect();
+              bmp_connect(probe, (probe == netprobe) ? txtIPaddr : NULL);
+              curstate = STATE_IDLE;
+            }
+          }
 
           nk_layout_row(ctx, NK_DYNAMIC, ROW_HEIGHT * 0.8, 2, nk_ratio(2, 0.45, 0.55));
           nk_label(ctx, "MCU Family", NK_TEXT_ALIGN_LEFT | NK_TEXT_ALIGN_MIDDLE);
@@ -1029,6 +1060,8 @@ int main(int argc, char *argv[])
   if (strlen(txtConfigFile) > 0)
     ini_puts("Session", "recent", txtFilename, txtConfigFile);
 
+  if (bmp_is_ip_address(txtIPaddr))
+    ini_puts("Settings", "ip-address", txtIPaddr, txtConfigFile);
   ini_putl("Settings", "probe", (probe == netprobe) ? 99 : probe, txtConfigFile);
   if (probelist != NULL) {
     for (idx = 0; idx < netprobe + 1; idx++)
@@ -1038,11 +1071,8 @@ int main(int argc, char *argv[])
   guidriver_close();
   bmscript_clear();
   gdbrsp_packetsize(0);
-  if (rs232_isopen()) {
-    rs232_dtr(0);
-    rs232_rts(0);
-    rs232_close();
-  }
+  bmp_disconnect();
+  tcpip_cleanup();
   return 0;
 }
 

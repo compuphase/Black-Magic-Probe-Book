@@ -19,6 +19,8 @@
 #ifndef _BMP_SUPPORT_H
 #define _BMP_SUPPORT_H
 
+#include <stdio.h>
+
 #if defined __cplusplus
   extern "C" {
 #endif
@@ -45,7 +47,11 @@ enum {
 typedef int (*BMP_STATCALLBACK)(int code, const char *message);
 
 void bmp_setcallback(BMP_STATCALLBACK func);
-int bmp_connect(int probe);
+int bmp_connect(int probe, const char *ipaddress);
+int bmp_disconnect(void);
+int bmp_isopen(void);
+
+int bmp_is_ip_address(const char *address);
 
 int bmp_attach(int tpwr, int connect_srst, char *name, size_t namelength, char *arch, size_t archlength);
 int bmp_detach(int powerdown);

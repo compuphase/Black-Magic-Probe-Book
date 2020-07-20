@@ -353,7 +353,9 @@ int bmscript_load(const char *mcu)
 
   if (folder_AppData(path, sizearray(path))) {
     strlcat(path, DIR_SEPARATOR "BlackMagic", sizearray(path));
-    #if defined _WIN32
+    #if defined _MSC_VER
+      _mkdir(path);
+    #elif defined _WIN32
       mkdir(path);
     #else
       mkdir(path, S_IRWXU | S_IRWXG | S_IROTH | S_IXOTH);

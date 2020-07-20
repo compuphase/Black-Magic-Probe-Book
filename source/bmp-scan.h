@@ -36,6 +36,11 @@
 
 #define BMP_IF_SERIAL     9     /* pseudo-interface for getting the serial number */
 
+#define BMP_PORT_GDB      2159  /* TCP/IP port for gdbserver */
+#define BMP_PORT_UART     2160  /* TCP/IP port for 3.3V TTL UART */
+#define BMP_PORT_TRACE    2161  /* TCP/IP port for SWO trace */
+
+
 /* find_bmp() returns 1 on success and 0 on failure; the interface must be either
    BMP_IF_GDB, BMP_IF_UART or BMP_IF_TRACE (or BMP_IF_SERIAL to get the serial
    number of the attached Black Magic Probe). */
@@ -49,6 +54,9 @@
 /* get_bmp_count() returns the number of detected probes (only probes on the
    USB port are detected) */
 int get_bmp_count(void);
+
+/* scan_network() scans the network for TCP/IP connected gdbservers */
+int scan_network(unsigned long *addresses, int address_count);
 
 #if defined __cplusplus
   }

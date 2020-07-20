@@ -30,7 +30,7 @@ enum {
 int    rs232_open(const char *port, unsigned baud, int databits, int stopbits, int parity);
 void   rs232_close(void);
 int    rs232_isopen(void);
-size_t rs232_send(const unsigned char *buffer, size_t size);
+size_t rs232_xmit(const unsigned char *buffer, size_t size);
 size_t rs232_recv(unsigned char *buffer, size_t size);
 void   rs232_break(void);
 void   rs232_dtr(int set);

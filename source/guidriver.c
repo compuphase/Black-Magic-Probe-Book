@@ -23,6 +23,7 @@
   #include <unistd.h>
 #endif
 
+#include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include "guidriver.h"
@@ -33,12 +34,6 @@
   #include "findfont.h"
   #include "lodepng.h"
   #include "nuklear_glfw_gl2.h"
-#endif
-
-
-#ifndef NK_ASSERT
-  #include <assert.h>
-  #define NK_ASSERT(expr) assert(expr)
 #endif
 
 #if defined _WIN32
@@ -180,11 +175,11 @@ struct nk_context* guidriver_init(const char *caption, int width, int height, in
   if (fontStd == NULL)
     fontStd = nk_gdipfont_create("Arial", fontsize);
 
-  /* for unknown reasons, the Hack font displays as italics in Nuklear, which
-     is why it is not included in this list */
   fontMono = NULL;
   if (fontmono != NULL && strlen(fontmono) > 0)
     fontMono = nk_gdipfont_create(fontmono, fontsize);
+  if (fontMono == NULL)
+    fontMono = nk_gdipfont_create("Hack", fontsize);
   if (fontMono == NULL)
     fontMono = nk_gdipfont_create("DejaVu Sans Mono", fontsize);
   if (fontMono == NULL)
@@ -192,7 +187,7 @@ struct nk_context* guidriver_init(const char *caption, int width, int height, in
   if (fontMono == NULL)
     fontMono = nk_gdipfont_create("Courier New", fontsize);
 
-  NK_ASSERT(fontStd != NULL);
+  assert(fontStd != NULL);
   nk_gdipfont_set_voffset(fontStd, (-fontsize*0.2-0.5));
   nk_gdip_set_font(fontStd);
 
@@ -245,7 +240,7 @@ int guidriver_appsize(int *width, int *height)
   if (IsWindow(hwndApp)) {
     RECT rc;
     GetClientRect(hwndApp, &rc);
-    NK_ASSERT(width != NULL && height != NULL);
+    assert(width != NULL && height != NULL);
     *width = rc.right - rc.left;
     *height = rc.bottom - rc. top;
     return 1;
