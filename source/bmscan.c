@@ -113,7 +113,7 @@ int main(int argc, char *argv[])
   }
 
   if (seqnr < 0) {
-    printf("\nInvalid sequence number %d, sequence numbers start at 1.\n", seqnr + 1);
+    printf("\nInvalid sequence number %ld, sequence numbers start at 1.\n", seqnr + 1);
     return 1;
   }
 
@@ -150,13 +150,13 @@ int main(int argc, char *argv[])
           printf("\nNo ctxLink could be found on this network.\n");
         while (seqnr < count) {
           unsigned long addr = addresses[seqnr];
-          printf("\nctxLink found:\n  IP address %d.%d.%d.%d\n",
+          printf("\nctxLink found:\n  IP address %lu.%lu.%lu.%lu\n",
                  addr & 0xff, (addr >> 8) & 0xff, (addr >> 16) & 0xff, (addr >> 24) & 0xff);
           seqnr++;
         }
       } else if (seqnr < count) {
         unsigned long addr = addresses[seqnr - 1];
-        printf("%d.%d.%d.%d", addr & 0xff, (addr >> 8) & 0xff, (addr >> 16) & 0xff, (addr >> 24) & 0xff);
+        printf("%lu.%lu.%lu.%lu", addr & 0xff, (addr >> 8) & 0xff, (addr >> 16) & 0xff, (addr >> 24) & 0xff);
       } else {
         printf("unavailable");
       }
@@ -176,13 +176,13 @@ int main(int argc, char *argv[])
           printf("\nNo Black Magic Probe could be found on this system.\n");
           break;
         case 1:
-          printf("\nNo %dnd Black Magic Probe could be found on this system.\n", seqnr + 1);
+          printf("\nNo %ldnd Black Magic Probe could be found on this system.\n", seqnr + 1);
           break;
         case 2:
-          printf("\nNo %drd Black Magic Probe could be found on this system.\n", seqnr + 1);
+          printf("\nNo %ldrd Black Magic Probe could be found on this system.\n", seqnr + 1);
           break;
         default:
-          printf("\nNo %dth Black Magic Probe could be found on this system.\n", seqnr + 1);
+          printf("\nNo %ldth Black Magic Probe could be found on this system.\n", seqnr + 1);
         }
         return 1;
       }

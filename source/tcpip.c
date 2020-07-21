@@ -17,13 +17,18 @@
  */
 
 #include <assert.h>
+#include <ctype.h>
 #include <errno.h>
 #include <string.h>
 #if defined WIN32 || defined _WIN32
 #else
   #include <stdio.h>
   #include <fcntl.h>
+  #include <ifaddrs.h>
+  #include <netdb.h>
   #include <unistd.h>
+  #include <arpa/inet.h>
+  #define SOCKET_ERROR  (-1)
 #endif
 #include "bmp-scan.h"
 #include "tcpip.h"
@@ -38,39 +43,64 @@ static SOCKET GdbSocket = INVALID_SOCKET;
 
 
 /** getlocalip() returns the IP address of the local host as a 32-bit
- *  integer, plus optionally as a human-readable string. The parameter
- *  ip_address may be NULL. On failure, the function returns 0xffffffff and an
- *  empty string.
+ *  integer, plus as a human-readable string. On failure, the function returns
+ *  0xffffffff and an empty string.
  */
 unsigned long getlocalip(char *ip_address)
 {
-  char name[80];
-  struct hostent *phe;
+  #if defined WIN32 || defined _WIN32
+    char name[80];
+    struct hostent *phe;
+  #else
+    struct ifaddrs *ifaddr, *ifa;
+  #endif
   int i;
 
   assert(ip_address != NULL);
   *ip_address = '\0';
 
-  if (gethostname(name, sizeof(name)) == SOCKET_ERROR)
-    return WSAGetLastError();
-  phe = gethostbyname(name);
-  if (phe == NULL)
-    return -1;
+  #if defined WIN32 || defined _WIN32
+    if (gethostname(name, sizeof(name)) == SOCKET_ERROR)
+      return INADDR_NONE;
+    phe = gethostbyname(name);
+    if (phe == NULL)
+      return INADDR_NONE;
 
-  for (i = 0; phe->h_addr_list[i] != NULL; i++) {
-    struct in_addr addr;
-    char *ptr;
-    memcpy(&addr, phe->h_addr_list[i], sizeof(struct in_addr));
-    ptr = inet_ntoa(addr);
-    assert(ptr != NULL);
-    if (strcmp(ptr, "127.0.0.1") == 0 || strcmp(ptr, "::1") == 0)
-      continue;   /* ignore loopback addresses */
-    if (ip_address != NULL)
+    for (i = 0; phe->h_addr_list[i] != NULL; i++) {
+      struct in_addr addr;
+      char *ptr;
+      memcpy(&addr, phe->h_addr_list[i], sizeof(struct in_addr));
+      ptr = inet_ntoa(addr);
+      assert(ptr != NULL);
+      if (strcmp(ptr, "127.0.0.1") == 0 || strcmp(ptr, "::1") == 0)
+        continue;   /* ignore loopback addresses */
       strcpy(ip_address, ptr);
-    return addr.s_addr;
-  }
+      return addr.s_addr;
+    }
+  #else
+    if (getifaddrs(&ifaddr)==-1)
+      return INADDR_NONE;
 
-  return ~0;
+    for (ifa = ifaddr; ifa != NULL; ifa = ifa->ifa_next) {
+      if (ifa->ifa_addr == NULL)
+        continue;
+      i = getnameinfo(ifa->ifa_addr, sizeof(struct sockaddr_in), ip_address, 16, NULL, 0, NI_NUMERICHOST);
+      if (i == 0
+          && ifa->ifa_addr->sa_family == AF_INET
+          && (strcmp(ifa->ifa_name, "eth0") == 0
+              || (strncmp(ifa->ifa_name, "eno", 3) == 0 && isdigit(ifa->ifa_name[3]))
+              || (strncmp(ifa->ifa_name, "ens", 3) == 0 && isdigit(ifa->ifa_name[3]))
+              || (strncmp(ifa->ifa_name, "enp", 3) == 0 && isdigit(ifa->ifa_name[3]))))
+      {
+        freeifaddrs(ifaddr);
+        return inet_addr(ip_address);
+      }
+    }
+
+    freeifaddrs(ifaddr);
+  #endif
+
+  return INADDR_NONE;
 }
 
 /** connect_timeout() is like connect(), but with a timeout in milliseconds. */
@@ -81,6 +111,7 @@ int connect_timeout(SOCKET sock,const char *host,short port,int timeout)
   struct timeval tv;
   #if defined _WIN32 || defined WIN32
     unsigned long mode = 1;
+    typedef int socklen_t;
   #endif
 
   address.sin_family = AF_INET;
@@ -104,7 +135,7 @@ int connect_timeout(SOCKET sock,const char *host,short port,int timeout)
 
   if (select(sock+1, NULL, &fdset, NULL, &tv) == 1) {
     int so_error;
-    int len = sizeof so_error;  /* socklen_t */
+    socklen_t len = sizeof so_error;
     getsockopt(sock, SOL_SOCKET, SO_ERROR, (char*)&so_error, &len);
     if (so_error == 0)
       return 0;
@@ -142,12 +173,12 @@ int tcpip_init(void)
   return 0;
 }
 
-int tcpip_close(void)
+int tcpip_cleanup(void)
 {
   return 0;
 }
 
-int closesocket(IN SOCKET s)
+int closesocket(SOCKET s)
 {
   return close(s);
 }
@@ -188,7 +219,7 @@ int tcpip_open(const char *ip_address)
   #if defined WIN32 || defined _WIN32
     return WSAGetLastError();
   #else
-    //???
+    return errno;
   #endif
 }
 

@@ -46,8 +46,9 @@
   #include <unistd.h>
   #include <bsd/string.h>
   #include <sys/stat.h>
+  #include <sys/socket.h>
+  #include <arpa/inet.h>
   #include <libusb-1.0/libusb.h>
-
   typedef int SOCKET;
   #define INVALID_SOCKET (-1)
 #endif
@@ -1035,7 +1036,7 @@ static int usb_OpenDevice(libusb_device_handle **hUSB, const char *path)
   return TRACESTAT_OK;
 }
 
-int trace_init(unsigned char endpoint)
+int trace_init(unsigned short endpoint, const char *ipaddress)
 {
   char dev_id[50];
   int result;
@@ -1049,16 +1050,31 @@ int trace_init(unsigned char endpoint)
      retrying */
   trace_close();
 
-  if (!find_bmp(0, BMP_IF_TRACE, dev_id, sizearray(dev_id)))
-    return TRACESTAT_NO_INTERFACE;  /* Black Magic Probe not found (trace interface not found) */
+  if (ipaddress != NULL) {
+    struct sockaddr_in server;
+    if ((TraceSocket = socket(AF_INET, SOCK_STREAM, 0)) == INVALID_SOCKET)
+      return TRACESTAT_NO_INTERFACE;
 
-  result = libusb_init(0);
-  if (result < 0)
-    return TRACESTAT_INIT_FAILED;
+    server.sin_addr.s_addr = inet_addr(ipaddress);
+    server.sin_family = AF_INET;
+    server.sin_port = htons(endpoint);
+    if (connect(TraceSocket, (struct sockaddr*)&server, sizeof(server)) != 0) {
+      close(TraceSocket);
+      TraceSocket = INVALID_SOCKET;
+      return TRACESTAT_NO_PIPE;
+    }
+  } else {
+    if (!find_bmp(0, BMP_IF_TRACE, dev_id, sizearray(dev_id)))
+      return TRACESTAT_NO_INTERFACE;  /* Black Magic Probe not found (trace interface not found) */
 
-  result = usb_OpenDevice(&hUSBiface, dev_id);
-  if (result != TRACESTAT_OK)
-    return result;
+    result = libusb_init(0);
+    if (result < 0)
+      return TRACESTAT_INIT_FAILED;
+
+    result = usb_OpenDevice(&hUSBiface, dev_id);
+    if (result != TRACESTAT_OK)
+      return result;
+  }
 
   result = pthread_create(&hThread, NULL, trace_read, NULL);
   if (result != 0)

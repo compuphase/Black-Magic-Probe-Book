@@ -27,9 +27,14 @@
   #include <windows.h>
   #include <winsock2.h>
 #else
+  #include <sys/socket.h>
   typedef int SOCKET;
   #define INVALID_SOCKET (-1)
 #endif /* __linux__ */
+
+#if !defined INADDR_NONE
+  #define INADDR_NONE (~0)
+#endif
 
 int tcpip_init(void);
 int tcpip_cleanup(void);
@@ -45,7 +50,7 @@ unsigned long getlocalip(char *ip_address);
 int connect_timeout(SOCKET sock, const char *host, short port, int timeout);
 
 #if defined __linux__ || defined __FreeBSD__ || defined __APPLE__
-  int closesocket(IN SOCKET s);
+  int closesocket(SOCKET s);
 #endif /* __linux__ */
 
 #if defined __cplusplus

@@ -181,7 +181,7 @@ bmtrace : $(OBJLIST_BMTRACE)
 	$(LNK) $(LFLAGS) -o$@ $^ -lfontconfig -l$(GLFW_LIBNAME) -lGL -lm -lbsd -ldl -lpthread -lX11 -lxcb -lXau -lXdmcp `pkg-config --libs gtk+-3.0` -lusb-1.0
 
 bmscan : $(OBJLIST_BMSCAN)
-	$(LNK) $(LFLAGS) -o$@ $^ -lbsd
+	$(LNK) $(LFLAGS) -o$@ $^ -lbsd -lpthread
 
 elf-postlink : $(OBJLIST_POSTLINK)
 	$(LNK) $(LFLAGS) -o$@ $^
@@ -193,4 +193,5 @@ tracegen : $(OBJLIST_TRACEGEN)
 # put generated dependencies at the end, otherwise it does not blend well with
 # inference rules, if an item also has an explicit rule.
 -include makefile.dep
+
 

@@ -894,7 +894,7 @@ int main(int argc, char *argv[])
                 SetCursor(hcur);
               #endif
               if (count == 1) {
-                sprintf(txtIPaddr, "%d.%d.%d.%d",
+                sprintf(txtIPaddr, "%lu.%lu.%lu.%lu",
                        addr & 0xff, (addr >> 8) & 0xff, (addr >> 16) & 0xff, (addr >> 24) & 0xff);
                 reconnect = 1;
               } else {
