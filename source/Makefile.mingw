@@ -62,7 +62,7 @@ endif
 # -------------------------------------------------------------
 
 %.o : %.c
-        $(CC) $(INCLUDE) $(CFLAGS) -o$@ $<
+		$(CC) $(INCLUDE) $(CFLAGS) -o$@ $<
 
 
 # -------------------------------------------------------------
@@ -70,22 +70,22 @@ endif
 # -------------------------------------------------------------
 
 OBJLIST_BMDEBUG = bmdebug.o bmp-scan.o bmp-script.o dwarf.o elf.o \
-                  guidriver.o minIni.o nuklear_tooltip.o rs232.o \
-                  specialfolder.o strlcpy.o tcpip.o usb-support.o \
-                  decodectf.o parsetsdl.o swotrace.o \
-                  nuklear.o nuklear_gdip.o noc_file_dialog.o
+		guidriver.o minIni.o nuklear_tooltip.o rs232.o \
+		specialfolder.o strlcpy.o tcpip.o usb-support.o \
+		decodectf.o parsetsdl.o swotrace.o \
+		nuklear.o nuklear_gdip.o noc_file_dialog.o
 
 OBJLIST_BMFLASH = bmflash.o bmp-scan.o bmp-script.o bmp-support.o crc32.o \
-                  elf.o gdb-rsp.o guidriver.o minIni.o nuklear_tooltip.o \
-                  rs232.o specialfolder.o strlcpy.o tcpip.o xmltractor.o \
-                  nuklear.o nuklear_gdip.o noc_file_dialog.o
+		elf.o gdb-rsp.o guidriver.o minIni.o nuklear_tooltip.o \
+		rs232.o specialfolder.o strlcpy.o tcpip.o xmltractor.o \
+		nuklear.o nuklear_gdip.o noc_file_dialog.o
 
 OBJLIST_BMTRACE = bmtrace.o bmp-scan.o bmp-script.o bmp-support.o crc32.o \
-                  dwarf.o elf.o gdb-rsp.o guidriver.o minIni.o \
-                  nuklear_tooltip.o rs232.o specialfolder.o strlcpy.o tcpip.o \
-                  usb-support.o xmltractor.o \
-                  decodectf.o parsetsdl.o swotrace.o \
-                  nuklear.o nuklear_gdip.o noc_file_dialog.o
+		dwarf.o elf.o gdb-rsp.o guidriver.o minIni.o \
+		nuklear_tooltip.o rs232.o specialfolder.o strlcpy.o tcpip.o \
+		usb-support.o xmltractor.o \
+		decodectf.o parsetsdl.o swotrace.o \
+		nuklear.o nuklear_gdip.o noc_file_dialog.o
 
 OBJLIST_BMSCAN = bmscan.o bmp-scan.o strlcpy.o tcpip.o
 
@@ -97,9 +97,9 @@ OBJLIST_TRACEGEN = tracegen.o parsetsdl.o strlcpy.o
 project : bmdebug.exe bmflash.exe bmtrace.exe bmscan.exe elf-postlink.exe tracegen.exe
 
 depend :
-        makedepend -b -fmakefile.dep $(OBJLIST_BMDEBUG:.o=.c) $(OBJLIST_BMFLASH:.o=.c) \
-                   $(OBJLIST_BMTRACE:.o=.c) $(OBJLIST_BMSCAN:.o=.c) $(OBJLIST_POSTLINK:.o=.c) \
-                   $(OBJLIST_TRACEGEN:.o=.c)
+		makedepend -b -fmakefile.dep $(OBJLIST_BMDEBUG:.o=.c) $(OBJLIST_BMFLASH:.o=.c) \
+			$(OBJLIST_BMTRACE:.o=.c) $(OBJLIST_BMSCAN:.o=.c) $(OBJLIST_POSTLINK:.o=.c) \
+			$(OBJLIST_TRACEGEN:.o=.c)
 
 
 ##### C files #####
@@ -174,22 +174,22 @@ bmtrace.res : bmtrace.rc
 ##### Executables #####
 
 bmdebug.exe : $(OBJLIST_BMDEBUG)
-        $(LNK) $(LFLAGS) $(LFLAGS_GUI) -o$@ $^ -lm -lcomdlg32 -lgdi32 -lgdiplus -lsetupapi -lshlwapi
+		$(LNK) $(LFLAGS) $(LFLAGS_GUI) -o$@ $^ -lm -lcomdlg32 -lgdi32 -lgdiplus -lsetupapi -lshlwapi -lws2_32
 
 bmflash.exe : $(OBJLIST_BMFLASH)
-        $(LNK) $(LFLAGS) $(LFLAGS_GUI) -o$@ $^ -lm -lcomdlg32 -lgdi32 -lgdiplus -lshlwapi
+		$(LNK) $(LFLAGS) $(LFLAGS_GUI) -o$@ $^ -lm -lcomdlg32 -lgdi32 -lgdiplus -lshlwapi -lws2_32
 
 bmtrace.exe : $(OBJLIST_BMTRACE)
-        $(LNK) $(LFLAGS) $(LFLAGS_GUI) -o$@ $^ -lm -lcomdlg32 -lgdi32 -lgdiplus -lsetupapi -lshlwapi
+		$(LNK) $(LFLAGS) $(LFLAGS_GUI) -o$@ $^ -lm -lcomdlg32 -lgdi32 -lgdiplus -lsetupapi -lshlwapi -lws2_32
 
 bmscan.exe : $(OBJLIST_BMSCAN)
-        $(LNK) $(LFLAGS) -o$@ $^
+		$(LNK) $(LFLAGS) -o$@ $^ -lws2_32
 
 elf-postlink.exe : $(OBJLIST_POSTLINK)
-        $(LNK) $(LFLAGS) -o$@ $^
+		$(LNK) $(LFLAGS) -o$@ $^
 
 tracegen.exe : $(OBJLIST_TRACEGEN)
-        $(LNK) $(LFLAGS) -o$@ $^
+		$(LNK) $(LFLAGS) -o$@ $^
 
 
 # put generated dependencies at the end, otherwise it does not blend well with
