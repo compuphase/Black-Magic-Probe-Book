@@ -179,6 +179,7 @@ int bmp_connect(int probe, const char *ipaddress)
   if (initialize) {
     char buffer[256], *ptr;
     size_t size;
+    int retry;
     /* query parameters */
     gdbrsp_xmit("qSupported:multiprocess+", -1);
     size = gdbrsp_recv(buffer, sizearray(buffer), 1000);
@@ -188,9 +189,18 @@ int bmp_connect(int probe, const char *ipaddress)
     gdbrsp_packetsize(PacketSize+16); /* allow for some margin */
     //??? check for "qXfer:memory-map:read+" as well
     /* connect to gdbserver */
-    gdbrsp_xmit("!", -1);
-    size = gdbrsp_recv(buffer, sizearray(buffer), 1000);
-    if (size != 2 || memcmp(buffer, "OK", size) != 0) {
+    for (retry = 3; retry > 0; retry--) {
+      gdbrsp_xmit("!",-1);
+      size = gdbrsp_recv(buffer, sizearray(buffer), 1000);
+      if (size == 2 && memcmp(buffer, "OK", size) == 0)
+        break;
+      #if defined _WIN32
+        Sleep(200);
+      #else
+        usleep(200 * 1000);
+      #endif
+    }
+    if (retry == 0) {
       notice(BMPERR_NOCONNECT, "Connect failed on %s", devname);
       bmp_disconnect();
       return 0;
@@ -250,7 +260,7 @@ int bmp_break(void)
 
 /** bmp_attach() attaches to the target that is connected to the Black Magic
  *  Probe (the Black Magic Probe must have been connected first). It
- *  optionally switches power on the voltage-sense pin (t power the target).
+ *  optionally switches power on the voltage-sense pin (to power the target).
  *  The name of the driver for the MCU (that the Black Magic Probe uses) is
  *  returned.
  *
@@ -274,124 +284,129 @@ int bmp_break(void)
  */
 int bmp_attach(int tpwr, int connect_srst, char *name, size_t namelength, char *arch, size_t archlength)
 {
+  char buffer[512];
+  size_t size;
+  int ok;
+
   if (name != NULL && namelength > 0)
     *name = '\0';
   if (arch != NULL && archlength > 0)
     *arch = '\0';
 
-restart:
-  if (bmp_isopen()) {
-    char buffer[512];
-    size_t size;
-    int ok;
-    if (connect_srst != 0) {
-      gdbrsp_xmit("qRcmd,connect_srst enable", -1);
-      do {
-        size = gdbrsp_recv(buffer, sizearray(buffer), 1000);
-      } while (size > 0 && buffer[0] == 'o'); /* ignore console output */
-      if (size != 2 || memcmp(buffer, "OK", size) != 0)
-        notice(BMPERR_MONITORCMD, "Setting connect-with-reset option failed");
-    }
-    if (tpwr == 1) {
-      gdbrsp_xmit("qRcmd,tpwr enable", -1);
-      do {
-        size = gdbrsp_recv(buffer, sizearray(buffer), 1000);
-      } while (size > 0 && buffer[0] == 'o'); /* ignore console output */
-      if (size != 2 || memcmp(buffer, "OK", size) != 0) {
-        notice(BMPERR_MONITORCMD, "Power to target failed");
-      } else {
-        /* give the micro-controller a bit of time to start up, before issuing
-           the swdp_scan command */
-        #if defined _WIN32
-          Sleep(100);
-        #else
-          usleep(100 * 1000);
-        #endif
-      }
-    }
-    gdbrsp_xmit("qRcmd,swdp_scan", -1);
-    for ( ;; ) {
-      size = gdbrsp_recv(buffer, sizearray(buffer), 1000);
-      if (size > 2 && buffer[0] == 'o') {
-        const char *ptr;
-        buffer[size] = '\0';
-        /* parse the string */
-        if (tpwr == 2 && strchr(buffer, '\n') != NULL && (ptr = strstr(buffer + 1, "voltage:")) != NULL) {
-          double voltage = strtod(ptr + 8, (char**)&ptr);
-          if (*ptr == 'V' && voltage < 0.1) {
-            notice(BMPSTAT_NOTICE, "Note: powering target");
-            tpwr = 1;
-            goto restart;
-          }
-        }
-        if (name != NULL && strchr(buffer, '\n') != NULL && strtol(buffer + 1, (char**)&ptr, 10) == 1) {
-          char namebuffer[100];
-          while (*ptr <= ' ' && *ptr != '\0')
-            ptr++;
-          strlcpy(namebuffer, ptr, sizearray(namebuffer));
-          if ((ptr = strchr(namebuffer, '\n')) != NULL)
-            *(char*)ptr = '\0';
-          /* possibly split the name into a family and an architecture */
-          if ((ptr = strrchr(namebuffer, ' ')) != NULL && ptr[1] == 'M' && isdigit(ptr[2])) {
-            *(char*)ptr = '\0';
-            if (arch != NULL && archlength > 0)
-              strlcpy(arch, ptr + 1, archlength);
-            while (ptr > namebuffer && *(ptr - 1) == ' ')
-              *(char*)--ptr = '\0'; /* strip trailing whitespace */
-          }
-          strlcpy(name, namebuffer, namelength);
-        }
-        notice(BMPSTAT_NOTICE, buffer + 1);  /* skip the 'o' at the start */
-      } else if (size != 2 || memcmp(buffer, "OK", size) != 0) {
-        /* error message was already given by an "output"-response */
-        return 0;
-      } else {
-        break;  /* OK was received */
-      }
-    }
-    gdbrsp_xmit("vAttach;1", -1);
-    size = gdbrsp_recv(buffer, sizearray(buffer), 1000);
-    /* accept OK, S##, T## (but in fact, Black Magic Probe always sends T05) */
-    ok = (size == 2 && memcmp(buffer, "OK", size) == 0)
-         || (size == 3 && buffer[0] == 'S' && isxdigit(buffer[1]) && isxdigit(buffer[2]))
-         || (size >= 3 && buffer[0] == 'T' && isxdigit(buffer[1]) && isxdigit(buffer[2]));
-    if (!ok) {
-      notice(BMPERR_ATTACHFAIL, "Attach failed");
-      return 0;
-    }
-    notice(BMPSTAT_NOTICE, "Attached to target 1");
-    /* check memory map and features of the target */
-    FlashRgnCount = 0;
-    sprintf(buffer, "qXfer:memory-map:read::0,%x", PacketSize - 4);
-    gdbrsp_xmit(buffer, -1);
-    size = gdbrsp_recv(buffer, sizearray(buffer), 1000);
-    if (size > 10 && buffer[0] == 'm') {
-      xt_Node* root = xt_parse(buffer + 1);
-      if (root != NULL && FlashRgnCount < MAX_FLASHRGN) {
-        xt_Node* node = xt_find_child(root, "memory");
-        while (node != NULL) {
-          xt_Attrib* attrib = xt_find_attrib(node, "type");
-          if (attrib != NULL && attrib->szvalue == 5 && strncmp(attrib->value, "flash", attrib->szvalue) == 0) {
-            xt_Node* prop;
-            memset(&FlashRgn[FlashRgnCount], 0, sizeof(FLASHRGN));
-            if ((attrib = xt_find_attrib(node, "start")) != NULL)
-              FlashRgn[FlashRgnCount].address = strtoul(attrib->value, NULL, 0);
-            if ((attrib = xt_find_attrib(node, "length")) != NULL)
-              FlashRgn[FlashRgnCount].size = strtoul(attrib->value, NULL, 0);
-            if ((prop = xt_find_child(node, "property")) != NULL
-                && (attrib = xt_find_attrib(prop, "name")) != NULL
-                && attrib->szvalue == 9 && strncmp(attrib->value, "blocksize", attrib->szvalue) == 0)
-              FlashRgn[FlashRgnCount].blocksize = strtoul(prop->content, NULL, 0);
-            FlashRgnCount += 1;
-          }
-          node = xt_find_sibling(node, "memory");
-        }
-        xt_destroy_node(root);
-      }
-    }
-    if (FlashRgnCount == 0)
-      notice(BMPERR_NOFLASH, "No Flash memory record");
+  if (!bmp_isopen()) {
+    notice(BMPERR_ATTACHFAIL, "No connection to debug probe");
+    return 0;
   }
+
+restart:
+  if (connect_srst != 0) {
+    gdbrsp_xmit("qRcmd,connect_srst enable", -1);
+    do {
+      size = gdbrsp_recv(buffer, sizearray(buffer), 1000);
+    } while (size > 0 && buffer[0] == 'o'); /* ignore console output */
+    if (size != 2 || memcmp(buffer, "OK", size) != 0)
+      notice(BMPERR_MONITORCMD, "Setting connect-with-reset option failed");
+  }
+  if (tpwr == 1) {
+    gdbrsp_xmit("qRcmd,tpwr enable", -1);
+    do {
+      size = gdbrsp_recv(buffer, sizearray(buffer), 1000);
+    } while (size > 0 && buffer[0] == 'o'); /* ignore console output */
+    if (size != 2 || memcmp(buffer, "OK", size) != 0) {
+      notice(BMPERR_MONITORCMD, "Power to target failed");
+    } else {
+      /* give the micro-controller a bit of time to start up, before issuing
+         the swdp_scan command */
+      #if defined _WIN32
+        Sleep(100);
+      #else
+        usleep(100 * 1000);
+      #endif
+    }
+  }
+  gdbrsp_xmit("qRcmd,swdp_scan", -1);
+  for ( ;; ) {
+    size = gdbrsp_recv(buffer, sizearray(buffer), 1000);
+    if (size > 2 && buffer[0] == 'o') {
+      const char *ptr;
+      buffer[size] = '\0';
+      /* parse the string */
+      if (tpwr == 2 && strchr(buffer, '\n') != NULL && (ptr = strstr(buffer + 1, "voltage:")) != NULL) {
+        double voltage = strtod(ptr + 8, (char**)&ptr);
+        if (*ptr == 'V' && voltage < 0.1) {
+          notice(BMPSTAT_NOTICE, "Note: powering target");
+          tpwr = 1;
+          goto restart;
+        }
+      }
+      if (name != NULL && strchr(buffer, '\n') != NULL && strtol(buffer + 1, (char**)&ptr, 10) == 1) {
+        char namebuffer[100];
+        while (*ptr <= ' ' && *ptr != '\0')
+          ptr++;
+        strlcpy(namebuffer, ptr, sizearray(namebuffer));
+        if ((ptr = strchr(namebuffer, '\n')) != NULL)
+          *(char*)ptr = '\0';
+        /* possibly split the name into a family and an architecture */
+        if ((ptr = strrchr(namebuffer, ' ')) != NULL && ptr[1] == 'M' && isdigit(ptr[2])) {
+          *(char*)ptr = '\0';
+          if (arch != NULL && archlength > 0)
+            strlcpy(arch, ptr + 1, archlength);
+          while (ptr > namebuffer && *(ptr - 1) == ' ')
+            *(char*)--ptr = '\0'; /* strip trailing whitespace */
+        }
+        strlcpy(name, namebuffer, namelength);
+      }
+      notice(BMPSTAT_NOTICE, buffer + 1);  /* skip the 'o' at the start */
+    } else if (size != 2 || memcmp(buffer, "OK", size) != 0) {
+      /* error message was already given by an "output"-response */
+      return 0;
+    } else {
+      break;  /* OK was received */
+    }
+  }
+  gdbrsp_xmit("vAttach;1", -1);
+  size = gdbrsp_recv(buffer, sizearray(buffer), 1000);
+  /* accept OK, S##, T## (but in fact, Black Magic Probe always sends T05) */
+  ok = (size == 2 && memcmp(buffer, "OK", size) == 0)
+       || (size == 3 && buffer[0] == 'S' && isxdigit(buffer[1]) && isxdigit(buffer[2]))
+       || (size >= 3 && buffer[0] == 'T' && isxdigit(buffer[1]) && isxdigit(buffer[2]));
+  if (!ok) {
+    notice(BMPERR_ATTACHFAIL, "Attach failed");
+    return 0;
+  }
+  notice(BMPSTAT_NOTICE, "Attached to target 1");
+
+  /* check memory map and features of the target */
+  FlashRgnCount = 0;
+  sprintf(buffer, "qXfer:memory-map:read::0,%x", PacketSize - 4);
+  gdbrsp_xmit(buffer, -1);
+  size = gdbrsp_recv(buffer, sizearray(buffer), 1000);
+  if (size > 10 && buffer[0] == 'm') {
+    xt_Node* root = xt_parse(buffer + 1);
+    if (root != NULL && FlashRgnCount < MAX_FLASHRGN) {
+      xt_Node* node = xt_find_child(root, "memory");
+      while (node != NULL) {
+        xt_Attrib* attrib = xt_find_attrib(node, "type");
+        if (attrib != NULL && attrib->szvalue == 5 && strncmp(attrib->value, "flash", attrib->szvalue) == 0) {
+          xt_Node* prop;
+          memset(&FlashRgn[FlashRgnCount], 0, sizeof(FLASHRGN));
+          if ((attrib = xt_find_attrib(node, "start")) != NULL)
+            FlashRgn[FlashRgnCount].address = strtoul(attrib->value, NULL, 0);
+          if ((attrib = xt_find_attrib(node, "length")) != NULL)
+            FlashRgn[FlashRgnCount].size = strtoul(attrib->value, NULL, 0);
+          if ((prop = xt_find_child(node, "property")) != NULL
+              && (attrib = xt_find_attrib(prop, "name")) != NULL
+              && attrib->szvalue == 9 && strncmp(attrib->value, "blocksize", attrib->szvalue) == 0)
+            FlashRgn[FlashRgnCount].blocksize = strtoul(prop->content, NULL, 0);
+          FlashRgnCount += 1;
+        }
+        node = xt_find_sibling(node, "memory");
+      }
+      xt_destroy_node(root);
+    }
+  }
+  if (FlashRgnCount == 0)
+    notice(BMPERR_NOFLASH, "No Flash memory record");
 
   return 1;
 }

@@ -949,6 +949,7 @@ unsigned long trace_errno(int *loc)
 static pthread_t hThread;
 static libusb_device_handle *hUSBiface;
 static unsigned char usbTraceEP = BMP_EP_TRACE;
+static volatile int force_exit;
 
 static int memicmp(const unsigned char *p1, const unsigned char *p2, size_t count)
 {
@@ -971,7 +972,7 @@ static void *trace_read(void *arg)
   int numread = 0;
 
   (void)arg;
-  for ( ;; ) {
+  while (!force_exit && hThread != 0 && hUSBiface != NULL) {
     if (libusb_bulk_transfer(hUSBiface, usbTraceEP, buffer, sizeof(buffer), &numread, 0) == 0) {
       /* add the packet to the queue */
       int next = (tracequeue_tail + 1) % PACKET_NUM;
@@ -983,6 +984,7 @@ static void *trace_read(void *arg)
       }
     }
   }
+  force_exit = 0;
   return 0;
 }
 
@@ -1076,6 +1078,7 @@ int trace_init(unsigned short endpoint, const char *ipaddress)
       return result;
   }
 
+  force_exit = 0;
   result = pthread_create(&hThread, NULL, trace_read, NULL);
   if (result != 0)
     return TRACESTAT_NO_THREAD;
@@ -1086,7 +1089,9 @@ int trace_init(unsigned short endpoint, const char *ipaddress)
 void trace_close(void)
 {
   if (hThread != 0) {
-    pthread_cancel(hThread);
+    force_exit = 1;
+    while (force_exit)
+      usleep(10*1000);
     hThread = 0;
   }
   if (hUSBiface != NULL) {
