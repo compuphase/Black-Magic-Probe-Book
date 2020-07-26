@@ -805,7 +805,7 @@ static DWORD __stdcall trace_read(LPVOID arg)
 
   if (TraceSocket != INVALID_SOCKET) {
     for ( ;; ) {
-      int result = recv(TraceSocket, buffer, sizearray(buffer), 0);
+      int result = recv(TraceSocket, (char*)buffer, sizearray(buffer), 0);
       int next = (tracequeue_tail + 1) % PACKET_NUM;
       if (result > 0 && next != tracequeue_head) {
         memcpy(trace_queue[tracequeue_tail].data, buffer, result);

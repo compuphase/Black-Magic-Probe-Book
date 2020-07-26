@@ -242,7 +242,7 @@ size_t tcpip_xmit(const unsigned char *buffer, size_t size)
   int result;
 
   assert(tcpip_isopen());
-  result = send(GdbSocket, buffer, size, 0);
+  result = send(GdbSocket, (const char*)buffer, size, 0);
   return (result >= 0) ? result : 0;
 }
 
@@ -251,7 +251,7 @@ size_t tcpip_recv(unsigned char *buffer, size_t size)
   int result;
 
   assert(tcpip_isopen());
-  result = recv(GdbSocket, buffer, size, 0);
+  result = recv(GdbSocket, (char*)buffer, size, 0);
   return (result >= 0) ? result : 0;
 }
 

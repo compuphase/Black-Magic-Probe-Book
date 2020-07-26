@@ -664,24 +664,27 @@ int bmp_verify(FILE *fp)
 int bmp_enabletrace(int async_bitrate, unsigned char *endpoint)
 {
   char buffer[100], *ptr;
-  int rcvd, ok;
+  int rcvd, ok, retry;
 
   if (!bmp_isopen()) {
     notice(BMPERR_NOCONNECT, "Not connected to Black Magic Probe");
     return 0;
   }
 
-  if (async_bitrate > 0)  {
-    sprintf(buffer, "qRcmd,traceswo %d", async_bitrate);
-    gdbrsp_xmit(buffer, -1);
-  } else {
-    gdbrsp_xmit("qRcmd,traceswo", -1);
+  for (retry = 3; retry > 0; retry--) {
+    if (async_bitrate > 0)  {
+      sprintf(buffer, "qRcmd,traceswo %d", async_bitrate);
+      gdbrsp_xmit(buffer, -1);
+    } else {
+      gdbrsp_xmit("qRcmd,traceswo", -1);
+    }
+    rcvd = gdbrsp_recv(buffer, sizearray(buffer), 1000);
+    if (rcvd > 0)
+      break;
   }
-  rcvd = gdbrsp_recv(buffer, sizearray(buffer), 1000);
   /* a correct answer starts with 'o' and contains a serial number, the
      interface for trace capture (0x05) and the endpoint (0x85, on the original
      Black Magic Probe) */
-  assert(rcvd >= 0);
   buffer[rcvd] = '\0';
   ok = ((ptr = strchr(buffer, ':')) != NULL && strtol(ptr + 1, &ptr, 16) == BMP_IF_TRACE && *ptr == ':');
   if (ok) {
