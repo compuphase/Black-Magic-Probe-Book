@@ -909,7 +909,7 @@ static void sources_parse(const char *gdbresult)
 
   assert(head[6] == '[');
   head += 7;  /* skip [ too */
-  for ( ;; ) {
+  while (*head != ']') {
     char name[_MAX_PATH] = "", path[_MAX_PATH] = "";
     const char *sep = head;
     int len;
@@ -953,10 +953,9 @@ static void sources_parse(const char *gdbresult)
       /* nothing */;
     sources_add(basename, path);
     head = sep + 1;
-    if (*head == ']')
-      break;
-    assert(*head == ',');
-    head++;
+    assert(*head == ',' || *head == ']');
+    if (*head == ',')
+        head++;
   }
 }
 
@@ -1506,6 +1505,18 @@ int ctf_error_notify(int code, int linenr, const char *message)
     tracelog_statusmsg(TRACESTATMSG_CTF, msg, 0);
   }
   return 0;
+}
+
+static char *enquote(char *dest, const char *source, size_t dest_size)
+{
+  if (strchr(source, ' ') != NULL) {
+    strlcpy(dest, "\"", dest_size);
+    strlcat(dest, source, dest_size);
+    strlcat(dest, "\"", dest_size);
+  } else {
+    strlcpy(dest, source, dest_size);
+  }
+  return dest;
 }
 
 
@@ -2950,6 +2961,7 @@ static void usage(void)
 
 int main(int argc, char *argv[])
 {
+  #define RESETSTATE(state) (prevstate = -1, curstate = (state))
   enum { TAB_CONFIGURATION, TAB_BREAKPOINTS, TAB_WATCHES, TAB_SEMIHOSTING, TAB_SWO, /* --- */ TAB_COUNT };
   enum { SPLITTER_NONE, SPLITTER_VERTICAL, SPLITTER_HORIZONTAL, SIZER_SEMIHOSTING, SIZER_SWO };
 
@@ -3139,7 +3151,7 @@ int main(int argc, char *argv[])
 
   memset(&task, 0, sizeof task);
   insplitter = SPLITTER_NONE;
-  curstate = STATE_INIT;
+  RESETSTATE(STATE_INIT);
   prevstate = nextstate = -1;
   refreshflags = 0;
   console_hiddenflags = opt_allmsg ? 0 : STRFLG_NOTICE | STRFLG_RESULT | STRFLG_EXEC | STRFLG_MI_INPUT | STRFLG_TARGET | STRFLG_SCRIPT;
@@ -3188,7 +3200,7 @@ int main(int argc, char *argv[])
             free((void*)s);
             assert(curstate == STATE_GDB_TASK); /* drop back into this case after */
           } else {
-            curstate = STATE_QUIT;  /* selection dialog was canceled, quit the front-end */
+            RESETSTATE(STATE_QUIT);  /* selection dialog was canceled, quit the front-end */
           }
         }
         break;
@@ -3347,6 +3359,7 @@ int main(int argc, char *argv[])
         if (!atprompt)
           break;
         if (prevstate != curstate) {
+          char temp[_MAX_PATH];
           dwarf_cleanup(&dwarf_linetable, &dwarf_symboltable, &dwarf_filetable);
           /* create parameter filename from target filename, then read target-specific settings */
           strlcpy(txtParamFile, txtFilename, sizearray(txtParamFile));
@@ -3355,7 +3368,7 @@ int main(int argc, char *argv[])
           if (opt_tpwr && curstate == STATE_MON_SCAN) /* set power and (re-)attach */
              curstate = STATE_MON_TPWR;
           /* load target filename in GDB */
-          sprintf(cmd, "-file-exec-and-symbols %s\n", txtFilename);
+          sprintf(cmd, "-file-exec-and-symbols %s\n", enquote(temp, txtFilename, sizeof(temp)));
           if (task_stdin(&task, cmd))
             console_input(cmd);
           atprompt = 0;
@@ -3925,7 +3938,7 @@ int main(int argc, char *argv[])
       } /* switch (curstate) */
     } /* if (!is_idle()) */
     if (curstate > STATE_GDB_TASK && !task_isrunning(&task))
-      curstate = STATE_QUIT;  /* GDB ended -> quit the front-end too */
+      RESETSTATE(STATE_QUIT);   /* GDB ended -> quit the front-end too */
 
     /* parse GDB output (stderr first, because the prompt is given in stdout) */
     waitidle = 1;
@@ -3987,20 +4000,19 @@ int main(int argc, char *argv[])
           nk_layout_row_push(ctx, BUTTON_WIDTH);
           bounds = nk_widget_bounds(ctx);
           if (nk_button_label(ctx, "reset") || nk_input_is_key_pressed(&ctx->input, NK_KEY_CTRL_F2))
-            curstate = STATE_FILE;
+            RESETSTATE(STATE_FILE);
           tooltip(ctx, bounds, " Reload and restart the program (F2)", &rc_canvas);
           nk_layout_row_push(ctx, BUTTON_WIDTH);
           bounds = nk_widget_bounds(ctx);
           if (curstate == STATE_RUNNING) {
             if (nk_button_label(ctx, "stop") || nk_input_is_key_pressed(&ctx->input, NK_KEY_CTRL_F5)) {
-              prevstate = -1;
-              curstate = STATE_EXEC_CMD;
+              RESETSTATE(STATE_EXEC_CMD);
               stateparam[0] = STATEPARAM_EXEC_STOP;
             }
             tooltip(ctx, bounds, " Interrupt the program (Ctrl+F5)", &rc_canvas);
           } else {
             if (nk_button_label(ctx, "cont") || nk_input_is_key_pressed(&ctx->input, NK_KEY_F5)) {
-              curstate = STATE_EXEC_CMD;
+              RESETSTATE(STATE_EXEC_CMD);
               stateparam[0] = STATEPARAM_EXEC_CONTINUE;
             }
             tooltip(ctx, bounds, " Continue running (F5)", &rc_canvas);
@@ -4008,28 +4020,28 @@ int main(int argc, char *argv[])
           nk_layout_row_push(ctx, BUTTON_WIDTH);
           bounds = nk_widget_bounds(ctx);
           if (nk_button_label(ctx, "next") || nk_input_is_key_pressed(&ctx->input, NK_KEY_F10)) {
-            curstate = STATE_EXEC_CMD;
+            RESETSTATE(STATE_EXEC_CMD);
             stateparam[0] = STATEPARAM_EXEC_NEXT;
           }
           tooltip(ctx, bounds, " Step over (F10)", &rc_canvas);
           nk_layout_row_push(ctx, BUTTON_WIDTH);
           bounds = nk_widget_bounds(ctx);
           if (nk_button_label(ctx, "step") || nk_input_is_key_pressed(&ctx->input, NK_KEY_F11)) {
-            curstate = STATE_EXEC_CMD;
+            RESETSTATE(STATE_EXEC_CMD);
             stateparam[0] = STATEPARAM_EXEC_STEP;
           }
           tooltip(ctx, bounds, " Step into (F11)", &rc_canvas);
           nk_layout_row_push(ctx, BUTTON_WIDTH);
           bounds = nk_widget_bounds(ctx);
           if (nk_button_label(ctx, "finish") || nk_input_is_key_pressed(&ctx->input, NK_KEY_SHIFT_F11)) {
-            curstate = STATE_EXEC_CMD;
+            RESETSTATE(STATE_EXEC_CMD);
             stateparam[0] = STATEPARAM_EXEC_FINISH;
           }
           tooltip(ctx, bounds, " Step out of function (Shift+F11)", &rc_canvas);
           nk_layout_row_push(ctx, BUTTON_WIDTH);
           bounds = nk_widget_bounds(ctx);
           if (nk_button_label(ctx, "until") || nk_input_is_key_pressed(&ctx->input, NK_KEY_F7)) {
-            curstate = STATE_EXEC_CMD;
+            RESETSTATE(STATE_EXEC_CMD);
             stateparam[0] = STATEPARAM_EXEC_UNTIL;
             stateparam[1] = source_cursorline;
           }
@@ -4069,24 +4081,24 @@ int main(int argc, char *argv[])
                 /* no breakpoint yet -> add (bu check first whether that can
                    be done) */
                 if (source_cursorfile < sources_count) {
-                  curstate = STATE_BREAK_TOGGLE;
+                  RESETSTATE(STATE_BREAK_TOGGLE);
                   stateparam[0] = STATEPARAM_BP_ADD;
                   stateparam[1] = source_cursorfile;
                   stateparam[2] = row;
                 }
               } else if (bp->enabled) {
                 /* enabled breakpoint -> disable */
-                curstate = STATE_BREAK_TOGGLE;
+                RESETSTATE(STATE_BREAK_TOGGLE);
                 stateparam[0] = STATEPARAM_BP_DISABLE;
                 stateparam[1] = bp->number;
               } else if (prev_clicked_line != row) {
                 /* disabled breakpoint & not a double click -> enable */
-                curstate = STATE_BREAK_TOGGLE;
+                RESETSTATE(STATE_BREAK_TOGGLE);
                 stateparam[0] = STATEPARAM_BP_ENABLE;
                 stateparam[1] = bp->number;
               } else {
                 /* disabled breakpoint & double click -> enable */
-                curstate = STATE_BREAK_TOGGLE;
+                RESETSTATE(STATE_BREAK_TOGGLE);
                 stateparam[0] = STATEPARAM_BP_DELETE;
                 stateparam[1] = bp->number;
               }
@@ -4110,7 +4122,7 @@ int main(int argc, char *argv[])
                 strlcpy(statesymbol, sym, sizearray(statesymbol));
                 /* if the new symbol is valid -> curstate = STATE_HOVER_SYMBOL */
                 if (statesymbol[0] != '\0' && curstate == STATE_STOPPED)
-                  curstate = STATE_HOVER_SYMBOL;
+                  RESETSTATE(STATE_HOVER_SYMBOL);
               }
               /* if the tooltip value is valid, show it */
               if (ttipvalue[0] != '\0')
@@ -4157,10 +4169,10 @@ int main(int argc, char *argv[])
                 *--ptr = '\0'; /* strip trailing whitespace */
               /* some commands are handled internally */
               if (handle_display_cmd(console_edit, stateparam, statesymbol, sizearray(statesymbol))) {
-                curstate = STATE_WATCH_TOGGLE;
+                RESETSTATE(STATE_WATCH_TOGGLE);
                 tab_states[TAB_WATCHES] = nk_true; /* make sure the watch view to open */
               } else if (handle_file_cmd(console_edit, txtFilename, sizearray(txtFilename))) {
-                curstate = STATE_FILE;
+                RESETSTATE(STATE_FILE);
                 /* save target-specific settings in the parameter file before
                    switching to the new file (new options are loaded in the
                    STATE_FILE case) */
@@ -4169,9 +4181,9 @@ int main(int argc, char *argv[])
               } else if ((result = handle_trace_cmd(console_edit, &opt_swo)) != 0) {
                 if (result == 1) {
                   monitor_cmd_active = 1; /* to silence output of scripts */
-                  curstate = STATE_SWOTRACE;
+                  RESETSTATE(STATE_SWOTRACE);
                 } else if (result == 2) {
-                  curstate = STATE_SWOCHANNELS;
+                  RESETSTATE(STATE_SWOCHANNELS);
                 } else if (result == 3) {
                   trace_info_mode(&opt_swo);
                   if (opt_swo.mode != SWOMODE_NONE) {
@@ -4271,11 +4283,11 @@ int main(int argc, char *argv[])
             }
             tooltip(ctx, bounds, "Scan network for ctxLink probes.", &rc_canvas);
             if (reconnect)
-              curstate = STATE_SCAN_BMP;
+              RESETSTATE(STATE_SCAN_BMP);
           }
           if (newprobe != probe) {
             probe = newprobe;
-            curstate = STATE_SCAN_BMP;
+            RESETSTATE(STATE_SCAN_BMP);
           }
           /* GDB */
           p = strrchr(txtGDBpath, DIRSEP_CHAR);
@@ -4298,7 +4310,7 @@ int main(int argc, char *argv[])
               strcpy(txtGDBpath, s);
               free((void*)s);
               task_close(&task);  /* terminate running instance of GDB */
-              curstate = STATE_INIT;
+              RESETSTATE(STATE_INIT);
             }
           }
           nk_layout_row_end(ctx);
@@ -4325,7 +4337,7 @@ int main(int argc, char *argv[])
               translate_path(txtFilename, 0);
               free((void*)s);
               if (curstate > STATE_FILE)
-                curstate = STATE_FILE;
+                RESETSTATE(STATE_FILE);
             }
           }
           nk_layout_row_end(ctx);
@@ -4348,7 +4360,7 @@ int main(int argc, char *argv[])
             if (opt_tpwr && curstate != STATE_MON_SCAN)
               task_stdin(&task, "monitor tpwr enable\n");
             if (curstate == STATE_MON_SCAN)
-               curstate = STATE_MON_TPWR;
+               RESETSTATE(STATE_MON_TPWR);
           }
           /* auto-download */
           nk_layout_row_dynamic(ctx, ROW_HEIGHT, 1);
@@ -4386,7 +4398,7 @@ int main(int argc, char *argv[])
             sprintf(label, "%d", bp->number);
             en = bp->enabled;
             if (nk_checkbox_label(ctx, label, &en)) {
-              curstate = STATE_BREAK_TOGGLE;
+              RESETSTATE(STATE_BREAK_TOGGLE);
               stateparam[0] = (en == 0) ? STATEPARAM_BP_DISABLE : STATEPARAM_BP_ENABLE;
               stateparam[1] = bp->number;
             }
@@ -4401,7 +4413,7 @@ int main(int argc, char *argv[])
             nk_label(ctx, label, NK_TEXT_LEFT);
             nk_layout_row_push(ctx, ROW_HEIGHT);
             if (nk_button_symbol(ctx, NK_SYMBOL_X)) {
-              curstate = STATE_BREAK_TOGGLE;
+              RESETSTATE(STATE_BREAK_TOGGLE);
               stateparam[0] = STATEPARAM_BP_DELETE;
               stateparam[1] = bp->number;
             }
@@ -4451,7 +4463,7 @@ int main(int argc, char *argv[])
             }
             nk_layout_row_push(ctx, ROW_HEIGHT);
             if (nk_button_symbol(ctx, NK_SYMBOL_X)) {
-              curstate = STATE_WATCH_TOGGLE;
+              RESETSTATE(STATE_WATCH_TOGGLE);
               stateparam[0] = STATEPARAM_WATCH_DEL;
               stateparam[1] = watch->seqnr;
             }
@@ -4470,7 +4482,7 @@ int main(int argc, char *argv[])
           result = nk_edit_string_zero_terminated(ctx, NK_EDIT_FIELD | NK_EDIT_SIG_ENTER, watch_edit, sizearray(watch_edit), nk_filter_ascii);
           nk_layout_row_push(ctx, ROW_HEIGHT);
           if ((nk_button_symbol(ctx, NK_SYMBOL_PLUS) || (result & NK_EDIT_COMMITED)) && curstate == STATE_STOPPED && strlen(watch_edit) > 0) {
-            curstate = STATE_WATCH_TOGGLE;
+            RESETSTATE(STATE_WATCH_TOGGLE);
             stateparam[0] = STATEPARAM_WATCH_SET;
             strlcpy(statesymbol, watch_edit, sizearray(statesymbol));
             watch_edit[0] = '\0';
