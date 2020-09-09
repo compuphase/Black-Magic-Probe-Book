@@ -178,19 +178,33 @@ static const SCRIPT_DEF script_defaults[] = {
     /* LPC_SWM->PINASSIGN15 = (LPC_SWM->PINASSIGN15 & ~(0xff << 8)) | (pin << 8); */
   },
 
+  /* swo_generic
+     $0 = mode: 1 = Manchester, 2 = Asynchronous
+     $1 = CPU clock divider, MCU clock / bitrate
+     $2 = baudrate
+     $3 = memory address for variable; Cortex M0/M0+ */
   { "swo_generic", "*",
-    "SCB_DEMCR = 0x1000000 \n"   /* 1 << 24 */
-    "TPIU_CSPSR = 1 \n"          /* protocol width = 1 bit */
-    "TPIU_SPPR = $0 \n"          /* 1 = Manchester, 2 = Asynchronous */
-    "TPIU_ACPR = $1 \n"          /* CPU clock divider */
-    "TPIU_FFCR = 0 \n"           /* turn off formatter, discard ETM output */
-    "ITM_LAR = 0xC5ACCE55 \n"    /* unlock access to ITM registers */
-    "ITM_TCR = 0x11 \n"          /* (1 << 4) | 1 */
-    "ITM_TPR = 0 \n"             /* privileged access is off */
+    "SCB_DEMCR = 0x1000000 \n"  /* 1 << 24 */
+    "TPIU_CSPSR = 1 \n"         /* protocol width = 1 bit */
+    "TPIU_SPPR = $0 \n"         /* 1 = Manchester, 2 = Asynchronous */
+    "TPIU_ACPR = $1 \n"         /* CPU clock divider */
+    "TPIU_FFCR = 0 \n"          /* turn off formatter, discard ETM output */
+    "ITM_LAR = 0xC5ACCE55 \n"   /* unlock access to ITM registers */
+    "ITM_TCR = 0x11 \n"         /* (1 << 4) | 1 */
+    "ITM_TPR = 0 \n"            /* privileged access is off */
+  },
+  { "swo_generic", "[M0]",
+    "$3 = $2 \n"                /* overrule generic script for M0/M0+, set baudrate */
   },
 
+  /* swo_channels
+     $0 = enabled channel bit-mask
+     $1 = memory address for variable; Cortex M0/M0+ */
   { "swo_channels", "*",
-    "ITM_TER = $0"              /* enable stimulus channel(s) */
+    "ITM_TER = $0 \n"           /* enable stimulus channel(s) */
+  },
+  { "swo_channels", "[M0]",
+    "$1 = $0 \n"                /* overrule generic script for M0/M0+, mark channel(s) as enabled */
   },
 };
 
@@ -267,11 +281,15 @@ static const char *parseline(const char *line, const REG_DEF *registers, size_t 
   if (strncmp(line, "set", 3) == 0 && line[3] <= ' ')
     line = skipleading(line + 3);
 
-  /* memory address or register*/
+  /* memory address or register */
   assert(address != NULL && size != NULL);
   if (isdigit(*line)) {
     *address = strtoul(line, (char**)&line, 0);
     *size = 4;
+  } else if (*line == '$') {
+    *address = SCRIPT_MAGIC + (line[1] - '0');
+    *size = 4;
+    line += 2;
   } else {
     const char *tail;
     size_t r;
@@ -329,8 +347,14 @@ static const char *parseline(const char *line, const REG_DEF *registers, size_t 
  *  and adds these to a list. Then it does the same for scripts loaded from a
  *  support file. This way, additional scripts can be created (for new
  *  micro-controllers) and existing scripts can be overruled.
+ *
+ *  Scripts can be matched on MCU family name, or on architecture name.
+ *
+ *  \param mcu    The MCU family name. This parameter must be valid.
+ *  \param arch   The Cortex architecture name (M0, M3, etc.). This parameter
+ *                may be NULL.
  */
-int bmscript_load(const char *mcu)
+int bmscript_load(const char *mcu, const char *arch)
 {
   REG_DEF *registers = NULL;
   size_t reg_size = 0, reg_count = 0;
@@ -338,6 +362,7 @@ int bmscript_load(const char *mcu)
   size_t line_size = 0, line_count = 0;
   SCRIPT *script;
   char path[_MAX_PATH];
+  char arch_name[50];
   FILE *fp;
   int idx;
 
@@ -442,9 +467,18 @@ int bmscript_load(const char *mcu)
     fclose(fp);
   }
 
+  if (arch != NULL && strlen(arch) > 0) {
+    assert(strlen(arch) < sizearray(arch_name) - 2);
+    sprintf(arch_name, "[%s]", arch);
+  } else {
+    arch_name[0] = '\0';
+  }
+
   /* interpret the scripts, first step: the hard-coded scripts */
   for (idx = 0; idx < sizearray(script_defaults); idx++) {
-    if (mcu_match(mcu, script_defaults[idx].mcu_list)) {
+    if (mcu_match(mcu, script_defaults[idx].mcu_list)
+        || (arch_name[0] != '\0' && mcu_match(arch_name, script_defaults[idx].mcu_list)))
+    {
       const char *head;
       line_count = 0;
       head = skipleading(script_defaults[idx].script);
@@ -470,17 +504,18 @@ int bmscript_load(const char *mcu)
       /* add the script to the list */
       if ((script = (SCRIPT*)malloc(sizeof(SCRIPT))) != NULL) {
         script->name = strdup(script_defaults[idx].name);
-        script->lines = (SCRIPTLINE*)malloc(line_count * sizeof(SCRIPTLINE));
-        if (script->name != NULL && script->lines != NULL) {
-          memcpy((void*)script->lines, lines, line_count * sizeof(SCRIPTLINE));
+        if (script->name != NULL) {
+          script->lines = NULL;
+          if (line_count > 0) {
+            script->lines = (SCRIPTLINE*)malloc(line_count * sizeof(SCRIPTLINE));
+            if (script->lines != NULL)
+              memcpy((void*)script->lines, lines, line_count * sizeof(SCRIPTLINE));
+            else
+              line_count = 0;
+          }
           script->count = line_count;
           script->next = script_root.next;
           script_root.next = script;
-        } else {
-          if (script->name != NULL)
-            free((void*)script->name);
-          if (script->lines != NULL)
-            free((void*)script->lines);
         }
       }
     }
@@ -498,26 +533,30 @@ int bmscript_load(const char *mcu)
         continue;     /* ignore empty lines (after stripping comments) */
       /* check whether this matches a register definition line */
       if (sscanf(line, "define %s [%[^]]]", scriptname, mcu_list) == 2
-          && strchr(line, '=') == NULL && mcu_match(mcu, mcu_list))
+          && strchr(line, '=') == NULL
+          && (mcu_match(mcu, mcu_list)
+              || (arch_name[0] != '\0' && mcu_match(arch_name, mcu_list))))
       {
         assert(!inscript);  /* if inscript is set, the previous script had no 'end' */
         inscript = 1;
         line_count = 0;
       } else if (inscript && strncmp(line, "end", 3) == 0 && line[3] <= ' ') {
-        /* end script (add it to the list) */
+        /* end script (add it to the front of the list, so that scripts from the
+           file overrule the hard-coded scripts) */
         if ((script = (SCRIPT*)malloc(sizeof(SCRIPT))) != NULL) {
           script->name = strdup(scriptname);
-          script->lines = (SCRIPTLINE*)malloc(line_count * sizeof(SCRIPTLINE));
-          if (script->name != NULL && script->lines != NULL) {
-            memcpy((void*)script->lines, lines, line_count * sizeof(SCRIPTLINE));
+          if (script->name != NULL) {
+            script->lines = NULL;
+            if (line_count > 0) {
+              script->lines = (SCRIPTLINE*)malloc(line_count * sizeof(SCRIPTLINE));
+              if (script->lines != NULL)
+                memcpy((void*)script->lines, lines, line_count * sizeof(SCRIPTLINE));
+              else
+                line_count = 0;
+            }
             script->count = line_count;
             script->next = script_root.next;
             script_root.next = script;
-          } else {
-            if (script->name != NULL)
-              free((void*)script->name);
-            if (script->lines != NULL)
-              free((void*)script->lines);
           }
         }
         inscript = 0;
@@ -569,8 +608,9 @@ void bmscript_clear(void)
     script_root.next = script->next;
     assert(script->name != NULL); /* the script is not added to the list if any pointers are invalid */
     free((void*)script->name);
-    assert(script->lines != NULL);
-    free((void*)script->lines);
+    assert((script->count == 0 && script->lines == NULL) || (script->count > 0 && script->lines != NULL));
+    if (script->count >0)
+      free((void*)script->lines);
     free(script);
   }
   if (script_root.name != NULL) {
@@ -677,9 +717,15 @@ int bmscript_line_fmt(const char *name, char *line, const unsigned long *params)
     default:
       assert(0);
     }
+    if ((address & ~0xf) == SCRIPT_MAGIC) {
+      assert(params != NULL);
+      address = (uint32_t)params[address & 0xf];  /* replace parameters */
+      if (address == ~0)
+        return 0; /* invalid address, variable not present */
+    }
     if ((value & ~0xf) == SCRIPT_MAGIC) {
       assert(params != NULL);
-      value = (uint32_t)params[value & 0xf];  /* replace parameters */
+      value = (uint32_t)params[value & 0xf];      /* replace parameters */
     }
     switch (size) {
     case 1:

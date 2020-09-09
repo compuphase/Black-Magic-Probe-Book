@@ -437,6 +437,35 @@ int bmp_detach(int powerdown)
   return result;
 }
 
+/** bmp_checkversionstring() issues the "monitor version" command to the
+ *  debug probe and scans the result for known values for the native BMP and
+ *  for ctxLink.
+ */
+int bmp_checkversionstring(void)
+{
+  char buffer[512];
+  size_t size;
+  int probe = PROBE_UNKNOWN;
+
+  if (!bmp_isopen())
+    return PROBE_UNKNOWN;
+
+  gdbrsp_xmit("qRcmd,version", -1);
+  do {
+    char *ptr;
+    size = gdbrsp_recv(buffer, sizearray(buffer), 1000);
+    if (size > 0 && buffer[0] == 'o' && (ptr = strchr(buffer, '\n')) != NULL) {
+      int p;
+      *ptr = '\0';
+      if ((p = check_versionstring(buffer + 1)) != PROBE_UNKNOWN)
+        probe = p;
+    }
+  } while (size > 0 && buffer[0] == 'o');
+  if (size != 2 || memcmp(buffer, "OK", size) != 0)
+    return PROBE_UNKNOWN;
+  return probe;
+}
+
 int bmp_fullerase(void)
 {
   char *cmd;
@@ -755,16 +784,20 @@ static int hex2byte_array(const char *hex, unsigned char *byte)
  *  for device-specific initialization.
  *
  *  \param name     The name of the script.
- *  \param driver   The name of the MCU driver (the MCU family name).
+ *  \param mcu      The name of the MCU driver (the MCU family name). This
+ *                  parameter must be valid.
+ *  \param arch     The name of the ARM Cortex architecture (M0, M3, etc.). This
+ *                  parameter may be NULL.
  *  \param params   An optional array with parameters to the script, this number
- *                  of required parameters depends on the stript.
+ *                  of required parameters depends on the stript. This parameter
+ *                  may be NULL if the script needs no parameters at all.
  *
  *  \return 1 on success, 0 on failure.
  *
  *  \note When the line of a script has a magic value for the "value" field, it
  *        is replaced by a parameter.
  */
-int bmp_runscript(const char *name, const char *driver, const unsigned long *params)
+int bmp_runscript(const char *name, const char *mcu, const char *arch, const unsigned long *params)
 {
   uint32_t address, value;
   uint8_t size;
@@ -772,14 +805,20 @@ int bmp_runscript(const char *name, const char *driver, const unsigned long *par
   int result;
 
   bmscript_clearcache();
-  bmscript_load(driver);  /* very quick if the scripts are already in memory */
+  bmscript_load(mcu, arch);  /* very quick if the scriptsfor the MCU are already in memory */
   result = 1;
   while (result && bmscript_line(name, &oper, &address, &value, &size)) {
     char cmd[100];
     size_t len = 0;
+    if ((address & ~0xf) == SCRIPT_MAGIC) {
+      assert(params != NULL);
+      address = (uint32_t)params[address & 0xf];  /* replace address parameter */
+      if (address == ~0)
+        continue; /* ignore row on invalid address */
+    }
     if ((value & ~0xf) == SCRIPT_MAGIC) {
       assert(params != NULL);
-      value = (uint32_t)params[value & 0xf];  /* replace parameters */
+      value = (uint32_t)params[value & 0xf];      /* replace value parameter */
     }
     if (oper == '|' || oper == '&' || oper == '~') {
       uint32_t cur = 0;

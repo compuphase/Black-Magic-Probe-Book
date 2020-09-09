@@ -359,10 +359,7 @@ void tracestring_process(int enabled)
         int skip = 0;
         chan = ITM_CHANNEL(itm_cache[0]);
         len = ITM_LENGTH(itm_cache[0]);
-        if (len < itm_datasize) {
-          memset(buffer, 0, itm_datasize - len);
-          buflen += itm_datasize - len;
-        } else if (len > itm_datasize) {
+        if (len > itm_datasize) {
           if (itm_datasz_auto) {
             itm_datasize = len; /* if larger data word is found, datasize must be adjusted */
           } else {
@@ -410,10 +407,7 @@ void tracestring_process(int enabled)
           itm_cachefilled = pktlen;
           break;
         }
-        if (len < itm_datasize) {
-          memset(buffer, 0, itm_datasize - len);
-          buflen += itm_datasize - len;
-        } else if (len > itm_datasize) {
+        if (len > itm_datasize) {
           if (itm_datasz_auto) {
             itm_datasize = len; /* if larger data word is found, datasize must be adjusted */
           } else {

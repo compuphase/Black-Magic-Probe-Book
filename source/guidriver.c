@@ -27,6 +27,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include "guidriver.h"
+#include "nuklear_mousepointer.h"
 
 #if defined _WIN32
   #include "nuklear_gdip.h"
@@ -191,11 +192,14 @@ struct nk_context* guidriver_init(const char *caption, int width, int height, in
   nk_gdipfont_set_voffset(fontStd, (-fontsize*0.2-0.5));
   nk_gdip_set_font(fontStd);
 
+  pointer_init((void*)hwndApp);
+
   return ctx;
 }
 
 void guidriver_close(void)
 {
+  pointer_cleanup();
   nk_gdipfont_del(fontStd);
   nk_gdipfont_del(fontMono);
   nk_gdip_shutdown();
@@ -352,11 +356,14 @@ struct nk_context* guidriver_init(const char *caption, int width, int height, in
     nk_glfw3_font_stash_end();
   }
 
+  pointer_init(winApp);
+
   return ctx;
 }
 
 void guidriver_close(void)
 {
+  pointer_cleanup();
   nk_glfw3_shutdown();
   glfwTerminate();
 }

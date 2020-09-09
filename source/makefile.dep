@@ -3,14 +3,17 @@
 # GENERATED DEPENDENCIES. DO NOT DELETE.
 
 bmdebug.obj : bmp-script.h bmp-scan.h decodectf.h dwarf.h guidriver.h minGlue.h \
-	 minIni.h nuklear_tooltip.h noc_file_dialog.h nuklear.h nuklear_config.h \
-	 parsetsdl.h specialfolder.h strlcpy.h swotrace.h tcpip.h
+	 minIni.h nuklear_mousepointer.h nuklear_tooltip.h noc_file_dialog.h \
+	 nuklear.h nuklear_config.h parsetsdl.h specialfolder.h strlcpy.h \
+	 swotrace.h tcpip.h
 bmp-scan.obj : bmp-scan.h tcpip.h
 bmscan.obj : bmp-scan.h tcpip.h
 bmp-script.obj : bmp-script.h
 dwarf.obj : dwarf.h elf.h
 elf.obj : elf.h
-guidriver.obj : guidriver.h nuklear.h nuklear_config.h
+guidriver.obj : guidriver.h nuklear.h nuklear_config.h nuklear_mousepointer.h
+nuklear_tooltip.obj : nuklear.h nuklear_config.h nuklear_tooltip.h
+nuklear_mousepointer.obj : nuklear_mousepointer.h
 minini.obj : minGlue.h minIni.h
 rs232.obj : rs232.h
 specialfolder.obj : specialfolder.h strlcpy.h
@@ -33,23 +36,26 @@ gdb-rsp.obj : gdb-rsp.h rs232.h tcpip.h
 xmltractor.obj : xmltractor.h
 bmtrace.obj : bmp-script.h bmp-support.h bmp-scan.h \
 	 decodectf.h dwarf.h elf.h gdb-rsp.h guidriver.h minGlue.h minIni.h \
-	 nuklear_tooltip.h noc_file_dialog.h nuklear.h nuklear_config.h \
-	 parsetsdl.h rs232.h specialfolder.h strlcpy.h swotrace.h tcpip.h
+	 nuklear_mousepointer.h nuklear_tooltip.h noc_file_dialog.h nuklear.h \
+	 nuklear_config.h parsetsdl.h rs232.h specialfolder.h strlcpy.h \
+	 swotrace.h tcpip.h
 elf-postlink.obj : elf.h
 tracegen.obj : parsetsdl.h strlcpy.h
 usb-support.obj : usb-support.h
 
 bmdebug.o : bmp-scan.h bmp-script.h dwarf.h guidriver.h nuklear.h \
 	nuklear_config.h noc_file_dialog.h minIni.h minGlue.h nuklear_tooltip.h \
-	specialfolder.h parsetsdl.h decodectf.h swotrace.h tcpip.h \
-	res/icon_debug_64.h
+	nuklear_mousepointer.h specialfolder.h parsetsdl.h decodectf.h swotrace.h \
+	tcpip.h res/icon_debug_64.h
 bmp-scan.o : bmp-scan.h tcpip.h
 bmscan.o : bmp-scan.h tcpip.h
 bmp-script.o : bmp-script.h
 dwarf.o : dwarf.h elf.h
 elf.o : elf.h
 guidriver.o : guidriver.h nuklear.h nuklear_config.h findfont.h \
-	lodepng.h nuklear_glfw_gl2.h
+	lodepng.h nuklear_glfw_gl2.h nuklear_mousepointer.h
+nuklear_tooltip.o : nuklear.h nuklear_config.h nuklear_tooltip.h
+nuklear_mousepointer.o : nuklear_mousepointer.h
 minIni.o : minIni.h minGlue.h
 rs232.o : rs232.h
 specialfolder.o : specialfolder.h
@@ -74,9 +80,9 @@ gdb-rsp.o : rs232.h tcpip.h
 xmltractor.o : xmltractor.h
 bmtrace.o : guidriver.h nuklear.h nuklear_config.h bmp-script.h \
 	bmp-support.h bmp-scan.h gdb-rsp.h minIni.h minGlue.h \
-	nuklear_tooltip.h noc_file_dialog.h rs232.h specialfolder.h \
-	parsetsdl.h decodectf.h dwarf.h elf.h swotrace.h tcpip.h\
-	res/icon_download_64.h
+	nuklear_mousepointer.h nuklear_tooltip.h noc_file_dialog.h rs232.h \
+	specialfolder.h parsetsdl.h decodectf.h dwarf.h elf.h swotrace.h \
+	tcpip.h res/icon_download_64.h
 elf-postlink.o : elf.h
 tracegen.o : parsetsdl.h
 usb-support.o : usb-support.h

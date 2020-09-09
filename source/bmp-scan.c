@@ -423,6 +423,15 @@ int get_bmp_count(void)
   return idx;
 }
 
+int check_versionstring(const char *string)
+{
+  if (strncmp(string, "Black Magic Probe", 17) == 0 && strstr(string, "(Hardware Version 3)") != NULL)
+    return PROBE_ORG_BMP;
+  if (strncmp(string, "Wireless Debug Probe", 20) == 0)
+    return PROBE_CTXLINK;
+  return PROBE_UNKNOWN;
+}
+
 
 /* --------------------------------------------------------------------------
    ctxLink networking code

@@ -31,9 +31,10 @@ typedef struct tagDWARF_PATHLIST {
 typedef struct tagDWARF_SYMBOLLIST {
   struct tagDWARF_SYMBOLLIST *next;
   char *name;
-  unsigned address; /* function address, 0 for a variable */
-  int line;
-  int fileindex;
+  unsigned code_addr;   /* function address, 0 for a variable */
+  unsigned data_addr;   /* variable address (globals only), 0 for a function */
+  int line;             /* line number of the declaration/definition */
+  int fileindex;        /* file where the declaration/definition appears in */
 } DWARF_SYMBOLLIST;
 
 typedef struct tagDWARF_LINELOOKUP {

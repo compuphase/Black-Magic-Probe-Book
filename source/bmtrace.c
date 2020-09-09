@@ -54,6 +54,7 @@
 #include "gdb-rsp.h"
 #include "minIni.h"
 #include "noc_file_dialog.h"
+#include "nuklear_mousepointer.h"
 #include "nuklear_tooltip.h"
 #include "rs232.h"
 #include "specialfolder.h"
@@ -130,7 +131,7 @@ static int bmp_callback(int code, const char *message)
 #define FONT_HEIGHT     14      /* default font size */
 #define ROW_HEIGHT      (1.6 * opt_fontsize)
 #define COMBOROW_CY     (0.9 * opt_fontsize)
-#define BROWSEBTN_WIDTH (1.85 * opt_fontsize)
+#define BROWSEBTN_WIDTH (1.5 * opt_fontsize)
 
 
 static float *nk_ratio(int count, ...)
@@ -152,36 +153,45 @@ static void set_style(struct nk_context *ctx)
 {
   struct nk_color table[NK_COLOR_COUNT];
 
-  table[NK_COLOR_TEXT]= nk_rgba(201, 243, 255, 255);
-  table[NK_COLOR_WINDOW]= nk_rgba(35, 52, 71, 255);
-  table[NK_COLOR_HEADER]= nk_rgba(122, 20, 50, 255);
-  table[NK_COLOR_BORDER]= nk_rgba(128, 128, 128, 255);
-  table[NK_COLOR_BUTTON]= nk_rgba(122, 20, 50, 255);
-  table[NK_COLOR_BUTTON_HOVER]= nk_rgba(140, 25, 50, 255);
-  table[NK_COLOR_BUTTON_ACTIVE]= nk_rgba(140, 25, 50, 255);
-  table[NK_COLOR_TOGGLE]= nk_rgba(20, 29, 38, 255);
-  table[NK_COLOR_TOGGLE_HOVER]= nk_rgba(45, 60, 60, 255);
-  table[NK_COLOR_TOGGLE_CURSOR]= nk_rgba(122, 20, 50, 255);
-  table[NK_COLOR_SELECT]= nk_rgba(20, 29, 38, 255);
-  table[NK_COLOR_SELECT_ACTIVE]= nk_rgba(122, 20, 50, 255);
-  table[NK_COLOR_SLIDER]= nk_rgba(20, 29, 38, 255);
-  table[NK_COLOR_SLIDER_CURSOR]= nk_rgba(122, 20, 50, 255);
-  table[NK_COLOR_SLIDER_CURSOR_HOVER]= nk_rgba(140, 25, 50, 255);
-  table[NK_COLOR_SLIDER_CURSOR_ACTIVE]= nk_rgba(140, 25, 50, 255);
-  table[NK_COLOR_PROPERTY]= nk_rgba(20, 29, 38, 255);
-  table[NK_COLOR_EDIT]= nk_rgba(20, 29, 38, 225);
-  table[NK_COLOR_EDIT_CURSOR]= nk_rgba(201, 243, 255, 255);
-  table[NK_COLOR_COMBO]= nk_rgba(20, 29, 38, 255);
-  table[NK_COLOR_CHART]= nk_rgba(20, 29, 38, 255);
-  table[NK_COLOR_CHART_COLOR]= nk_rgba(170, 40, 60, 255);
-  table[NK_COLOR_CHART_COLOR_HIGHLIGHT]= nk_rgba(255, 0, 0, 255);
-  table[NK_COLOR_SCROLLBAR]= nk_rgba(30, 40, 60, 255);
-  table[NK_COLOR_SCROLLBAR_CURSOR]= nk_rgba(179, 175, 132, 255);
-  table[NK_COLOR_SCROLLBAR_CURSOR_HOVER]= nk_rgba(204, 199, 141, 255);
-  table[NK_COLOR_SCROLLBAR_CURSOR_ACTIVE]= nk_rgba(204, 199, 141, 255);
-  table[NK_COLOR_TAB_HEADER]= nk_rgba(122, 20, 50, 255);
+  assert(ctx != NULL);
+
+  table[NK_COLOR_TEXT] = nk_rgba(205, 201, 171, 255);
+  table[NK_COLOR_WINDOW] = nk_rgba(35, 52, 71, 255);
+  table[NK_COLOR_HEADER] = nk_rgba(58, 86, 117, 255);
+  table[NK_COLOR_BORDER] = nk_rgba(128, 128, 128, 255);
+  table[NK_COLOR_BUTTON] = nk_rgba(58, 86, 117, 255);
+  table[NK_COLOR_BUTTON_HOVER] = nk_rgba(127, 23, 45, 255);
+  table[NK_COLOR_BUTTON_ACTIVE] = nk_rgba(127, 23, 45, 255);
+  table[NK_COLOR_TOGGLE] = nk_rgba(20, 29, 38, 255);
+  table[NK_COLOR_TOGGLE_HOVER] = nk_rgba(204, 199, 141, 255);
+  table[NK_COLOR_TOGGLE_CURSOR] = nk_rgba(179, 175, 132, 255);
+  table[NK_COLOR_SELECT] = nk_rgba(20, 29, 38, 255);
+  table[NK_COLOR_SELECT_ACTIVE] = nk_rgba(204, 199, 141, 255);
+  table[NK_COLOR_SLIDER] = nk_rgba(20, 29, 38, 255);
+  table[NK_COLOR_SLIDER_CURSOR] = nk_rgba(179, 175, 132, 255);
+  table[NK_COLOR_SLIDER_CURSOR_HOVER] = nk_rgba(127, 23, 45, 255);
+  table[NK_COLOR_SLIDER_CURSOR_ACTIVE] = nk_rgba(127, 23, 45, 255);
+  table[NK_COLOR_PROPERTY] = nk_rgba(20, 29, 38, 255);
+  table[NK_COLOR_EDIT] = nk_rgba(20, 29, 38, 225);
+  table[NK_COLOR_EDIT_CURSOR] = nk_rgba(205, 201, 171, 255);
+  table[NK_COLOR_COMBO] = nk_rgba(20, 29, 38, 255);
+  table[NK_COLOR_CHART] = nk_rgba(20, 29, 38, 255);
+  table[NK_COLOR_CHART_COLOR] = nk_rgba(170, 40, 60, 255);
+  table[NK_COLOR_CHART_COLOR_HIGHLIGHT] = nk_rgba(255, 0, 0, 255);
+  table[NK_COLOR_SCROLLBAR] = nk_rgba(30, 40, 60, 255);
+  table[NK_COLOR_SCROLLBAR_CURSOR] = nk_rgba(179, 175, 132, 255);
+  table[NK_COLOR_SCROLLBAR_CURSOR_HOVER] = nk_rgba(204, 199, 141, 255);
+  table[NK_COLOR_SCROLLBAR_CURSOR_ACTIVE] = nk_rgba(204, 199, 141, 255);
+  table[NK_COLOR_TAB_HEADER] = nk_rgba(58, 86, 117, 255);
   nk_style_from_table(ctx, table);
+
+  /* button */
+  ctx->style.button.rounding = 0;
+  ctx->style.button.padding.x = 2;
 }
+
+#define ERROR_NO_TSDL 0x0001
+#define ERROR_NO_ELF  0x0002
 
 static void usage(void)
 {
@@ -205,7 +215,7 @@ int main(int argc, char *argv[])
   int idx, insplitter;
   float splitter_hor = 0.70, splitter_ver = 0.70;
   enum nk_collapse_states tab_states[TAB_COUNT];
-  char mcu_driver[32];
+  char mcu_driver[32], mcu_architecture[32];
   char txtConfigFile[_MAX_PATH], findtext[128] = "", valstr[128] = "";
   char txtTSDLfile[_MAX_PATH] = "", txtELFfile[_MAX_PATH] = "";
   char txtIPaddr[64] = "";
@@ -215,6 +225,7 @@ int main(int argc, char *argv[])
   unsigned long channelmask = 0;
   int probe, usbprobes, netprobe;
   const char **probelist;
+  int probe_type = PROBE_UNKNOWN;
   enum { MODE_MANCHESTER = 1, MODE_ASYNC } opt_mode = MODE_MANCHESTER;
   unsigned char trace_endpoint = BMP_EP_TRACE;
   int opt_init_target = nk_true;
@@ -229,6 +240,7 @@ int main(int argc, char *argv[])
   int reload_format = 1;
   int cur_match_line = -1;
   int find_popup = 0;
+  int error_flags = 0;
 
   /* locate the configuration file */
   if (folder_AppConfig(txtConfigFile, sizearray(txtConfigFile))) {
@@ -411,25 +423,41 @@ int main(int argc, char *argv[])
           bmp_break();
         result = bmp_connect(probe, (probe == netprobe) ? txtIPaddr : NULL);
         if (result) /* bmp_connect() also opens the (virtual) serial port/device */
-          result = bmp_attach(2, opt_connect_srst, mcu_driver, sizearray(mcu_driver), NULL, 0);
+          result = bmp_attach(2, opt_connect_srst, mcu_driver, sizearray(mcu_driver),
+                              mcu_architecture, sizearray(mcu_architecture));
         else
           trace_status = TRACESTAT_NO_CONNECT;
+        if (result) {
+          /* overrule any default protocol setting, if the debug probe can be
+             verified */
+          probe_type = bmp_checkversionstring();
+          if (probe_type == PROBE_ORG_BMP)
+            opt_mode = MODE_MANCHESTER;
+          else if (probe_type == PROBE_CTXLINK)
+           opt_mode = MODE_ASYNC;
+        }
         if (result && opt_init_target) {
           /* initialize the target (target-specific configuration, generic
              configuration and channels */
-          unsigned long params[2];
-          bmp_runscript("swo_device", mcu_driver, NULL);
+          unsigned long params[4];
+          const DWARF_SYMBOLLIST *symbol;
+          bmp_runscript("swo_device", mcu_driver, mcu_architecture, NULL);
           assert(opt_mode == MODE_MANCHESTER || opt_mode == MODE_ASYNC);
+          symbol = dwarf_sym_from_name(&dwarf_symboltable, "TRACESWO_BPS");
           params[0] = opt_mode;
           params[1] = cpuclock / bitrate - 1;
-          bmp_runscript("swo_generic", mcu_driver, params);
+          params[2] = bitrate;
+          params[3] = (symbol != NULL) ? (unsigned long)symbol->data_addr : ~0;
+          bmp_runscript("swo_generic", mcu_driver, mcu_architecture, params);
           /* enable active channels in the target (disable inactive channels) */
           channelmask = 0;
           for (chan = 0; chan < NUM_CHANNELS; chan++)
             if (channel_getenabled(chan))
               channelmask |= (1 << chan);
+          symbol = dwarf_sym_from_name(&dwarf_symboltable, "TRACESWO_TER");
           params[0] = channelmask;
-          bmp_runscript("swo_channels", mcu_driver, params);
+          params[1] = (symbol != NULL) ? (unsigned long)symbol->data_addr : ~0;
+          bmp_runscript("swo_channels", mcu_driver, mcu_architecture, params);
         }
       } else if (bmp_isopen()) {
         /* no initialization is requested, if the serial port is open, close it
@@ -504,7 +532,10 @@ int main(int argc, char *argv[])
       cur_match_line = -1;
       tracelog_statusmsg(TRACESTATMSG_CTF, NULL, 0);
       ctf_error_notify(CTFERR_NONE, 0, NULL);
-      if (strlen(txtTSDLfile)> 0 && access(txtTSDLfile, 0) == 0) {
+      error_flags = 0;
+      if (strlen(txtTSDLfile) > 0)
+        error_flags |= ERROR_NO_TSDL;
+      if (strlen(txtTSDLfile)> 0 && access(txtTSDLfile, 0)== 0) {
         if (ctf_parse_init(txtTSDLfile) && ctf_parse_run()) {
           const CTF_STREAM *stream;
           int seqnr;
@@ -512,16 +543,20 @@ int main(int argc, char *argv[])
           for (seqnr = 0; (stream = stream_by_seqnr(seqnr)) != NULL; seqnr++)
             if (stream->name != NULL && strlen(stream->name) > 0)
               channel_setname(seqnr, stream->name);
+          error_flags &= ~ERROR_NO_TSDL;
         } else {
           ctf_parse_cleanup();
         }
       }
+      if (strlen(txtELFfile) > 0)
+        error_flags |= ERROR_NO_ELF;
       if (strlen(txtELFfile) > 0 && access(txtELFfile, 0) == 0) {
         FILE *fp = fopen(txtELFfile, "rb");
         if (fp != NULL) {
           int address_size;
           dwarf_read(fp, &dwarf_linetable, &dwarf_symboltable, &dwarf_filetable, &address_size);
           fclose(fp);
+          error_flags &= ~ERROR_NO_ELF;
         }
       }
       reload_format = 0;
@@ -542,6 +577,7 @@ int main(int argc, char *argv[])
       float splitter_columns[3];
       struct nk_rect rc_canvas = nk_rect(0, 0, canvas_width, canvas_height);
       struct nk_rect bounds;
+      int mouse_hover = 0;
 
       #define EXTRA_SPACE_HOR     (SEPARATOR_HOR + 3 * SPACING)
       splitter_columns[0] = (canvas_width - EXTRA_SPACE_HOR) * splitter_hor;
@@ -576,8 +612,10 @@ int main(int argc, char *argv[])
         /* vertical splitter */
         nk_layout_row_dynamic(ctx, SEPARATOR_VER, 1);
         bounds = nk_widget_bounds(ctx);
+        if (nk_input_is_mouse_hovering_rect(&ctx->input, bounds))
+          mouse_hover |= CURSOR_UPDOWN;
         nk_symbol(ctx, NK_SYMBOL_CIRCLE_SOLID, NK_TEXT_ALIGN_CENTERED | NK_TEXT_ALIGN_MIDDLE | NK_SYMBOL_REPEAT(3));
-        if (nk_input_is_mouse_hovering_rect(&ctx->input, bounds) && nk_input_is_mouse_pressed(&ctx->input, NK_BUTTON_LEFT))
+        if ((mouse_hover & CURSOR_UPDOWN) && nk_input_is_mouse_pressed(&ctx->input, NK_BUTTON_LEFT))
           insplitter = SPLITTER_VERTICAL; /* in vertical splitter */
         else if (insplitter != SPLITTER_NONE && !nk_input_is_mouse_down(&ctx->input, NK_BUTTON_LEFT))
           insplitter = SPLITTER_NONE;
@@ -622,13 +660,15 @@ int main(int argc, char *argv[])
 
       /* column splitter */
       bounds = nk_widget_bounds(ctx);
+      if (nk_input_is_mouse_hovering_rect(&ctx->input, bounds))
+        mouse_hover |= CURSOR_LEFTRIGHT;
       nk_symbol(ctx, NK_SYMBOL_CIRCLE_SOLID, NK_TEXT_ALIGN_CENTERED | NK_TEXT_ALIGN_MIDDLE | NK_SYMBOL_VERTICAL | NK_SYMBOL_REPEAT(3));
-      if (nk_input_is_mouse_hovering_rect(&ctx->input, bounds) && nk_input_is_mouse_pressed(&ctx->input, NK_BUTTON_LEFT))
+      if ((mouse_hover & CURSOR_LEFTRIGHT) && nk_input_is_mouse_pressed(&ctx->input, NK_BUTTON_LEFT))
         insplitter = SPLITTER_HORIZONTAL; /* in horizontal splitter */
       else if (insplitter != SPLITTER_NONE && !nk_input_is_mouse_down(&ctx->input, NK_BUTTON_LEFT))
         insplitter = SPLITTER_NONE;
       if (insplitter == SPLITTER_HORIZONTAL)
-        splitter_hor = (splitter_columns[0] + ctx->input.mouse.delta.x) / (canvas_width - SEPARATOR_HOR - 2 * SPACING);
+        splitter_hor = (splitter_columns[0] + ctx->input.mouse.delta.x) / (canvas_width - EXTRA_SPACE_HOR);
 
       /* right column */
       if (nk_group_begin(ctx, "right", NK_WINDOW_BORDER)) {
@@ -678,19 +718,21 @@ int main(int argc, char *argv[])
               reinitialize = 1;
             }
           }
-          nk_layout_row_begin(ctx, NK_STATIC, ROW_HEIGHT, 2);
-          nk_layout_row_push(ctx, LABEL_WIDTH);
-          nk_label(ctx, "Mode", NK_TEXT_ALIGN_LEFT | NK_TEXT_ALIGN_MIDDLE);
-          nk_layout_row_push(ctx, VALUE_WIDTH);
-          result = opt_mode - MODE_MANCHESTER;
-          result = nk_combo(ctx, mode_strings, NK_LEN(mode_strings), result, opt_fontsize, nk_vec2(VALUE_WIDTH,4.5*opt_fontsize));
-          if (opt_mode != result + MODE_MANCHESTER) {
-            /* opt_mode is 1-based, the result of nk_combo() is 0-based, which is
-               we MODE_MANCHESTER is added (MODE_MANCHESTER == 1) */
-            opt_mode = result + MODE_MANCHESTER;
-            reinitialize = 1;
+          if (probe_type == PROBE_UNKNOWN) {
+            nk_layout_row_begin(ctx, NK_STATIC, ROW_HEIGHT, 2);
+            nk_layout_row_push(ctx, LABEL_WIDTH);
+            nk_label(ctx, "Mode", NK_TEXT_ALIGN_LEFT | NK_TEXT_ALIGN_MIDDLE);
+            nk_layout_row_push(ctx, VALUE_WIDTH);
+            result = opt_mode - MODE_MANCHESTER;
+            result = nk_combo(ctx, mode_strings, NK_LEN(mode_strings), result, opt_fontsize, nk_vec2(VALUE_WIDTH,4.5*opt_fontsize));
+            if (opt_mode != result + MODE_MANCHESTER) {
+              /* opt_mode is 1-based, the result of nk_combo() is 0-based, which is
+                 we MODE_MANCHESTER is added (MODE_MANCHESTER == 1) */
+              opt_mode = result + MODE_MANCHESTER;
+              reinitialize = 1;
+            }
+            nk_layout_row_end(ctx);
           }
-          nk_layout_row_end(ctx);
           nk_layout_row_dynamic(ctx, ROW_HEIGHT, 1);
           bounds = nk_widget_bounds(ctx);
           if (nk_checkbox_label(ctx, "Configure Target", &opt_init_target))
@@ -753,11 +795,15 @@ int main(int argc, char *argv[])
           nk_layout_row_push(ctx, LABEL_WIDTH);
           nk_label(ctx, "TSDL file", NK_TEXT_ALIGN_LEFT | NK_TEXT_ALIGN_MIDDLE);
           nk_layout_row_push(ctx, VALUE_WIDTH - BROWSEBTN_WIDTH - 5);
+          if (error_flags & ERROR_NO_TSDL)
+            nk_style_push_color(ctx,&ctx->style.edit.text_normal, nk_rgba(255, 100, 120, 255));
           bounds = nk_widget_bounds(ctx);
           result = nk_edit_string_zero_terminated(ctx, NK_EDIT_FIELD | NK_EDIT_SIG_ENTER, txtTSDLfile, sizearray(txtTSDLfile), nk_filter_ascii);
           if (result & (NK_EDIT_COMMITED | NK_EDIT_DEACTIVATED))
             reload_format = 1;
           tooltip(ctx, bounds, "Metadata file for Common Trace Format (CTF)", &rc_canvas);
+          if (error_flags & ERROR_NO_TSDL)
+            nk_style_pop_color(ctx);
           nk_layout_row_push(ctx, BROWSEBTN_WIDTH);
           if (nk_button_symbol(ctx, NK_SYMBOL_TRIPLE_DOT)) {
             const char *s = noc_file_dialog_open(NOC_FILE_DIALOG_OPEN,
@@ -775,11 +821,15 @@ int main(int argc, char *argv[])
           nk_layout_row_push(ctx, LABEL_WIDTH);
           nk_label(ctx, "ELF file", NK_TEXT_ALIGN_LEFT | NK_TEXT_ALIGN_MIDDLE);
           nk_layout_row_push(ctx, VALUE_WIDTH - BROWSEBTN_WIDTH - 5);
+          if (error_flags & ERROR_NO_ELF)
+            nk_style_push_color(ctx,&ctx->style.edit.text_normal, nk_rgba(255, 100, 120, 255));
           bounds = nk_widget_bounds(ctx);
           result = nk_edit_string_zero_terminated(ctx, NK_EDIT_FIELD | NK_EDIT_SIG_ENTER, txtELFfile, sizearray(txtELFfile), nk_filter_ascii);
           if (result & (NK_EDIT_COMMITED | NK_EDIT_DEACTIVATED))
             reload_format = 1;
           tooltip(ctx, bounds, "ELF file for symbol lookup", &rc_canvas);
+          if (error_flags & ERROR_NO_ELF)
+            nk_style_pop_color(ctx);
           nk_layout_row_push(ctx, BROWSEBTN_WIDTH);
           if (nk_button_symbol(ctx, NK_SYMBOL_TRIPLE_DOT)) {
             const char *s = noc_file_dialog_open(NOC_FILE_DIALOG_OPEN,
@@ -814,11 +864,17 @@ int main(int argc, char *argv[])
               /* enable/disable channel in the target */
               channel_setenabled(chan, enabled);
               if (opt_init_target) {
+                unsigned long params[2];
                 if (enabled)
                   channelmask |= (1 << chan);
                 else
                   channelmask &= ~(1 << chan);
-                bmp_runscript("swo_channels", mcu_driver, &channelmask);
+                if (trace_status != TRACESTAT_NO_CONNECT) {
+                  const DWARF_SYMBOLLIST *symbol = dwarf_sym_from_name(&dwarf_symboltable, "TRACESWO_TER");
+                  params[0] = channelmask;
+                  params[1] = (symbol != NULL) ? (unsigned long)symbol->data_addr : ~0;
+                  bmp_runscript("swo_channels", mcu_driver, mcu_architecture, params);
+                }
               }
             }
             clrbk = channel_getcolor(chan);
@@ -915,6 +971,7 @@ int main(int argc, char *argv[])
         }
       }
 
+      pointer_setstyle(mouse_hover);
     }
     nk_end(ctx);
 

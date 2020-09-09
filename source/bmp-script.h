@@ -28,7 +28,7 @@
 
 #define SCRIPT_MAGIC  0x6dce7fd0  /**< magic value for parameter replacement */
 
-int bmscript_load(const char *mcu);
+int bmscript_load(const char *mcu, const char *architecture);
 void bmscript_clear(void);
 void bmscript_clearcache(void);
 

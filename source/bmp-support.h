@@ -51,6 +51,7 @@ int bmp_connect(int probe, const char *ipaddress);
 int bmp_disconnect(void);
 int bmp_isopen(void);
 
+int bmp_checkversionstring(void);
 int bmp_is_ip_address(const char *address);
 
 int bmp_attach(int tpwr, int connect_srst, char *name, size_t namelength, char *arch, size_t archlength);
@@ -65,7 +66,7 @@ int bmp_enabletrace(int async_bitrate, unsigned char *endpoint);
 int bmp_restart(void);
 int bmp_break(void);
 
-int bmp_runscript(const char *name, const char *driver, const unsigned long *params);
+int bmp_runscript(const char *name, const char *driver, const char *arch, const unsigned long *params);
 
 #if defined __cplusplus
   }

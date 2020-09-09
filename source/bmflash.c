@@ -87,7 +87,7 @@
 #define WINDOW_HEIGHT   (21 * opt_fontsize)
 #define ROW_HEIGHT      (2 * opt_fontsize)
 #define COMBOROW_CY     (0.9 * opt_fontsize)
-#define BROWSEBTN_WIDTH (1.85 * opt_fontsize)
+#define BROWSEBTN_WIDTH (1.5 * opt_fontsize)
 
 
 static float *nk_ratio(int count, ...)
@@ -109,35 +109,41 @@ static void set_style(struct nk_context *ctx)
 {
   struct nk_color table[NK_COLOR_COUNT];
 
-  table[NK_COLOR_TEXT]= nk_rgba(201, 243, 255, 255);
-  table[NK_COLOR_WINDOW]= nk_rgba(35, 52, 71, 255);
-  table[NK_COLOR_HEADER]= nk_rgba(122, 20, 50, 255);
-  table[NK_COLOR_BORDER]= nk_rgba(128, 128, 128, 255);
-  table[NK_COLOR_BUTTON]= nk_rgba(122, 20, 50, 255);
-  table[NK_COLOR_BUTTON_HOVER]= nk_rgba(140, 25, 50, 255);
-  table[NK_COLOR_BUTTON_ACTIVE]= nk_rgba(140, 25, 50, 255);
-  table[NK_COLOR_TOGGLE]= nk_rgba(20, 29, 38, 255);
-  table[NK_COLOR_TOGGLE_HOVER]= nk_rgba(45, 60, 60, 255);
-  table[NK_COLOR_TOGGLE_CURSOR]= nk_rgba(122, 20, 50, 255);
-  table[NK_COLOR_SELECT]= nk_rgba(20, 29, 38, 255);
-  table[NK_COLOR_SELECT_ACTIVE]= nk_rgba(122, 20, 50, 255);
-  table[NK_COLOR_SLIDER]= nk_rgba(20, 29, 38, 255);
-  table[NK_COLOR_SLIDER_CURSOR]= nk_rgba(122, 20, 50, 255);
-  table[NK_COLOR_SLIDER_CURSOR_HOVER]= nk_rgba(140, 25, 50, 255);
-  table[NK_COLOR_SLIDER_CURSOR_ACTIVE]= nk_rgba(140, 25, 50, 255);
-  table[NK_COLOR_PROPERTY]= nk_rgba(20, 29, 38, 255);
-  table[NK_COLOR_EDIT]= nk_rgba(20, 29, 38, 225);
-  table[NK_COLOR_EDIT_CURSOR]= nk_rgba(201, 243, 255, 255);
-  table[NK_COLOR_COMBO]= nk_rgba(20, 29, 38, 255);
-  table[NK_COLOR_CHART]= nk_rgba(20, 29, 38, 255);
-  table[NK_COLOR_CHART_COLOR]= nk_rgba(170, 40, 60, 255);
-  table[NK_COLOR_CHART_COLOR_HIGHLIGHT]= nk_rgba(255, 0, 0, 255);
-  table[NK_COLOR_SCROLLBAR]= nk_rgba(30, 40, 60, 255);
-  table[NK_COLOR_SCROLLBAR_CURSOR]= nk_rgba(179, 175, 132, 255);
-  table[NK_COLOR_SCROLLBAR_CURSOR_HOVER]= nk_rgba(204, 199, 141, 255);
-  table[NK_COLOR_SCROLLBAR_CURSOR_ACTIVE]= nk_rgba(204, 199, 141, 255);
-  table[NK_COLOR_TAB_HEADER]= nk_rgba(122, 20, 50, 255);
+  assert(ctx != NULL);
+
+  table[NK_COLOR_TEXT] = nk_rgba(205, 201, 171, 255);
+  table[NK_COLOR_WINDOW] = nk_rgba(35, 52, 71, 255);
+  table[NK_COLOR_HEADER] = nk_rgba(58, 86, 117, 255);
+  table[NK_COLOR_BORDER] = nk_rgba(128, 128, 128, 255);
+  table[NK_COLOR_BUTTON] = nk_rgba(58, 86, 117, 255);
+  table[NK_COLOR_BUTTON_HOVER] = nk_rgba(127, 23, 45, 255);
+  table[NK_COLOR_BUTTON_ACTIVE] = nk_rgba(127, 23, 45, 255);
+  table[NK_COLOR_TOGGLE] = nk_rgba(20, 29, 38, 255);
+  table[NK_COLOR_TOGGLE_HOVER] = nk_rgba(204, 199, 141, 255);
+  table[NK_COLOR_TOGGLE_CURSOR] = nk_rgba(179, 175, 132, 255);
+  table[NK_COLOR_SELECT] = nk_rgba(20, 29, 38, 255);
+  table[NK_COLOR_SELECT_ACTIVE] = nk_rgba(204, 199, 141, 255);
+  table[NK_COLOR_SLIDER] = nk_rgba(20, 29, 38, 255);
+  table[NK_COLOR_SLIDER_CURSOR] = nk_rgba(179, 175, 132, 255);
+  table[NK_COLOR_SLIDER_CURSOR_HOVER] = nk_rgba(127, 23, 45, 255);
+  table[NK_COLOR_SLIDER_CURSOR_ACTIVE] = nk_rgba(127, 23, 45, 255);
+  table[NK_COLOR_PROPERTY] = nk_rgba(20, 29, 38, 255);
+  table[NK_COLOR_EDIT] = nk_rgba(20, 29, 38, 225);
+  table[NK_COLOR_EDIT_CURSOR] = nk_rgba(205, 201, 171, 255);
+  table[NK_COLOR_COMBO] = nk_rgba(20, 29, 38, 255);
+  table[NK_COLOR_CHART] = nk_rgba(20, 29, 38, 255);
+  table[NK_COLOR_CHART_COLOR] = nk_rgba(170, 40, 60, 255);
+  table[NK_COLOR_CHART_COLOR_HIGHLIGHT] = nk_rgba(255, 0, 0, 255);
+  table[NK_COLOR_SCROLLBAR] = nk_rgba(30, 40, 60, 255);
+  table[NK_COLOR_SCROLLBAR_CURSOR] = nk_rgba(179, 175, 132, 255);
+  table[NK_COLOR_SCROLLBAR_CURSOR_HOVER] = nk_rgba(204, 199, 141, 255);
+  table[NK_COLOR_SCROLLBAR_CURSOR_ACTIVE] = nk_rgba(204, 199, 141, 255);
+  table[NK_COLOR_TAB_HEADER] = nk_rgba(58, 86, 117, 255);
   nk_style_from_table(ctx, table);
+
+  /* button */
+  ctx->style.button.rounding = 0;
+  ctx->style.button.padding.x = 2;
 }
 
 /* log_addstring() adds a string to the log data; the parameter "text" may be NULL
@@ -171,8 +177,9 @@ static char *log_addstring(const char *text)
   return logtext;
 }
 
-/* log_widget() draws the text in the log window and scrolls to the last line
-   if new text was added */
+/* log_widget() draws the text in the log window, with support for colour codes
+   (color codes apply to a full line); if the "scrollpos" parameter is not NULL,
+   the window scrolls to the most recent text */
 static int log_widget(struct nk_context *ctx, const char *id, const char *content, float rowheight, unsigned *scrollpos)
 {
   int lines = 0;
@@ -686,7 +693,7 @@ int main(int argc, char *argv[])
 
   tab_states[TAB_OPTIONS] = NK_MINIMIZED;
   tab_states[TAB_SERIALIZATION] = NK_MINIMIZED;
-  tab_states[TAB_STATUS]= NK_MAXIMIZED;
+  tab_states[TAB_STATUS] = NK_MAXIMIZED;
   fpTgt = fpWork = NULL;
 
   while (running) {
@@ -707,7 +714,7 @@ int main(int argc, char *argv[])
     case STATE_SAVE:
       tab_states[TAB_OPTIONS] = NK_MINIMIZED;
       tab_states[TAB_SERIALIZATION] = NK_MINIMIZED;
-      tab_states[TAB_STATUS]= NK_MAXIMIZED;
+      tab_states[TAB_STATUS] = NK_MAXIMIZED;
       if (access(txtFilename, 0) == 0) {
         char field[100];
         /* save settings in cache file */
@@ -814,7 +821,7 @@ int main(int argc, char *argv[])
     case STATE_DOWNLOAD:
       /* download to target */
       if (opt_architecture > 0)
-        bmp_runscript("memremap", architectures[opt_architecture], NULL);
+        bmp_runscript("memremap", architectures[opt_architecture], NULL, NULL);
       result = bmp_download((fpWork != NULL) ? fpWork : fpTgt);
       curstate = result ? STATE_VERIFY : STATE_IDLE;
       waitidle = 0;
@@ -822,7 +829,7 @@ int main(int argc, char *argv[])
     case STATE_VERIFY:
       /* compare the checksum of Flash memory to the file */
       if (opt_architecture > 0)
-        bmp_runscript("memremap", architectures[opt_architecture], NULL);
+        bmp_runscript("memremap", architectures[opt_architecture], NULL, NULL);
       result = bmp_verify((fpWork != NULL)? fpWork : fpTgt);
       curstate = result ? STATE_FINISH : STATE_IDLE;
       waitidle = 0;

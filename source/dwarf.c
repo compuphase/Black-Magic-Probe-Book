@@ -338,6 +338,11 @@ typedef struct tagPUBNAME_HDR32 {
 #define DW_LNE_define_file        3
 #define DW_LNE_set_discriminator  4   /* version 4+ */
 
+/* location expression opcodes (very incomplete) */
+#define 	DW_OP_addr              0x03
+#define 	DW_OP_deref             0x06
+
+
 #if defined __LINUX__ || defined __FreeBSD__ || defined __APPLE__
   #pragma pack()      /* reset default packing */
 #elif defined MACOS && defined __MWERKS__
@@ -614,7 +619,8 @@ static void line_deletetable(DWARF_LINELOOKUP *root)
 }
 
 static DWARF_SYMBOLLIST *symname_insert(DWARF_SYMBOLLIST *root,const char *name,
-                                        unsigned address,int file,int line)
+                                        unsigned code_addr,unsigned data_addr,
+                                        int file,int line)
 {
   DWARF_SYMBOLLIST *cur,*pred;
 
@@ -626,7 +632,8 @@ static DWARF_SYMBOLLIST *symname_insert(DWARF_SYMBOLLIST *root,const char *name,
     free(cur);
     return NULL;      /* insufficient memory */
   }
-  cur->address=address;
+  cur->code_addr=code_addr;
+  cur->data_addr=data_addr;
   cur->fileindex=file;
   cur->line=line;
   /* insert sorted on name */
@@ -731,16 +738,23 @@ static int64_t read_value(FILE *fp,int format,int *size)
   case DW_FORM_ref_udata:         /* reference, unsigned LEB128 */
     value=read_leb128(fp,0,&sz);
     break;
-  case DW_FORM_exprloc:           /* block, unsigned LEB128-encoded length + data bytes */
-    value=read_leb128(fp,0,&sz);
-    sz+=(int)value;
-    /* the expression is useful for dynamic address calculations in a debugger,
-       but not useful for post-run analysis */
-    while (value>0) {
-      fgetc(fp);
-      value--;
+  case DW_FORM_exprloc: {         /* block, unsigned LEB128-encoded length + data bytes */
+    int datasz=(int)read_leb128(fp,0,&sz);
+    int opc=0;
+    sz+=datasz;
+    if (datasz>=1) {
+      fread(&opc,1,1,fp);
+      datasz-=1;
+    }
+    if (opc==DW_OP_addr && datasz>0 && datasz<=sizeof value) {
+      fread(&value,datasz,1,fp);
+    } else {
+      /* register/stack-relative location expressions are currently not supported */
+      while (datasz-->0)
+        fgetc(fp);
     }
     break;
+  } /* DW_FORM_exprloc */
   default:
     assert(0);
   }
@@ -1145,7 +1159,7 @@ static int dwarf_infotable(FILE *fp,const DWARFTABLE tables[],
   ABBREVLIST abbrev_root = { NULL };
   const ABBREVLIST *abbrev;
   int unit,level,idx,size;
-  uint32_t address;
+  uint32_t code_addr,data_addr;
   unsigned long tablesize,unitsize;
   char name[256],str[256];
   int64_t value;
@@ -1173,7 +1187,8 @@ static int dwarf_infotable(FILE *fp,const DWARFTABLE tables[],
     *address_size=header.address_size;
     tablesize-=unitsize+sizeof(header);
     name[0]='\0';
-    address=0;
+    code_addr=0;
+    data_addr=0;
     external=0;
     level=0;
     /* browse through the tags */
@@ -1235,7 +1250,7 @@ static int dwarf_infotable(FILE *fp,const DWARFTABLE tables[],
             break;
           case DW_AT_low_pc:
             if (abbrev->tag==DW_TAG_subprogram)
-              address=(uint32_t)value;
+              code_addr=(uint32_t)value;
             break;
           case DW_AT_decl_file:
             file=pathxref_find(xreftable,unit,(int)value-1);
@@ -1248,7 +1263,8 @@ static int dwarf_infotable(FILE *fp,const DWARFTABLE tables[],
               external=(int)value;
             break;
           case DW_AT_location:
-            //??? indirect address for variables
+            if (abbrev->tag==DW_TAG_variable)
+              data_addr=(uint32_t)value;
             break;
           }
         }
@@ -1257,10 +1273,11 @@ static int dwarf_infotable(FILE *fp,const DWARFTABLE tables[],
         /* inlined functions are added as if they have address 0; when inline
            functions get instantiated, these are added as "references" to
            functions; these are not handled */
-        if (name[0]!='\0' && file>=0 && (address>0 || external))
-          symname_insert(symboltable,name,address,file,line);
+        if (name[0]!='\0' && file>=0 && (code_addr>0 || external))
+          symname_insert(symboltable,name,code_addr,data_addr,file,line);
         name[0]='\0';
-        address=0;
+        code_addr=0;
+        data_addr=0;
         external=0;
         file=-1;
       }
@@ -1350,10 +1367,17 @@ const DWARF_SYMBOLLIST *dwarf_sym_from_address(const DWARF_SYMBOLLIST *symboltab
 
   assert(symboltable!=NULL);
   for (sym=symboltable->next; sym!=NULL; sym=sym->next) {
-    if (sym->address==address)
-      return sym;   /* always return the function on an exact address match */
-    if (!exact && sym->address<address)
-      select = sym; /* optionally return the closest function at a lower address */
+    if (sym->data_addr!=0 && sym->code_addr==0) {
+      /* check variable */
+      if (sym->data_addr==address)
+        return sym;   /* always return the variable on an exact address match */
+    } else {
+      /* check function */
+      if (sym->code_addr==address)
+        return sym;   /* always return the function on an exact address match */
+      if (!exact && sym->code_addr<address)
+        select=sym;   /* optionally return the closest function at a lower address */
+    }
   }
   return select;
 }

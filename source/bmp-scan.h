@@ -40,10 +40,15 @@
 #define BMP_PORT_UART     2160  /* TCP/IP port for 3.3V TTL UART */
 #define BMP_PORT_TRACE    2161  /* TCP/IP port for SWO trace */
 
+enum {
+  PROBE_UNKNOWN,
+  PROBE_ORG_BMP,          /* original BMP */
+  PROBE_CTXLINK,          /* ctxLink */
+};
 
 /* find_bmp() returns 1 on success and 0 on failure; the interface must be either
    BMP_IF_GDB, BMP_IF_UART or BMP_IF_TRACE (or BMP_IF_SERIAL to get the serial
-   number of the attached Black Magic Probe). */
+   number of the attached Black Magic Probe) */
 #if defined WIN32 || defined _WIN32
   #include <tchar.h>
   int find_bmp(int seqnr, int iface, TCHAR *name, size_t namelen);
@@ -54,6 +59,11 @@
 /* get_bmp_count() returns the number of detected probes (only probes on the
    USB port are detected) */
 int get_bmp_count(void);
+
+/* check_versionstring() checks whether a string gives some indication on the
+   exact type of probe; the input strings ought to be strings return by the
+   "monitor version" command */
+int check_versionstring(const char *string);
 
 /* scan_network() scans the network for TCP/IP connected gdbservers */
 int scan_network(unsigned long *addresses, int address_count);
