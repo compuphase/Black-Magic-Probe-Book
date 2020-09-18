@@ -70,18 +70,19 @@ endif
 # -------------------------------------------------------------
 
 OBJLIST_BMDEBUG = bmdebug.o bmp-scan.o bmp-script.o dwarf.o elf.o \
-		guidriver.o minIni.o nuklear_tooltip.o rs232.o \
-		specialfolder.o strlcpy.o tcpip.o usb-support.o \
+		guidriver.o minIni.o nuklear_mousepointer.o nuklear_tooltip.o \
+		rs232.o specialfolder.o strlcpy.o tcpip.o usb-support.o \
 		decodectf.o parsetsdl.o swotrace.o \
 		nuklear.o nuklear_gdip.o noc_file_dialog.o
 
 OBJLIST_BMFLASH = bmflash.o bmp-scan.o bmp-script.o bmp-support.o crc32.o \
-		elf.o gdb-rsp.o guidriver.o minIni.o nuklear_tooltip.o \
-		rs232.o specialfolder.o strlcpy.o tcpip.o xmltractor.o \
+		elf.o gdb-rsp.o guidriver.o minIni.o nuklear_mousepointer.o \
+		nuklear_tooltip.o rs232.o specialfolder.o strlcpy.o tcpip.o \
+		xmltractor.o \
 		nuklear.o nuklear_gdip.o noc_file_dialog.o
 
 OBJLIST_BMTRACE = bmtrace.o bmp-scan.o bmp-script.o bmp-support.o crc32.o \
-		dwarf.o elf.o gdb-rsp.o guidriver.o minIni.o \
+		dwarf.o elf.o gdb-rsp.o guidriver.o minIni.o nuklear_mousepointer.o \
 		nuklear_tooltip.o rs232.o specialfolder.o strlcpy.o tcpip.o \
 		usb-support.o xmltractor.o \
 		decodectf.o parsetsdl.o swotrace.o \
@@ -131,6 +132,8 @@ gdb-rsp.o : gdb-rsp.c
 guidriver.o : guidriver.c
 
 minIni.o : minIni.c
+
+nuklear_mousepointer.o : nuklear_mousepointer.c
 
 nuklear_tooltip.o : nuklear_tooltip.c
 
