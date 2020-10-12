@@ -75,7 +75,8 @@ endif
 
 OBJLIST_BMDEBUG = bmdebug.o bmp-scan.o bmp-script.o dwarf.o elf.o \
                   guidriver.o minIni.o nuklear_tooltip.o nuklear_mousepointer.o \
-                  rs232.o specialfolder.o tcpip.o decodectf.o parsetsdl.o swotrace.o \
+                  rs232.o specialfolder.o tcpip.o decodectf.o parsetsdl.o \
+                  svd-support.o swotrace.o xmltractor.o \
                   nuklear.o nuklear_glfw_gl2.o noc_file_dialog.o \
                   findfont.o lodepng.o
 
@@ -149,6 +150,8 @@ nuklear_tooltip.o : nuklear_tooltip.c
 rs232.o : rs232.c
 
 specialfolder.o : specialfolder.c
+
+svd-support.o : svd-support.c
 
 swotrace.o : swotrace.c
 

@@ -3644,6 +3644,8 @@ enum nk_style_colors {
     NK_COLOR_SCROLLBAR_CURSOR_HOVER,
     NK_COLOR_SCROLLBAR_CURSOR_ACTIVE,
     NK_COLOR_TAB_HEADER,
+    NK_COLOR_TOOLTIP_TEXT,
+    NK_COLOR_TOOLTIP,
     NK_COLOR_COUNT
 };
 enum nk_style_cursor {
@@ -5263,7 +5265,12 @@ struct nk_style_window {
     struct nk_vec2 combo_padding;
     struct nk_vec2 contextual_padding;
     struct nk_vec2 menu_padding;
-    struct nk_vec2 tooltip_padding;
+};
+
+struct nk_style_tooltip {
+    struct nk_vec2 padding;
+    struct nk_color color;
+    struct nk_color background;
 };
 
 struct nk_style {
@@ -5290,6 +5297,7 @@ struct nk_style {
     struct nk_style_tab tab;
     struct nk_style_combo combo;
     struct nk_style_window window;
+    struct nk_style_tooltip tooltip;
 };
 
 NK_API struct nk_style_item nk_style_item_image(struct nk_image img);

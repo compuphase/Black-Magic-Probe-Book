@@ -21,6 +21,9 @@
 
 #include "nuklear.h"
 
+#define TOOLTIP_DELAY 1000
+
+unsigned long timestamp(void);
 int tooltip(struct nk_context *ctx, struct nk_rect bounds, const char *text, struct nk_rect *viewport);
 
 #endif /* _NK_TOOLTIP_H */

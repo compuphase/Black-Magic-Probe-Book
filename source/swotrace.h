@@ -63,9 +63,11 @@ int    trace_save(const char *filename);
 int    tracestring_find(const char *text, int curline);
 int    tracestring_findtimestamp(double timestamp);
 
-float  tracelog_labelwidth(float rowheight);
 void   tracelog_statusmsg(int type, const char *msg, int code);
-void   tracelog_widget(struct nk_context *ctx, const char *id, float rowheight, int markline, nk_flags widget_flags);
+void   tracelog_statusclear(void);
+float  tracelog_labelwidth(float rowheight);
+void   tracelog_widget(struct nk_context *ctx, const char *id, float rowheight, int markline,
+                       char **filters, nk_flags widget_flags);
 
 void   timeline_getconfig(double *spacing, unsigned long *scale, unsigned long *delta);
 void   timeline_setconfig(double spacing, unsigned long scale, unsigned long delta);

@@ -25,21 +25,24 @@
 #include <string.h>
 #include "nuklear_tooltip.h"
 
-#define TOOLTIP_DELAY 1000
+/* timestamp() returns the timestamp in ms (under Windows, the granularity of
+   the timestamp is 55ms, which is not great, but good enough for tooltips */
+unsigned long timestamp(void)
+{
+  #if defined WIN32 || defined _WIN32
+    return GetTickCount();  /* 55ms granularity, but good enough */
+  #else
+    struct timeval  tv;
+    gettimeofday(&tv, NULL);
+    return tv.tv_sec * 1000 + tv.tv_usec / 1000;
+  #endif
+}
 
 int tooltip(struct nk_context *ctx, struct nk_rect bounds, const char *text, struct nk_rect *viewport)
 {
   static struct nk_rect recent_bounds;
   static unsigned long start_tstamp;
-  unsigned long tstamp;
-
-  #if defined WIN32 || defined _WIN32
-    tstamp = GetTickCount();  /* 55ms granularity, but good enough */
-  #else
-    struct timeval  tv;
-    gettimeofday(&tv, NULL);
-    tstamp = tv.tv_sec * 1000 + tv.tv_usec / 1000;
-  #endif
+  unsigned long tstamp = timestamp();
 
   if (!nk_input_is_mouse_hovering_rect(&ctx->input, bounds))
     return 0;           /* not hovering this control/area */

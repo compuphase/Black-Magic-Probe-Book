@@ -276,6 +276,11 @@ xt_Node* xt_parse_node( char** data )
 				S++;
 				break;
 			}
+            else	/* copied from issue #1, for improved comment support */
+            if( S[ 1 ] == '!' ) {
+                if( !xt_skip_until( &S, WHITESPACE "/>" ) )
+                    goto fnq;
+            }		/* end of issue #1 section */
 
 			ch = xt_parse_node( &S );
 			if( ch )
@@ -332,7 +337,7 @@ xt_Node* xt_find_child( xt_Node* node, const char* name )
 	xt_Node* ch = node->firstchild;
 	while( ch )
 	{
-		if( ch->szname == szname && strncmp( ch->name, name, szname ) == 0 )
+		if( ch->szname == (int)szname && strncmp( ch->name, name, szname ) == 0 )
 			return ch;
 		ch = ch->sibling;
 	}
@@ -345,7 +350,7 @@ xt_Node* xt_find_sibling( xt_Node* node, const char* name )
 	xt_Node* ch = node->sibling;
 	while( ch )
 	{
-		if( ch->szname == szname && strncmp( ch->name, name, szname ) == 0 )
+		if( ch->szname == (int)szname && strncmp( ch->name, name, szname ) == 0 )
 			return ch;
 		ch = ch->sibling;
 	}
@@ -358,7 +363,7 @@ xt_Attrib* xt_find_attrib( xt_Node* node, const char* name )
 	xt_Attrib* p = node->attribs, * pend = node->attribs + node->numattribs;
 	while( p < pend )
 	{
-		if( p->szname == szname && strncmp( p->name, name, szname ) == 0 )
+		if( p->szname == (int)szname && strncmp( p->name, name, szname ) == 0 )
 			return p;
 		p++;
 	}

@@ -22,6 +22,7 @@ enum {
   CURSOR_NORMAL    = 0,
   CURSOR_UPDOWN    = 0x01,
   CURSOR_LEFTRIGHT = 0x02,
+  CURSOR_WAIT      = 0x04,
 };
 
 void pointer_init(void *window);

@@ -124,7 +124,7 @@ const char *noc_file_dialog_open(int flags,
     ofn.lpstrFileTitle = NULL;
     ofn.nMaxFileTitle = 0;
     ofn.lpstrInitialDir = default_path;
-    ofn.Flags = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST;
+    ofn.Flags = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST | OFN_NOCHANGEDIR;
     ofn.lpstrTitle = caption;
     if (parent != NULL)
         ofn.hwndOwner = *(HWND*)parent;

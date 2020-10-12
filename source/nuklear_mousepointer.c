@@ -28,7 +28,7 @@
 #include "nuklear_mousepointer.h"
 
 #if defined __linux__
-  static GLFWcursor *cursor_hresize = NULL, *cursor_vresize = NULL;
+  static GLFWcursor *cursor_hresize = NULL, *cursor_vresize = NULL, *cursor_wait = NULL;
   static GLFWwindow *cursor_window = NULL;
 #endif
 
@@ -38,6 +38,11 @@ void pointer_init(void *window)
     cursor_window = (GLFWwindow*)window;
     cursor_hresize = glfwCreateStandardCursor(GLFW_HRESIZE_CURSOR);
     cursor_vresize = glfwCreateStandardCursor(GLFW_VRESIZE_CURSOR);
+    #if defined GLFW_NOT_ALLOWED_CURSOR
+      cursor_wait = glfwCreateStandardCursor(GLFW_NOT_ALLOWED_CURSOR);
+    #endif
+  #else
+    (void)window;
   #endif
 }
 
@@ -46,6 +51,8 @@ void pointer_cleanup(void)
   #if defined __linux__
     glfwDestroyCursor(cursor_hresize);
     glfwDestroyCursor(cursor_vresize);
+    if (cursor_wait != NULL)
+      glfwDestroyCursor(cursor_wait);
   #endif
 }
 
@@ -59,6 +66,9 @@ void pointer_setstyle(int style)
     case CURSOR_LEFTRIGHT:
       SetCursor(LoadCursor(NULL, IDC_SIZEWE));
       break;
+    case CURSOR_WAIT:
+      SetCursor(LoadCursor(NULL, IDC_WAIT));
+      break;
     default:
       SetCursor(LoadCursor(NULL, IDC_ARROW));
     }
@@ -69,6 +79,9 @@ void pointer_setstyle(int style)
       break;
     case CURSOR_LEFTRIGHT:
       glfwSetCursor(cursor_window, cursor_hresize);
+      break;
+    case CURSOR_WAIT:
+      glfwSetCursor(cursor_window, cursor_wait);  /* resets to default it undefined */
       break;
     default:
       glfwSetCursor(cursor_window, NULL);  /* reset to default */

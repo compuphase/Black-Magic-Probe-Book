@@ -99,12 +99,7 @@ NK_STATIC_ASSERT(sizeof(nk_byte) == 1);
 NK_GLOBAL const struct nk_rect nk_null_rect = {-8192.0f, -8192.0f, 16384, 16384};
 #define NK_FLOAT_PRECISION 0.00000000000001
 
-NK_GLOBAL const struct nk_color nk_red = {255,0,0,255};
-NK_GLOBAL const struct nk_color nk_green = {0,255,0,255};
-NK_GLOBAL const struct nk_color nk_blue = {0,0,255,255};
 NK_GLOBAL const struct nk_color nk_white = {255,255,255,255};
-NK_GLOBAL const struct nk_color nk_black = {0,0,0,255};
-NK_GLOBAL const struct nk_color nk_yellow = {255,255,0,255};
 
 /* widget */
 #define nk_widget_state_reset(s)\
@@ -8602,6 +8597,7 @@ nk_style_from_table(struct nk_context *ctx, const struct nk_color *table)
     struct nk_style_chart *chart;
     struct nk_style_tab *tab;
     struct nk_style_window *win;
+    struct nk_style_tooltip *ttip;
 
     NK_ASSERT(ctx);
     if (!ctx) return;
@@ -9127,7 +9123,12 @@ nk_style_from_table(struct nk_context *ctx, const struct nk_color *table)
     win->combo_padding = nk_vec2(4,4);
     win->contextual_padding = nk_vec2(4,4);
     win->menu_padding = nk_vec2(4,4);
-    win->tooltip_padding = nk_vec2(4,4);
+
+    /* tooltip */
+    ttip = &style->tooltip;
+    ttip->padding = nk_vec2(2,0);
+    ttip->background = table[NK_COLOR_TOOLTIP];
+    ttip->color = table[NK_COLOR_TOOLTIP_TEXT];
 }
 NK_API void
 nk_style_set_font(struct nk_context *ctx, const struct nk_user_font *font)
@@ -12881,7 +12882,6 @@ nk_tree_element_image_push_hashed_base(struct nk_context *ctx, enum nk_tree_type
     struct nk_vec2 item_spacing;
     struct nk_rect header = {0,0,0,0};
     struct nk_rect sym = {0,0,0,0};
-    struct nk_text text;
 
     nk_flags ws = 0;
     enum nk_widget_layout_states widget_state;
@@ -12911,14 +12911,12 @@ nk_tree_element_image_push_hashed_base(struct nk_context *ctx, enum nk_tree_type
         const struct nk_style_item *background = &style->tab.background;
         if (background->type == NK_STYLE_ITEM_IMAGE) {
             nk_draw_image(out, header, &background->data.image, nk_white);
-            text.background = nk_rgba(0,0,0,0);
         } else {
-            text.background = background->data.color;
             nk_fill_rect(out, header, 0, style->tab.border_color);
             nk_fill_rect(out, nk_shrink_rect(header, style->tab.border),
                 style->tab.rounding, background->data.color);
         }
-    } else text.background = style->window.background;
+    }
 
     in = (!(layout->flags & NK_WINDOW_ROM)) ? &ctx->input: 0;
     in = (in && widget_state == NK_WIDGET_VALID) ? &ctx->input : 0;
@@ -14099,21 +14097,79 @@ nk_draw_symbol(struct nk_command_buffer *out, enum nk_symbol_type type,
     struct nk_rect content, struct nk_color background, struct nk_color foreground,
     float border_width, const struct nk_user_font *font)
 {
+    #define SYMBOL_MARGIN   0.2
+    #define SYMBOL_TRACE    0.2f
     switch (type) {
-    case NK_SYMBOL_X:
+    case NK_SYMBOL_X: {
+        float margin, step;
+        float points[4 * 2];
+        /* make the bounding box rectangular */
+        if (content.w > content.h) {
+            content.x += (content.w - content.h) / 2.0f;
+            content.w = content.h;
+        } else {
+            content.y += (content.h - content.w) / 2.0f;
+            content.h = content.w;
+        }
+        /* add a margin (make the symbol smaller than the control) */
+        margin = SYMBOL_MARGIN * content.w;
+        content.x += margin;
+        content.y += margin;
+        content.w -= 2 * margin;
+        content.h -= 2 * margin;
+        step = content.w * SYMBOL_TRACE * 0.7071f;
+        /* backward slash */
+        points[ 0*2  ] = content.x + step;
+        points[ 0*2+1] = content.y + 0.0f;
+        points[ 1*2  ] = content.x + 0.0f;
+        points[ 1*2+1] = content.y + step;
+        points[ 2*2  ] = content.x + content.w - step;
+        points[ 2*2+1] = content.y + content.h;
+        points[ 3*2  ] = content.x + content.w;
+        points[ 3*2+1] = content.y + content.h - step;
+        nk_fill_polygon(out, points, 4, foreground);
+        /* forward slash */
+        points[ 0*2  ] = content.x + 0.0f;
+        points[ 0*2+1] = content.y + content.h - step;
+        points[ 1*2  ] = content.x + step;
+        points[ 1*2+1] = content.y + content.h;
+        points[ 2*2  ] = content.x + content.w;
+        points[ 2*2+1] = content.y + step;
+        points[ 3*2  ] = content.x + content.w - step;
+        points[ 3*2+1] = content.y + 0.0f;
+        nk_fill_polygon(out, points, 4, foreground);
+    } break;
     case NK_SYMBOL_UNDERSCORE:
-    case NK_SYMBOL_PLUS:
-    case NK_SYMBOL_MINUS: {
-        /* single character text symbol */
-        const char *X = (type == NK_SYMBOL_X) ? "x":
-            (type == NK_SYMBOL_UNDERSCORE) ? "_":
-            (type == NK_SYMBOL_PLUS) ? "+": "-";
-        struct nk_text text;
-        text.padding = nk_vec2(0,0);
-        text.background = background;
-        text.text = foreground;
-        nk_widget_text(out, content, X, 1, &text, NK_TEXT_CENTERED, font);
-        //??? use nk_fill_polygon to create fatter shapes
+    case NK_SYMBOL_MINUS:
+    case NK_SYMBOL_PLUS: {
+        struct nk_rect rcbar;
+        float margin;
+        /* make the bounding box rectangular */
+        if (content.w > content.h) {
+            content.x += (content.w - content.h) / 2.0f;
+            content.w = content.h;
+        } else {
+            content.y += (content.h - content.w) / 2.0f;
+            content.h = content.w;
+        }
+        /* add a margin (make the symbol smaller than the control) */
+        margin = SYMBOL_MARGIN * content.w;
+        content.x += margin;
+        content.y += margin;
+        content.w -= 2 * margin - 0.5f;
+        content.h -= 2 * margin - 0.5f;
+        /* horizontal */
+        rcbar = content;
+        rcbar.h = content.h * SYMBOL_TRACE;
+        rcbar.y += (type != NK_SYMBOL_UNDERSCORE) ? (content.h - rcbar.h) / 2.0f : (content.h - rcbar.h - 1);
+        nk_fill_rect(out, rcbar,  0, foreground);
+        /* vertical */
+        if (type == NK_SYMBOL_PLUS) {
+            rcbar = content;
+            rcbar.w = content.w * SYMBOL_TRACE;
+            rcbar.x += (content.h - rcbar.w) / 2.0f;
+            nk_fill_rect(out, rcbar,  0, foreground);
+        }
     } break;
     case NK_SYMBOL_CIRCLE_SOLID:
     case NK_SYMBOL_CIRCLE_OUTLINE:
@@ -19821,9 +19877,12 @@ nk_tooltip(struct nk_context *ctx, const char *text, struct nk_rect *viewport)
     if (!ctx || !ctx->current || !ctx->current->layout || !text)
         return;
 
+    nk_style_push_color(ctx, &ctx->style.window.background, ctx->style.tooltip.background);
+    nk_style_push_color(ctx, &ctx->style.text.color, ctx->style.tooltip.color);
+
     /* fetch configuration data */
     style = &ctx->style;
-    padding = style->window.padding;
+    padding = style->tooltip.padding;
 
     /* calculate size of the text and tooltip */
     text_len = nk_strlen(text);
@@ -19838,6 +19897,9 @@ nk_tooltip(struct nk_context *ctx, const char *text, struct nk_rect *viewport)
         nk_text(ctx, text, text_len, NK_TEXT_LEFT);
         nk_tooltip_end(ctx);
     }
+
+    nk_style_pop_color(ctx);
+    nk_style_pop_color(ctx);
 }
 #ifdef NK_INCLUDE_STANDARD_VARARGS
 NK_API void

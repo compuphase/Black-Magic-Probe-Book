@@ -483,7 +483,7 @@ restart:
         len = size;
       if (memcmp(stream, magic + cache_filled, len) == 0) {
         /* match, check whether this is still a patial match */
-        if (cache_filled + len == (pkt_header->header.magic_size / 8)) {
+        if (cache_filled + len == (pkt_header->header.magic_size / 8u)) {
           state++;
           idx += len;
           cache_reset();
@@ -508,7 +508,7 @@ restart:
             len = size - idx;
           if (memcmp(stream, magic + cache_filled, len) == 0) {
             /* match, check whether this is still a patial match */
-            if (len == pkt_header->header.magic_size / 8) {
+            if (len == pkt_header->header.magic_size / 8u) {
               state++;  /* full match -> advance state & restart */
               idx += len;
               cache_reset();
@@ -552,10 +552,10 @@ restart:
       /* get the stream.id; this code assumes Little Endian */
       unsigned long streamid = 0;
       if (cache_filled > 0) {
-        assert(cache_filled < pkt_header->header.streamid_size / 8);
+        assert(cache_filled < pkt_header->header.streamid_size / 8u);
         memcpy((unsigned char*)&streamid, cache, cache_filled);
       }
-      assert(len > 0 && len <= pkt_header->header.streamid_size / 8);
+      assert(len > 0 && len <= pkt_header->header.streamid_size / 8u);
       memcpy((unsigned char*)&streamid + cache_filled, stream + idx, len);
       channel = (long)streamid; /* stream id in the header overrules the parameter */
       state++;
@@ -596,10 +596,10 @@ restart:
       unsigned long id = 0;
       assert(cache_filled + len < sizeof id);
       if (cache_filled > 0) {
-        assert(cache_filled < evt_header->header.id_size / 8);
+        assert(cache_filled < evt_header->header.id_size / 8u);
         memcpy((unsigned char*)&id, cache, cache_filled);
       }
-      assert(len > 0 && len <= evt_header->header.id_size / 8);
+      assert(len > 0 && len <= evt_header->header.id_size / 8u);
       memcpy((unsigned char*)&id + cache_filled, stream + idx, len);
       /* get the event from the id */
       event = event_by_id(id);

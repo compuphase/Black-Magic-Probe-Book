@@ -702,7 +702,7 @@ static long read_leb128(FILE *fp,int sign,int *size)
 static int64_t read_value(FILE *fp,int format,int *size)
 {
   int64_t value=0;
-  int sz;
+  int sz=0;
 
   switch (format) {
   case DW_FORM_flag_present:      /* implicit "present" flag (no data) */
@@ -765,7 +765,8 @@ static int64_t read_value(FILE *fp,int format,int *size)
 
 static void read_string(FILE *fp,int format,int stringtable,char *string,int max,int *size)
 {
-  int idx,count,sz,byte;
+  int sz=0;
+  int idx,count,byte;
   int32_t offs;
   long pos;
 

@@ -97,30 +97,23 @@ static DWARF_LINELOOKUP dwarf_linetable = { NULL };
 static DWARF_SYMBOLLIST dwarf_symboltable = { NULL};
 static DWARF_PATHLIST dwarf_filetable = { NULL};
 
-static int recent_statuscode = 0;
-
 int ctf_error_notify(int code, int linenr, const char *message)
 {
-  static int ctf_statusset = 0;
+  char msg[200];
 
-  if (code == CTFERR_NONE) {
-    ctf_statusset = 0;
-  } else if (!ctf_statusset) {
-    char msg[200];
-    ctf_statusset = 1;
-    if (linenr > 0)
-      sprintf(msg, "TSDL file error, line %d: ", linenr);
-    else
-      strcpy(msg, "TSDL file error: ");
-    strlcat(msg, message, sizearray(msg));
-    tracelog_statusmsg(TRACESTATMSG_CTF, msg, 0);
-  }
+  (void)code;
+  assert(message != NULL);
+  if (linenr > 0)
+    sprintf(msg, "TSDL file error, line %d: ", linenr);
+  else
+    strcpy(msg, "TSDL file error: ");
+  strlcat(msg, message, sizearray(msg));
+  tracelog_statusmsg(TRACESTATMSG_CTF, msg, 0);
   return 0;
 }
 
 static int bmp_callback(int code, const char *message)
 {
-  recent_statuscode = code;
   tracelog_statusmsg(TRACESTATMSG_BMP, message, code);
   return code >= 0;
 }
@@ -132,6 +125,8 @@ static int bmp_callback(int code, const char *message)
 #define ROW_HEIGHT      (1.6 * opt_fontsize)
 #define COMBOROW_CY     (0.9 * opt_fontsize)
 #define BROWSEBTN_WIDTH (1.5 * opt_fontsize)
+
+#define FILTER_MAXSTRING  128
 
 
 static float *nk_ratio(int count, ...)
@@ -183,6 +178,9 @@ static void set_style(struct nk_context *ctx)
   table[NK_COLOR_SCROLLBAR_CURSOR_HOVER] = nk_rgba(204, 199, 141, 255);
   table[NK_COLOR_SCROLLBAR_CURSOR_ACTIVE] = nk_rgba(204, 199, 141, 255);
   table[NK_COLOR_TAB_HEADER] = nk_rgba(58, 86, 117, 255);
+  table[NK_COLOR_TOOLTIP] = nk_rgba(204, 199, 141, 255);
+  table[NK_COLOR_TOOLTIP_TEXT] = nk_rgba(35, 52, 71, 255);
+
   nk_style_from_table(ctx, table);
 
   /* button */
@@ -205,7 +203,7 @@ static void usage(void)
 
 int main(int argc, char *argv[])
 {
-  enum { TAB_CONFIGURATION, TAB_CHANNELS, /* --- */ TAB_COUNT };
+  enum { TAB_CONFIGURATION, TAB_CHANNELS, TAB_FILTERS, /* --- */ TAB_COUNT };
   enum { SPLITTER_NONE, SPLITTER_VERTICAL, SPLITTER_HORIZONTAL };
 
   static const char *mode_strings[] = { "Manchester", "NRZ/async." };
@@ -228,6 +226,9 @@ int main(int argc, char *argv[])
   int probe_type = PROBE_UNKNOWN;
   enum { MODE_MANCHESTER = 1, MODE_ASYNC } opt_mode = MODE_MANCHESTER;
   unsigned char trace_endpoint = BMP_EP_TRACE;
+  char **filterlist = NULL;
+  char newfiltertext[FILTER_MAXSTRING] = "";
+  int filtercount = 0, filterlistsize = 0;
   int opt_init_target = nk_true;
   int opt_init_bmp = nk_true;
   int opt_connect_srst = nk_false;
@@ -265,6 +266,27 @@ int main(int argc, char *argv[])
     if (result >= 2)
       channel_set(chan, enabled, (result >= 3) ? key : NULL, nk_rgb(clr >> 16,(clr >> 8) & 0xff, clr & 0xff));
   }
+  /* read filters (initialize the filter list) */
+  filtercount = ini_getl("Filters", "count", 0, txtConfigFile);;
+  filterlistsize = filtercount + 1; /* at least 1 extra, for a NULL sentinel */
+  filterlist = malloc(filterlistsize * sizeof(char*));  /* make sure unused entries are NULL */
+  if (filterlist != NULL) {
+    memset(filterlist, 0, filterlistsize * sizeof(char*));
+    for (idx = 0; idx < filtercount; idx++) {
+      char key[40];
+      filterlist[idx] = malloc(sizearray(newfiltertext) * sizeof(char));
+      if (filterlist[idx] == NULL)
+        break;
+      sprintf(key, "filter%d", idx + 1);
+      ini_gets("Filters", key, "", newfiltertext, sizearray(newfiltertext), txtConfigFile);
+      strcpy(filterlist[idx], newfiltertext);
+    }
+    filtercount = idx;
+  } else {
+    filtercount = filterlistsize = 0;
+  }
+  newfiltertext[0] = '\0';
+
   /* other configuration */
   probe = (int)ini_getl("Settings", "probe", 0, txtConfigFile);
   ini_gets("Settings", "ip-address", "127.0.0.1", txtIPaddr, sizearray(txtIPaddr), txtConfigFile);
@@ -398,12 +420,11 @@ int main(int argc, char *argv[])
   else if (probe > usbprobes)
     probe = 0;
 
-  trace_setdatasize((opt_datasize == 3) ? 4 : opt_datasize);
+  trace_setdatasize((opt_datasize == 3) ? 4 : (short)opt_datasize);
   tcpip_init();
   bmp_setcallback(bmp_callback);
   reinitialize = 2; /* skip first iteration, so window is updated */
-  recent_statuscode = BMPSTAT_SUCCESS;  /* must be a non-zero code to display anything */
-  tracelog_statusmsg(TRACESTATMSG_BMP, "Initializing...", recent_statuscode);
+  tracelog_statusmsg(TRACESTATMSG_BMP, "Initializing...", BMPSTAT_SUCCESS);
 
   ctx = guidriver_init("BlackMagic Trace Viewer", canvas_width, canvas_height,
                        GUIDRV_RESIZEABLE | GUIDRV_TIMER, opt_fontstd, opt_fontmono, opt_fontsize);
@@ -413,6 +434,8 @@ int main(int argc, char *argv[])
     if (reinitialize == 1) {
       int result;
       char msg[100];
+      tracelog_statusclear();
+      tracestring_clear();
       if ((cpuclock = strtol(cpuclock_str, NULL, 10)) == 0)
         cpuclock = 48000000;
       if (opt_mode == MODE_MANCHESTER || (bitrate = strtol(bitrate_str, NULL, 10)) == 0)
@@ -475,48 +498,42 @@ int main(int argc, char *argv[])
           trace_status = trace_init(trace_endpoint, NULL);
         bmp_restart();
       }
-      tracestring_clear();
       trace_running = (trace_status == TRACESTAT_OK);
       switch (trace_status) {
       case TRACESTAT_OK:
-        recent_statuscode = BMPSTAT_SUCCESS;
         if (opt_init_target || opt_init_bmp) {
           assert(strlen(mcu_driver) > 0);
           sprintf(msg, "Connected [%s]", mcu_driver);
-          tracelog_statusmsg(TRACESTATMSG_BMP, msg, recent_statuscode);
-        } else if (recent_statuscode >= 0) {
-          tracelog_statusmsg(TRACESTATMSG_BMP, "Listening (passive mode)...", recent_statuscode);
+          tracelog_statusmsg(TRACESTATMSG_BMP, msg, BMPSTAT_SUCCESS);
+        } else {
+          tracelog_statusmsg(TRACESTATMSG_BMP, "Listening (passive mode)...", BMPSTAT_SUCCESS);
         }
         break;
       case TRACESTAT_INIT_FAILED:
       case TRACESTAT_NO_INTERFACE:
       case TRACESTAT_NO_DEVPATH:
       case TRACESTAT_NO_PIPE:
-        recent_statuscode = BMPERR_GENERAL;
         strlcpy(msg, "Trace interface not available", sizearray(msg));
         if (probe == netprobe && opt_mode != MODE_ASYNC)
           strlcat(msg, "; try NRZ/Async mode", sizearray(msg));
-        tracelog_statusmsg(TRACESTATMSG_BMP, msg, recent_statuscode);
+        tracelog_statusmsg(TRACESTATMSG_BMP, msg, BMPERR_GENERAL);
         break;
       case TRACESTAT_NO_ACCESS:
-        recent_statuscode = BMPERR_GENERAL;
         { int loc;
           unsigned long error = trace_errno(&loc);
           sprintf(msg, "Trace access denied (error %d:%lu)", loc, error);
+          tracelog_statusmsg(TRACESTATMSG_BMP, msg, BMPERR_GENERAL);
         }
-        tracelog_statusmsg(TRACESTATMSG_BMP, msg, recent_statuscode);
         break;
       case TRACESTAT_NO_THREAD:
-        recent_statuscode = BMPERR_GENERAL;
         { int loc;
           unsigned long error = trace_errno(&loc);
           sprintf(msg, "Multi-threading set-up failure (error %d:%lu)", loc, error);
+          tracelog_statusmsg(TRACESTATMSG_BMP, msg, BMPERR_GENERAL);
         }
-        tracelog_statusmsg(TRACESTATMSG_BMP, msg, recent_statuscode);
         break;
       case TRACESTAT_NO_CONNECT:
-        recent_statuscode = BMPERR_GENERAL;
-        tracelog_statusmsg(TRACESTATMSG_BMP, "Failed to \"attach\" to Black Magic Probe", recent_statuscode);
+        tracelog_statusmsg(TRACESTATMSG_BMP, "Failed to \"attach\" to Black Magic Probe", BMPERR_GENERAL);
         break;
       }
       reinitialize = 0;
@@ -530,8 +547,6 @@ int main(int argc, char *argv[])
       tracestring_clear();
       dwarf_cleanup(&dwarf_linetable, &dwarf_symboltable, &dwarf_filetable);
       cur_match_line = -1;
-      tracelog_statusmsg(TRACESTATMSG_CTF, NULL, 0);
-      ctf_error_notify(CTFERR_NONE, 0, NULL);
       error_flags = 0;
       if (strlen(txtTSDLfile) > 0)
         error_flags |= ERROR_NO_TSDL;
@@ -544,6 +559,7 @@ int main(int argc, char *argv[])
             if (stream->name != NULL && strlen(stream->name) > 0)
               channel_setname(seqnr, stream->name);
           error_flags &= ~ERROR_NO_TSDL;
+          tracelog_statusmsg(TRACESTATMSG_CTF, "CTF mode active", BMPSTAT_SUCCESS);
         } else {
           ctf_parse_cleanup();
         }
@@ -601,13 +617,12 @@ int main(int argc, char *argv[])
 
         if (trace_status == TRACESTAT_OK && tracestring_isempty() && trace_getpacketerrors() > 0) {
           char msg[100];
-          recent_statuscode = BMPERR_GENERAL;
           sprintf(msg, "SWO packet errors (%d), verify data size", trace_getpacketerrors());
-          tracelog_statusmsg(TRACESTATMSG_BMP, msg, recent_statuscode);
+          tracelog_statusmsg(TRACESTATMSG_BMP, msg, BMPERR_GENERAL);
         }
         tracestring_process(trace_running);
         nk_layout_row_dynamic(ctx, splitter_rows[0], 1);
-        tracelog_widget(ctx, "tracelog", opt_fontsize, cur_match_line, NK_WINDOW_BORDER);
+        tracelog_widget(ctx, "tracelog", opt_fontsize, cur_match_line, filterlist, NK_WINDOW_BORDER);
 
         /* vertical splitter */
         nk_layout_row_dynamic(ctx, SEPARATOR_VER, 1);
@@ -689,7 +704,7 @@ int main(int argc, char *argv[])
             nk_label(ctx, "IP Addr", NK_TEXT_ALIGN_LEFT | NK_TEXT_ALIGN_MIDDLE);
             nk_layout_row_push(ctx, VALUE_WIDTH - BROWSEBTN_WIDTH - 5);
             bounds = nk_widget_bounds(ctx);
-            result = nk_edit_string_zero_terminated(ctx, NK_EDIT_FIELD, txtIPaddr, sizearray(txtIPaddr), nk_filter_ascii);
+            result = nk_edit_string_zero_terminated(ctx, NK_EDIT_FIELD | NK_EDIT_SIG_ENTER, txtIPaddr, sizearray(txtIPaddr), nk_filter_ascii);
             if ((result & NK_EDIT_COMMITED) != 0 && bmp_is_ip_address(txtIPaddr))
               reconnect = 1;
             tooltip(ctx, bounds, "IP address of the ctxLink", &rc_canvas);
@@ -782,12 +797,10 @@ int main(int argc, char *argv[])
           result = opt_datasize;
           opt_datasize = nk_combo(ctx, datasize_strings, NK_LEN(datasize_strings), opt_datasize, opt_fontsize, nk_vec2(VALUE_WIDTH,5.5*opt_fontsize));
           if (opt_datasize != result) {
-            trace_setdatasize((opt_datasize == 3) ? 4 : opt_datasize);
+            trace_setdatasize((opt_datasize == 3) ? 4 : (short)opt_datasize);
             tracestring_clear();
-            if (trace_status == TRACESTAT_OK) {
-              recent_statuscode = BMPSTAT_SUCCESS;
-              tracelog_statusmsg(TRACESTATMSG_BMP, "Listening ...", recent_statuscode);
-            }
+            if (trace_status == TRACESTAT_OK)
+              tracelog_statusmsg(TRACESTATMSG_BMP, "Listening ...", BMPSTAT_SUCCESS);
           }
           tooltip(ctx, bounds, "Payload size of an SWO packet (in bits); auto for autodetect", &rc_canvas);
           nk_layout_row_end(ctx);
@@ -843,6 +856,73 @@ int main(int argc, char *argv[])
             }
           }
           nk_layout_row_end(ctx);
+          nk_tree_state_pop(ctx);
+        }
+
+        if (nk_tree_state_push(ctx, NK_TREE_TAB, "Filters", &tab_states[TAB_FILTERS])) {
+          int txtwidth, result;
+          char filter[FILTER_MAXSTRING];
+          assert(filterlistsize == 0 || filterlist != NULL);
+          assert(filterlistsize == 0 || filtercount < filterlistsize);
+          assert(filterlistsize == 0 || filterlist[filtercount] == NULL);
+          bounds = nk_widget_bounds(ctx);
+          txtwidth = bounds.w -  BROWSEBTN_WIDTH - (1 * 5);
+          for (idx = 0; idx < filtercount; idx++) {
+            nk_layout_row_begin(ctx, NK_STATIC, ROW_HEIGHT, 2);
+            nk_layout_row_push(ctx, txtwidth);
+            assert(filterlist[idx] != NULL);
+            strcpy(filter, filterlist[idx]);
+            bounds = nk_widget_bounds(ctx);
+            result = nk_edit_string_zero_terminated(ctx, NK_EDIT_FIELD | NK_EDIT_SIG_ENTER, filter, sizearray(filter), nk_filter_ascii);
+            if (strcmp(filter, filterlist[idx]) != 0) {
+              strcpy(filterlist[idx], filter);
+            }
+            tooltip(ctx, bounds, "Text to filter on (case-sensitive)", &rc_canvas);
+            nk_layout_row_push(ctx, ROW_HEIGHT);
+            if (nk_button_symbol(ctx, NK_SYMBOL_X) || ((result & NK_EDIT_COMMITED) && strlen(filter) == 0)) {
+              /* remove row */
+              assert(filterlist[idx] != NULL);
+              free(filterlist[idx]);
+              filtercount -= 1;
+              if (idx < filtercount)
+                memmove(&filterlist[idx], &filterlist[idx+1], (filtercount - idx) * sizeof(char*));
+              filterlist[filtercount] = NULL;
+            }
+          }
+          nk_layout_row_begin(ctx, NK_STATIC, ROW_HEIGHT, 2);
+          nk_layout_row_push(ctx, txtwidth);
+          bounds = nk_widget_bounds(ctx);
+          result = nk_edit_string_zero_terminated(ctx, NK_EDIT_FIELD | NK_EDIT_SIG_ENTER, newfiltertext, sizearray(newfiltertext), nk_filter_ascii);
+          tooltip(ctx, bounds, "New filter (case-sensitive)", &rc_canvas);
+          nk_layout_row_push(ctx, ROW_HEIGHT);
+          if ((nk_button_symbol(ctx, NK_SYMBOL_PLUS) || (result & NK_EDIT_COMMITED)) && strlen(newfiltertext) > 0) {
+            /* add row */
+            if (filterlistsize > 0) {
+              /* make sure there is an extra entry at the top of the array, for
+                 a NULL terminator */
+              assert(filtercount < filterlistsize);
+              if (filtercount + 1 == filterlistsize) {
+                int newsize = 2 * filterlistsize;
+                char **newlist = malloc(newsize * sizeof(char*));
+                if (newlist != NULL) {
+                  assert(filterlist != NULL);
+                  memset(newlist, 0, newsize * sizeof(char*));  /* set all new entries to NULL */
+                  memcpy(newlist, filterlist, filterlistsize * sizeof(char*));
+                  free(filterlist);
+                  filterlist = newlist;
+                  filterlistsize = newsize;
+                }
+              }
+            }
+            if (filtercount + 1 < filterlistsize) {
+              filterlist[filtercount] = malloc(sizearray(newfiltertext) * sizeof(char));
+              if (filterlist[filtercount] != NULL) {
+                strcpy(filterlist[filtercount], newfiltertext);
+                filtercount += 1;
+                newfiltertext[0] = '\0';
+              }
+            }
+          }
           nk_tree_state_pop(ctx);
         }
 
@@ -926,8 +1006,10 @@ int main(int argc, char *argv[])
           }
           nk_tree_state_pop(ctx);
         }
+
         nk_group_end(ctx);
       }
+
 
       /* popup dialogs */
       if (find_popup > 0) {
@@ -988,6 +1070,16 @@ int main(int argc, char *argv[])
             channel_getname(chan, NULL, 0));
     ini_puts("Channels", key, valstr, txtConfigFile);
   }
+  ini_putl("Filters", "count", filtercount, txtConfigFile);
+  for (idx = 0; idx < filtercount; idx++) {
+    char key[40];
+    assert(filterlist != NULL && filterlist[idx] != NULL);
+    sprintf(key, "filter%d", idx + 1);
+    ini_puts("Filters", key, filterlist[idx], txtConfigFile);
+    free(filterlist[idx]);
+  }
+  if (filterlist != NULL)
+    free(filterlist);
   sprintf(valstr, "%.2f %.2f", splitter_hor, splitter_ver);
   ini_puts("Settings", "splitter", valstr, txtConfigFile);
   for (idx = 0; idx < TAB_COUNT; idx++) {
@@ -1023,7 +1115,7 @@ int main(int argc, char *argv[])
   if (probelist != NULL) {
     for (idx = 0; idx < netprobe + 1; idx++)
       free((void*)probelist[idx]);
-    free(probelist);
+    free((void*)probelist);
   }
 
   trace_close();

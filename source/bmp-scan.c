@@ -509,8 +509,8 @@ int scan_network(unsigned long *addresses, int address_count)
   range = (254-1+NUM_THREADS/2) / NUM_THREADS;
   for (idx=0; idx<NUM_THREADS; idx++) {
     pr[idx].base = local_ip;
-    pr[idx].start = 1 + (idx*range);
-    pr[idx].end = 1 + (idx*range) + (range-1);
+    pr[idx].start = (short)(1 + (idx*range));
+    pr[idx].end = (short)(1 + (idx*range) + (range-1));
   }
   pr[NUM_THREADS-1].end = 254;
 
@@ -537,7 +537,7 @@ int scan_network(unsigned long *addresses, int address_count)
   count = 0;
   for (idx=0; idx<NUM_THREADS; idx++) {
     unsigned long bit = 1;
-    unsigned long j;
+    short j;
     for (j = pr[idx].start; j <= pr[idx].end; j++) {
       if (count < address_count && (pr[idx].mask & bit) != 0)
         addresses[count++] = (local_ip_addr & 0xffffff) | (j << 24);

@@ -139,6 +139,9 @@ static void set_style(struct nk_context *ctx)
   table[NK_COLOR_SCROLLBAR_CURSOR_HOVER] = nk_rgba(204, 199, 141, 255);
   table[NK_COLOR_SCROLLBAR_CURSOR_ACTIVE] = nk_rgba(204, 199, 141, 255);
   table[NK_COLOR_TAB_HEADER] = nk_rgba(58, 86, 117, 255);
+  table[NK_COLOR_TOOLTIP] = nk_rgba(204, 199, 141, 255);
+  table[NK_COLOR_TOOLTIP_TEXT] = nk_rgba(35, 52, 71, 255);
+
   nk_style_from_table(ctx, table);
 
   /* button */
@@ -888,7 +891,7 @@ int main(int argc, char *argv[])
             nk_layout_row(ctx, NK_DYNAMIC, ROW_HEIGHT, 4, nk_ratio(4, 0.05, 0.40, 0.40, 0.15));
             nk_spacing(ctx, 1);
             nk_label(ctx, "IP Address", NK_TEXT_ALIGN_LEFT | NK_TEXT_ALIGN_MIDDLE);
-            result = nk_edit_string_zero_terminated(ctx, NK_EDIT_FIELD, txtIPaddr, sizearray(txtIPaddr), nk_filter_ascii);
+            result = nk_edit_string_zero_terminated(ctx, NK_EDIT_FIELD | NK_EDIT_SIG_ENTER, txtIPaddr, sizearray(txtIPaddr), nk_filter_ascii);
             if ((result & NK_EDIT_COMMITED) != 0 && bmp_is_ip_address(txtIPaddr))
               reconnect = 1;
             if (nk_button_label(ctx, "scan")) {

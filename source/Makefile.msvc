@@ -66,8 +66,8 @@ LFLAGS_C  = $(L_DEBUG) /NOLOGO /SUBSYSTEM:console
 OBJLIST_BMDEBUG = bmdebug.obj bmp-scan.obj bmp-script.obj dwarf.obj elf.obj \
                   guidriver.obj minini.obj nuklear_mousepointer.obj nuklear_tooltip.obj \
                   rs232.obj specialfolder.obj strlcpy.obj tcpip.obj usb-support.obj \
-                  decodectf.obj parsetsdl.obj swotrace.obj \
-                  nuklear.obj nuklear_gdip.obj noc_file_dialog.obj
+                  svd-support.obj decodectf.obj parsetsdl.obj swotrace.obj \
+                  xmltractor.obj nuklear.obj nuklear_gdip.obj noc_file_dialog.obj
 
 OBJLIST_BMFLASH = bmflash.obj bmp-scan.obj bmp-script.obj bmp-support.obj crc32.obj \
                   elf.obj gdb-rsp.obj guidriver.obj minIni.obj nuklear_mousepointer.obj \
@@ -92,7 +92,7 @@ OBJLIST_TRACEGEN = tracegen.obj parsetsdl.obj strlcpy.obj
 project : bmdebug.exe bmflash.exe bmtrace.exe bmscan.exe elf-postlink.exe tracegen.exe
 
 depend :
-	makedepend -b -oobj -fmakefile.dep $(OBJLIST_BMDEBUG:.obj=.c) $(OBJLIST_BMFLASH:.obj=.c) \
+	makedepend -b -e -o.obj -fmakefile.dep $(OBJLIST_BMDEBUG:.obj=.c) $(OBJLIST_BMFLASH:.obj=.c) \
                    $(OBJLIST_BMTRACE:.obj=.c) $(OBJLIST_BMSCAN:.obj=.c) $(OBJLIST_POSTLINK:.obj=.c) \
                    $(OBJLIST_TRACEGEN:.obj=.c)
 
@@ -134,6 +134,8 @@ nuklear_tooltip.obj : nuklear_tooltip.c
 rs232.obj : rs232.c
 
 specialfolder.obj : specialfolder.c
+
+svd-support.obj : svd-support.c
 
 swotrace.obj : swotrace.c
 

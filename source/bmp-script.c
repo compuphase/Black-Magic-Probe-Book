@@ -254,7 +254,7 @@ static int mcu_match(const char *name, const char *list)
     if ((separator = strchr(head, ',')) == NULL)
       separator = strchr(head, '\0');
     tail = skiptrailing(head, separator);
-    if ((tail - head) == namelen && strnicmp(name, head, namelen) == 0)
+    if ((size_t)(tail - head) == namelen && strnicmp(name, head, namelen) == 0)
       return 1;   /* exact match */
     if ((wildcard = strchr(head, '*')) != NULL && wildcard < tail) {
       /* the entry in the MCU list has a wildcard, match up to this position */
@@ -364,7 +364,7 @@ int bmscript_load(const char *mcu, const char *arch)
   char path[_MAX_PATH];
   char arch_name[50];
   FILE *fp;
-  int idx;
+  unsigned idx;
 
   /* the name in the root is set the the MCU name, to detect double loading of
      the same script */
@@ -440,7 +440,7 @@ int bmscript_load(const char *mcu, const char *arch)
         if (idx < reg_count) {
           /* change the existing entry */
           registers[idx].address = addr;
-          registers[idx].size = size;
+          registers[idx].size = (uint8_t)size;
         } else {
           /* add a new entry */
           assert(reg_count <= reg_size);
@@ -456,7 +456,7 @@ int bmscript_load(const char *mcu, const char *arch)
           if (reg_count < reg_size) {
             registers[reg_count].name = strdup(regname);
             registers[reg_count].address = addr;
-            registers[reg_count].size = size;
+            registers[reg_count].size = (uint8_t)size;
             registers[reg_count].mcu_list = NULL;
             if (registers[reg_count].name != NULL)
               reg_count += 1;
