@@ -1,9 +1,9 @@
 # Debugging, Tracing & Programming with the Black Magic Probe
 This guide covers setting up and using the [Black Magic Probe](https://github.com/blacksphere/blackmagic). The Black Magic Probe is a relatively cheap JTAG/SWD probe for ARM Cortex micro-controllers. A distinguishing feature of the Black Magic Probe is that it embeds a GDB server. As a result, the GNU Debugger can directly connect to the Black Magic Probe.
 
-While setting up and using the Black Magic Probe has also been covered in wikis and blogs, I found that those description often only scratched the surface of the subject. With this guide, I set out to give a more comprehensive account.
+While setting up and using the Black Magic Probe has also been covered in wikis and blogs, I found that those description often only scratched the surface of the subject. With this guide, I set out to give a more comprehensive account. Later, I also added specific notes on [ctxLink](http://www.sidprice.com/ctxlink/), a derivative of the Black Magic Probe that offers a WiFi connection.
 ## Utilities
-Several utilities accompagny this guide. Some are small, such as `bmscan` to locate the (virtual) serial port at which the Black Magic Probe is found. Another is a helper tool for a specific family of micro-controllers (`elf-postlink`). There are GUI utilities and text-mode utilities. All have been tested under Microsoft Windows and Linux.
+Several utilities accompagny this guide. Some are small, such as `bmscan` to locate the (virtual) serial port at which the Black Magic Probe is found (or scans the local network for ctxLink). Another is a helper tool for a specific family of micro-controllers (`elf-postlink`). There are GUI utilities and text-mode utilities. All have been tested under Microsoft Windows and Linux.
 ## Building the software
 Several makefiles are provided for various compilers. Use the one that is appropriate for your system. It is most convenient if you rename the correct makefile (for your system) to `Makefile`, so that you don't have to specify it on the command line each time you run `make`.
 
