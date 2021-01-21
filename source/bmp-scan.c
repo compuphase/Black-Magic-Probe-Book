@@ -58,12 +58,14 @@
  *  interface. For a serial interface, it returns the COM port and for the
  *  trace or DFU interfaces, it returns the GUID (needed to open a WinUSB
  *  handle on it).
- *  \param seqnr    The sequence number, must be 0 to find the first connected
- *                  device, 1 to find the second connected device, and so forth.
- *  \param iface    The interface number, e,g, BMP_IF_GDB for the GDB server.
- *  \param name     The COM-port name (or interface GUID) will be copied in
- *                  this parameter.
- *  \param namelen  The size of the "name" parameter (in characters).
+ *  \param seqnr    [in] The sequence number, must be 0 to find the first
+ *                  connected device, 1 to find the second connected device, and
+ *                  so forth.
+ *  \param iface    [in] The interface number, e,g, BMP_IF_GDB for the GDB
+ *                  server.
+ *  \param name     [out] The COM-port name (or interface GUID) will be copied
+ *                  in this parameter.
+ *  \param namelen  [in] The size of the "name" parameter (in characters).
  *
  *  \return 1 on success, 0 on failure.
  */

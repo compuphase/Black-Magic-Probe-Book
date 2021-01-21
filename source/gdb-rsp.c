@@ -1,7 +1,7 @@
 /*
  * The GDB "Remote Serial Protocol" support.
  *
- * Copyright 2019-2020 CompuPhase
+ * Copyright 2019-2021 CompuPhase
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -126,8 +126,8 @@ size_t gdbrsp_recv(char *buffer, size_t size, int timeout)
   head = tail = 0;
   while (cache_idx < cache_size) {
     size_t count;
-    if (rs232_isopen())
-      count = rs232_recv(cache + cache_idx, cache_size - cache_idx);
+    if (bmp_comport() != NULL)
+      count = rs232_recv(bmp_comport(), cache + cache_idx, cache_size - cache_idx);
     else
       count = tcpip_recv(cache + cache_idx, cache_size - cache_idx);
     cache_idx += count;
@@ -156,8 +156,8 @@ size_t gdbrsp_recv(char *buffer, size_t size, int timeout)
         sum &= 0xff;
         if (sum == chksum) {
           /* confirm reception and copy to the buffer */
-          if (rs232_isopen())
-            rs232_xmit((const unsigned char*)"+", 1);
+          if (bmp_comport() != NULL)
+            rs232_xmit(bmp_comport(), (const unsigned char*)"+", 1);
           else
             tcpip_xmit((const unsigned char*)"+", 1);
           count = tail - head;  /* number of payload bytes */
@@ -190,8 +190,8 @@ size_t gdbrsp_recv(char *buffer, size_t size, int timeout)
           return count; /* return payload size (excluding checksum) */
         } else {
           /* send NAK */
-          if (rs232_isopen())
-            rs232_xmit((const unsigned char*)"-", 1);
+          if (bmp_comport() != NULL)
+            rs232_xmit(bmp_comport(), (const unsigned char*)"-", 1);
           else
             tcpip_xmit((const unsigned char*)"-", 1);
           head = tail = 0;
@@ -293,14 +293,14 @@ int gdbrsp_xmit(const char *buffer, int size)
   *(fullbuffer + size - 1) = int2hex(sum & 0x0f);
 
   for (retry = 0; retry < RETRIES; retry++) {
-    if (rs232_isopen())
-      rs232_xmit(fullbuffer, size);
+    if (bmp_comport() != NULL)
+      rs232_xmit(bmp_comport(), fullbuffer, size);
     else
       tcpip_xmit(fullbuffer, size);
     for (cycle = 0; cycle < TIMEOUT / POLL_INTERVAL; cycle++) {
       do {
-        if (rs232_isopen())
-          count = rs232_recv(buf, 1);
+        if (bmp_comport() != NULL)
+          count = rs232_recv(bmp_comport(), buf, 1);
         else
           count = tcpip_recv(buf, 1);
         if (count == 1) {

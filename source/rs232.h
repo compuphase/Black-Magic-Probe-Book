@@ -1,6 +1,6 @@
 /*  rs232 - RS232 support, limited to the functions that the GDB RSP needs
  *
- *  Copyright 2012-2019, CompuPhase
+ *  Copyright 2012-2021, CompuPhase
  *
  *  Licensed under the Apache License, Version 2.0 (the "License"); you may not
  *  use this file except in compliance with the License. You may obtain a copy
@@ -21,20 +21,27 @@
   extern "C" {
 #endif
 
+#if defined _WIN32
+  typedef HANDLE HCOM;
+#else /* _WIN32 */
+  typedef int HCOM;
+#endif /* _WIN32 */
+
 enum {
   PAR_NONE = 1,
   PAR_ODD,
   PAR_EVEN,
 };
 
-int    rs232_open(const char *port, unsigned baud, int databits, int stopbits, int parity);
-void   rs232_close(void);
-int    rs232_isopen(void);
-size_t rs232_xmit(const unsigned char *buffer, size_t size);
-size_t rs232_recv(unsigned char *buffer, size_t size);
-void   rs232_break(void);
-void   rs232_dtr(int set);
-void   rs232_rts(int set);
+HCOM*  rs232_open(const char *port, unsigned baud, int databits, int stopbits, int parity);
+void   rs232_close(HCOM *hCom);
+int    rs232_isopen(HCOM *hCom);
+size_t rs232_xmit(HCOM *hCom, const unsigned char *buffer, size_t size);
+size_t rs232_recv(HCOM *hCom, unsigned char *buffer, size_t size);
+void   rs232_flush(HCOM *hCom);
+void   rs232_break(HCOM *hCom);
+void   rs232_dtr(HCOM *hCom, int set);
+void   rs232_rts(HCOM *hCom, int set);
 
 #if defined __cplusplus
   }

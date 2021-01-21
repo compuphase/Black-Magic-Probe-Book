@@ -2,7 +2,7 @@
  * General purpose Black Magic Probe support routines, based on the GDB-RSP
  * serial interface. The "script" support can also be used with GDB.
  *
- * Copyright 2019-2020 CompuPhase
+ * Copyright 2019-2021 CompuPhase
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -38,7 +38,6 @@
 #include "crc32.h"
 #include "elf.h"
 #include "gdb-rsp.h"
-#include "rs232.h"
 #include "tcpip.h"
 #include "xmltractor.h"
 
@@ -57,6 +56,7 @@ typedef struct tagFLASHRGN {
 } FLASHRGN;
 #define MAX_FLASHRGN  8
 
+static HCOM *hCom = NULL;
 static int CurrentProbe = -1;
 static int PacketSize = 0;
 static FLASHRGN FlashRgn[MAX_FLASHRGN];
@@ -121,38 +121,39 @@ int bmp_connect(int probe, const char *ipaddress)
     strlcpy(devname, ipaddress, sizearray(devname));
   }
 
-  if (CurrentProbe >= 0 && !rs232_isopen()) {
+  if (CurrentProbe >= 0 && !rs232_isopen(hCom)) {
     /* serial port is selected, and it is currently not open */
     FlashRgnCount = 0;
     if (find_bmp(probe, BMP_IF_GDB, devname, sizearray(devname))) {
       char buffer[256];
       size_t size;
       /* connect to the port */
-      rs232_open(devname,115200,8,1,PAR_NONE);
-      if (!rs232_isopen()) {
+      hCom = rs232_open(devname, 115200, 8, 1, PAR_NONE);
+      if (!rs232_isopen(hCom)) {
         notice(BMPERR_PORTACCESS, "Failure opening port %s", devname);
         return 0;
       }
-      rs232_rts(1);
-      rs232_dtr(1); /* required by GDB RSP */
+      rs232_rts(hCom, 1);
+      rs232_dtr(hCom, 1); /* required by GDB RSP */
       /* check for reception of the handshake */
       size = gdbrsp_recv(buffer, sizearray(buffer), 500);
       if (size == 0) {
         /* toggle DTR, to be sure */
-        rs232_rts(0);
-        rs232_dtr(0);
+        rs232_rts(hCom, 0);
+        rs232_dtr(hCom, 0);
         #if defined _WIN32
           Sleep(200);
         #else
           usleep(200 * 1000);
         #endif
-        rs232_rts(1);
-        rs232_dtr(1);
+        rs232_rts(hCom, 1);
+        rs232_dtr(hCom, 1);
         size = gdbrsp_recv(buffer, sizearray(buffer), 500);
       }
       if (size != 2 || memcmp(buffer, "OK", size)!= 0) {
         notice(BMPERR_NORESPONSE, "No response on %s", devname);
-        rs232_close();
+        rs232_close(hCom);
+        hCom = NULL;
         return 0;
       }
       initialize = 1;
@@ -170,7 +171,7 @@ int bmp_connect(int probe, const char *ipaddress)
   }
 
   /* check whether opening the communication interface succeeded */
-  if ((CurrentProbe >= 0 && !rs232_isopen()) || (CurrentProbe < 0 && !tcpip_isopen())) {
+  if ((CurrentProbe >= 0 && !rs232_isopen(hCom)) || (CurrentProbe < 0 && !tcpip_isopen())) {
     /* initialization failed */
     notice(BMPERR_NODETECT, "%s not detected", probename);
     return 0;
@@ -220,10 +221,11 @@ int bmp_disconnect(void)
 {
   int result = 0;
 
-  if (rs232_isopen()) {
-    rs232_dtr(0);
-    rs232_rts(0);
-    rs232_close();
+  if (rs232_isopen(hCom)) {
+    rs232_dtr(hCom, 0);
+    rs232_rts(hCom, 0);
+    rs232_close(hCom);
+    hCom = NULL;
     result = 1;
   }
   if (tcpip_isopen()) {
@@ -233,12 +235,20 @@ int bmp_disconnect(void)
   return result;
 }
 
+/** bmp_comport() returns the virtual COM port for gdbserver, or NULL if the
+ *  connection is over TCP/IP.
+ */
+HCOM *bmp_comport(void)
+{
+  return rs232_isopen(hCom) ? hCom : NULL;
+}
+
 /** bmp_isopen() returns whether a connection to a Black Magic Probe or a
- *  ctxLink is open, cia USB or TCP/IP.
+ *  ctxLink is open, via USB (virtual COM port) or TCP/IP.
  */
 int bmp_isopen(void)
 {
-  return rs232_isopen() || tcpip_isopen();
+  return rs232_isopen(hCom) || tcpip_isopen();
 }
 
 /** bmp_is_ip_address() returns 1 if the input string appears to contain a

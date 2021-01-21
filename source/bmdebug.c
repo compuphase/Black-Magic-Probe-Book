@@ -2,7 +2,7 @@
  * GDB front-end with specific support for the Black Magic Probe.
  * This utility is built with Nuklear for a cross-platform GUI.
  *
- * Copyright 2019-2020 CompuPhase
+ * Copyright 2019-2021 CompuPhase
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -65,6 +65,7 @@
 #include "nuklear_mousepointer.h"
 #include "nuklear_tooltip.h"
 #include "minIni.h"
+#include "serialmon.h"
 #include "specialfolder.h"
 #include "svd-support.h"
 #include "tcpip.h"
@@ -144,6 +145,7 @@ enum { SWOMODE_NONE, SWOMODE_MANCHESTER, SWOMODE_ASYNC };
 
 static const char *gdbmi_leader(char *buffer, int *flags, char **next_segment);
 static void trace_info_mode(const SWOSETTINGS *swo, int showchannels, STRINGLIST *textroot);
+static void serial_info_mode(STRINGLIST *textroot);
 
 
 /** stringlist_add() adds a string to the tail of the list. */
@@ -704,7 +706,7 @@ static int console_autocomplete(char *text, size_t textsize, const DWARF_SYMBOLL
     { "find", NULL, NULL },
     { "finish", "fin", NULL },
     { "frame", NULL, NULL },
-    { "help", NULL, "break breakpoints data files keyboard monitor running stack status support trace user-defined" },
+    { "help", NULL, "break breakpoints data files keyboard monitor running serial stack status support trace user-defined" },
     { "info", NULL, "args breakpoints frame functions locals scope set sources stack variables vtbl" },
     { "list", NULL, "%func %var %file" },
     { "load", NULL, NULL },
@@ -715,12 +717,13 @@ static int console_autocomplete(char *text, size_t textsize, const DWARF_SYMBOLL
     { "quit", NULL, NULL },
     { "reset", NULL, NULL },
     { "run", NULL, NULL },
+    { "serial", NULL, "clear disable enable info plain" },
     { "set", NULL, "%var" },
     { "start", NULL, NULL },
     { "step", "s", NULL },
     { "target", NULL, "extended-remote remote" },
     { "tbreak", NULL, "%func %file" },
-    { "trace", NULL, "async auto bitrate channel disable enable info passive" },
+    { "trace", NULL, "async auto bitrate channel clear disable enable info passive plain" },
     { "undisplay", NULL, NULL },
     { "until", "u", NULL },
     { "up", NULL, NULL },
@@ -2654,6 +2657,10 @@ static int save_settings(const char *filename, const char *entrypoint,
     ini_puts("SWO trace", key, value, filename);
   }
 
+  ini_putl("Serial monitor", "mode", sermon_isopen(), filename);
+  ini_puts("Serial monitor", "port", sermon_getport(0), filename);
+  ini_putl("Serial monitor", "baud", sermon_getbaud(), filename);
+
   return access(filename, 0) == 0;
 }
 
@@ -2661,7 +2668,7 @@ static int load_settings(const char *filename, char *entrypoint, size_t entrypoi
                          int *tpwr, int *connect_srst, int *autodownload,
                          char *svdfile, size_t svdfile_sz, SWOSETTINGS *swo)
 {
-  int idx;
+  int idx, mode;
 
   if (filename == NULL || strlen(filename) == 0 || access(filename, 0) != 0)
     return 0;
@@ -2695,6 +2702,16 @@ static int load_settings(const char *filename, char *entrypoint, size_t entrypoi
     result = sscanf(value, "%d #%x %s", &enabled, &clr, key);
     if (result >= 2)
       channel_set(idx, enabled, (result >= 3) ? key : NULL, nk_rgb(clr >> 16,(clr >> 8) & 0xff, clr & 0xff));
+  }
+
+  mode = ini_getl("Serial monitor", "mode", 0, filename);
+  if (mode) {
+    char portname[64];
+    int baud;
+    ini_gets("Serial monitor", "port", "", portname, sizearray(portname), filename);
+    baud = ini_getl("Serial monitor", "baud", 0, filename);
+    sermon_open(portname, baud);
+    sermon_setmetadata(swo->metadata);
   }
 
   return 1;
@@ -2740,6 +2757,19 @@ static int handle_help_cmd(char *command, STRINGLIST *textroot, int *active)
       stringlist_add(textroot, "Ctrl-F2 -- reset program, same as \"start\".", 0);
       stringlist_add(textroot, "Ctrl-F5 -- interrupt program (stop).", 0);
       return 1;
+    } else if (TERM_EQU(cmdptr, "serial", 6)) {
+      stringlist_add(textroot, "Configure a serial monitor.", 0);
+      stringlist_add(textroot, "", 0);
+      stringlist_add(textroot, "serial [port] [bitrate] -- open the port at the bitrate.", 0);
+      stringlist_add(textroot, "    If no port is specified, the secondary UART of the Black Magic Probe is used.", 0);
+      stringlist_add(textroot, "serial enable -- open the serial monitor with the previously confugured settings.", 0);
+      stringlist_add(textroot, "serial disable -- close the virtual monitor.", 0);
+      stringlist_add(textroot, "serial info -- show current status and configuration.", 0);
+      stringlist_add(textroot, "", 0);
+      stringlist_add(textroot, "serial [filename] -- configure CTF decoding using the given TSDL file.", 0);
+      stringlist_add(textroot, "serial plain -- disable CTF decoding, display received data as text.", 0);
+      stringlist_add(textroot, "", 0);
+      stringlist_add(textroot, "serial clear -- clear the serial monitor view (delete contents).", 0);
     } else if (TERM_EQU(cmdptr, "trace", 5) || TERM_EQU(cmdptr, "tracepoint", 10) || TERM_EQU(cmdptr, "tracepoints", 11)) {
       stringlist_add(textroot, "Configure SWO tracing.", 0);
       stringlist_add(textroot, "", 0);
@@ -2763,8 +2793,8 @@ static int handle_help_cmd(char *command, STRINGLIST *textroot, int *active)
       stringlist_add(textroot, "trace channel [index] disable -- disable a channel (0..31).", 0);
       stringlist_add(textroot, "trace channel [index] [name] -- set the name of a channel.", 0);
       stringlist_add(textroot, "trace channel [index] #[colour] -- set the colour of a channel.", 0);
-      stringlist_add(textroot, "    the option \"channel\" can be abbreviated to \"chan\" or \"ch\".", 0);
-      stringlist_add(textroot, "    the parameter [index] may be a range, like 0-7 for the first eight channels.", 0);
+      stringlist_add(textroot, "    The option \"channel\" can be abbreviated to \"chan\" or \"ch\".", 0);
+      stringlist_add(textroot, "    The parameter [index] may be a range, like 0-7 for the first eight channels.", 0);
       return 1;
     } else if (TERM_EQU(cmdptr, "mon", 3)) {
       memcpy(command, "mon help", 8);       /* translate "help mon" -> "mon help" */
@@ -2789,6 +2819,9 @@ static int handle_info_cmd(char *command, STRINGLIST *textroot, int *active,
     *active = 2;
     if (TERM_EQU(cmdptr, "trace", 5)) {
       trace_info_mode(swo, 1, textroot);
+      return 1;
+    } else if (TERM_EQU(cmdptr, "serial", 6)) {
+      serial_info_mode(textroot);
       return 1;
     }
   } else if (*active == 2) {
@@ -3163,6 +3196,11 @@ static int handle_trace_cmd(const char *command, SWOSETTINGS *swo)
   if (*ptr == '\0' || TERM_EQU(ptr, "info", 4))
     return 3; /* if only "trace" is typed, interpret it as "trace info" */
 
+  if ((ptr = strstr(cmdcopy, "clear")) != 0 && TERM_END(ptr, 5)) {
+    tracestring_clear();
+    memset(ptr, ' ', 5);    /* erase the parameter from the string */
+  }
+
   assert(swo != NULL);
 
   if (TERM_EQU(ptr, "channel", 7) || TERM_EQU(ptr, "chan", 4) || TERM_EQU(ptr, "ch", 2)) {
@@ -3359,6 +3397,139 @@ static int handle_trace_cmd(const char *command, SWOSETTINGS *swo)
   return 1; /* assume entire protocol changed */
 }
 
+static void serial_info_mode(STRINGLIST *textroot)
+{
+  char msg[_MAX_PATH + 20];
+
+  strlcpy(msg, "Serial monitor configuration", sizearray(msg));
+  if (textroot != NULL) {
+    stringlist_add(textroot, msg, 0);
+    stringlist_add(textroot, "", 0);
+    msg[0] = '\0';
+  } else {
+    strlcat(msg, ": ", sizearray(msg));
+  }
+
+  if (sermon_isopen()) {
+    strlcat(msg, sermon_getport(1), sizearray(msg));
+    sprintf(msg + strlen(msg), " at %d bps", sermon_getbaud());
+  } else {
+    strlcat(msg, "disabled", sizearray(msg));
+  }
+  if (textroot != NULL) {
+    stringlist_add(textroot, msg, 0);
+  } else {
+    strlcat(msg, "\n", sizearray(msg));
+    console_add(msg, STRFLG_STATUS);
+  }
+
+  if (sermon_isopen()) {
+    const char *tdsl = sermon_getmetadata();
+    if (strlen(tdsl) > 0) {
+      sprintf(msg, "CTF mode: %s", tdsl);
+      if (textroot != NULL) {
+        stringlist_add(textroot, msg, 0);
+      } else {
+        strlcat(msg, "\n", sizearray(msg));
+        console_add(msg, STRFLG_STATUS);
+      }
+    }
+  }
+}
+
+/** handle_serial_cmd()
+ *  \param command    [in] command string.
+ *  \param port       [out] the name of the serial port to open/monitor.
+ *  \param baud       [out] the baud rate to use.
+ *  \param tsdlfile   [out] the metadata file for CTF mode.
+ *  \param tsdlmaxlen [in] the maximum length of the TSDL metadata filename.
+ *
+ *  \return 0=not "serial" command, 1=open or re-open, 2=close, 3="info",
+ *          4=do-nothing (already handled)
+ */
+static int handle_serial_cmd(const char *command, char *port, int *baud,
+                             char *tsdlfile, size_t tsdlmaxlen)
+{
+  const char *ptr;
+
+  assert(command != NULL);
+  command = skipwhite(command);
+  if (!TERM_EQU(command, "serial", 6))
+    return 0;
+  ptr = (char*)skipwhite(command + 6);
+  if (*ptr == '\0' || TERM_EQU(ptr, "info", 4))
+    return 3; /* if only "serial" is typed in, handle it as "serial info" */
+
+  if (TERM_EQU(ptr, "disable", 7))
+    return 2;
+  if (TERM_EQU(ptr, "enable", 6))
+    return 1;
+  if (TERM_EQU(ptr, "clear", 5)) {
+    sermon_clear();
+    return 4;
+  }
+  if (TERM_EQU(ptr, "plain", 5) && tsdlfile != NULL && tsdlmaxlen > 0)
+    tsdlfile[0] = '\0'; /* reset to plain mode (disable TSDL) */
+
+  assert(port != NULL);
+  if (isalpha(*ptr) || *ptr == DIRSEP_CHAR) {
+    int len, isport;
+    for (len = 0; ptr[len] > ' '; len++)
+      {}
+    /* check that this is a port name, not a filename (TSDL metadata) */
+    #if defined _WIN32
+      isport = (len > 4 && strncmp(ptr, "\\\\.\\", 4) == 0)
+               || (len > 3 && strnicmp(ptr, "com", 3) == 0 && isdigit(ptr + 3));
+    #else
+      isport = (len > 5 && strncmp(ptr, "/dev/", 5) == 0);
+    #endif
+    if (isport) {
+      int i;
+      for (i = 0; ptr[i] > ' '; i++)
+        port[i] = ptr[i];
+      port[i] = '\0';
+      ptr = skipwhite(ptr + i);
+    }
+  }
+
+  assert(baud != NULL);
+  if (isdigit(*ptr)) {
+    double v = strtod(ptr, (char**)&ptr);
+    if (toupper(*ptr) == 'K') {
+      v *= 1000.0;
+      while (*ptr > ' ')
+        ptr++;
+    }
+    *baud = (int)(v + 0.5);
+    ptr = skipwhite(ptr);
+  }
+
+  if (tsdlfile != NULL && tsdlmaxlen > 0) {
+    char stop;
+    int count;
+    if (*ptr == '"') {
+      ptr++;
+      stop = '"';
+    } else {
+      stop = ' ';
+    }
+    count = 0;
+    while (*ptr != stop && *ptr != '\0') {
+      if (count < tsdlmaxlen - 1) /* -1 to make sure space is left for the terminating zero */
+        tsdlfile[count++] = *ptr;
+      ptr++;
+    }
+    if (stop == '"' && *ptr == '"')
+      ptr++;
+    tsdlfile[count] = '\0';
+    /* also test whether the file exists */
+    if (strcmp(tsdlfile, "plain") == 0 || access(tsdlfile, 0) != 0)
+      tsdlfile[0] = '\0';
+  }
+
+  return 1;
+}
+
 static void usage(void)
 {
   printf("bmdebug - GDB front-end for the Black Magic Probe.\n\n"
@@ -3372,8 +3543,8 @@ static void usage(void)
 int main(int argc, char *argv[])
 {
   #define RESETSTATE(state) (prevstate = -1, curstate = (state))
-  enum { TAB_CONFIGURATION, TAB_BREAKPOINTS, TAB_WATCHES, TAB_SEMIHOSTING, TAB_SWO, /* --- */ TAB_COUNT };
-  enum { SPLITTER_NONE, SPLITTER_VERTICAL, SPLITTER_HORIZONTAL, SIZER_SEMIHOSTING, SIZER_SWO };
+  enum { TAB_CONFIGURATION, TAB_BREAKPOINTS, TAB_WATCHES, TAB_SEMIHOSTING, TAB_SERMON, TAB_SWO, /* --- */ TAB_COUNT };
+  enum { SPLITTER_NONE, SPLITTER_VERTICAL, SPLITTER_HORIZONTAL, SIZER_SEMIHOSTING, SIZER_SERIAL, SIZER_SWO };
   enum { POPUP_NONE, POPUP_HELP, POPUP_INFO };
   #define CMD_BUFSIZE       2048
 
@@ -3381,8 +3552,9 @@ int main(int argc, char *argv[])
   char txtFilename[_MAX_PATH], txtConfigFile[_MAX_PATH], txtGDBpath[_MAX_PATH],
        txtParamFile[_MAX_PATH], txtSVDfile[_MAX_PATH];
   char txtEntryPoint[64];
-  char port_gdb[64], mcu_family[64], mcu_architecture[32];
   char txtIPaddr[64] = "";
+  char port_gdb[64] = "", port_sermon[64] = "";
+  char mcu_family[64], mcu_architecture[32];
   char *cmdline;
   int probe, usbprobes, netprobe;
   const char **probelist;
@@ -3402,6 +3574,7 @@ int main(int argc, char *argv[])
   char console_edit[128] = "", watch_edit[128] = "", help_edit[128] = "";
   STRINGLIST consoleedit_root = { NULL, NULL, 0 }, *consoleedit_next, *console_mark;
   TASK task;
+  int sermon_baud = 0, sermon_scroll = 0;
   unsigned long tooltip_tstamp = 0;
   char statesymbol[128], ttipvalue[256];
   int curstate, prevstate, nextstate, stateparam[3];
@@ -3410,7 +3583,7 @@ int main(int argc, char *argv[])
   int monitor_cmd_active = 0, popup_active = POPUP_NONE;
   int idx, result, highlight;
   unsigned char trace_endpoint = BMP_EP_TRACE;
-  unsigned semihosting_lines, swo_lines;
+  unsigned semihosting_lines, sermon_lines, swo_lines;
   int prev_clicked_line;
   unsigned watchseq;
   unsigned long scriptparams[4];
@@ -3446,7 +3619,7 @@ int main(int argc, char *argv[])
   for (idx = 0; idx < TAB_COUNT; idx++) {
     char key[32];
     int opened, size;
-    tab_states[idx] = (idx == TAB_SEMIHOSTING || idx == TAB_SWO) ? NK_MINIMIZED : NK_MAXIMIZED;
+    tab_states[idx] = (idx == TAB_SEMIHOSTING || idx == TAB_SERMON || idx == TAB_SWO) ? NK_MINIMIZED : NK_MAXIMIZED;
     tab_heights[idx] = 5 * ROW_HEIGHT;
     sprintf(key, "view%d", idx);
     ini_gets("Settings", key, "", cmdline, CMD_BUFSIZE, txtConfigFile);
@@ -3589,6 +3762,7 @@ int main(int argc, char *argv[])
   source_execline = 0;
   prev_clicked_line = -1;
   semihosting_lines = 0;
+  sermon_lines = 0;
   swo_lines = 0;
   watchseq = 0;
   trace_status = TRACESTAT_INIT_FAILED;
@@ -4031,6 +4205,8 @@ int main(int argc, char *argv[])
           curstate = STATE_EXEC_CMD;
           stateparam[0] = STATEPARAM_EXEC_RESTART;
           gdbmi_sethandled(0);
+          if (sermon_isopen())
+            sermon_clear(); /* erase any serial input that was received while starting up */
         }
         break;
       case STATE_EXEC_CMD:
@@ -4708,6 +4884,30 @@ int main(int argc, char *argv[])
                   save_settings(txtParamFile, txtEntryPoint, opt_tpwr,
                                 opt_connect_srst, opt_autodownload, txtSVDfile,
                                 &opt_swo);
+              } else if ((result = handle_serial_cmd(console_edit, port_sermon,&sermon_baud, opt_swo.metadata, sizearray(opt_swo.metadata))) != 0) {
+                if (result == 1) {
+                  if (sermon_isopen())
+                    sermon_close();
+                  sermon_open(port_sermon, sermon_baud);
+                  if (sermon_isopen()) {
+                    sermon_setmetadata(opt_swo.metadata);
+                    if (strlen(opt_swo.metadata) > 0) {
+                      ctf_parse_cleanup();
+                      ctf_decode_cleanup();
+                      ctf_error_notify(CTFERR_NONE, 0, NULL);
+                      if (!ctf_parse_init(opt_swo.metadata) || !ctf_parse_run())
+                        ctf_parse_cleanup();
+                    }
+                    serial_info_mode(NULL);
+                    tab_states[TAB_SERMON] = nk_true;  /* make sure the serial monitor view is open */
+                  } else {
+                    console_add("Failed to configure the port.\n", STRFLG_STATUS);
+                  }
+                } else if (result == 2 && sermon_isopen()) {
+                  sermon_close();
+                } else if (result == 3) {
+                  serial_info_mode(NULL);
+                }
               } else if ((result = handle_trace_cmd(console_edit, &opt_swo)) != 0) {
                 if (result == 1) {
                   monitor_cmd_active = 1; /* to silence output of scripts */
@@ -5078,6 +5278,7 @@ int main(int argc, char *argv[])
           nk_tree_state_pop(ctx);
         } /* watches */
 
+        /* semihosting */
         /* highlight tab text if new content arrives and the tab is closed */
         highlight = !tab_states[TAB_SEMIHOSTING] && stringlist_count(&semihosting_root) != semihosting_lines;
         if (highlight)
@@ -5117,6 +5318,76 @@ int main(int argc, char *argv[])
           nk_tree_state_pop(ctx);
         } /* semihosting (Target output) */
 
+        /* serial monitor view */
+        /* highlight tab text if new content arrives and the tab is closed */
+        highlight = !tab_states[TAB_SERMON] && sermon_countlines() != sermon_lines;
+        if (highlight)
+          nk_style_push_color(ctx,&ctx->style.tab.text, nk_rgba(255, 255, 160, 255));
+        result = nk_tree_state_push(ctx, NK_TREE_TAB, "Serial console", &tab_states[TAB_SERMON]);
+        if (highlight)
+          nk_style_pop_color(ctx);
+        if (result) {
+          nk_layout_row_dynamic(ctx, tab_heights[TAB_SERMON], 1);
+          bounds = nk_layout_widget_bounds(ctx);
+          nk_style_push_color(ctx, &ctx->style.window.fixed_background.data.color, nk_rgba(20, 29, 38, 225));
+          if (nk_group_begin(ctx, "serial", 0)) {
+            struct nk_user_font const *font = ctx->style.font;
+            int linecount = 0;
+            float lineheight = 0;
+            int textwidth, textlength;
+            const char *text;
+            sermon_rewind();
+            while ((text = sermon_next()) != NULL) {
+              nk_layout_row_begin(ctx, NK_STATIC, opt_fontsize, 1);
+              if (lineheight < 0.01) {
+                struct nk_rect rcline = nk_layout_widget_bounds(ctx);
+                lineheight = rcline.h;
+              }
+              textlength = strlen(text);
+              assert(font != NULL && font->width != NULL);
+              textwidth = (int)font->width(font->userdata, font->height, text, textlength) + 10;
+              nk_layout_row_push(ctx, textwidth);
+              nk_text(ctx, text, textlength, NK_TEXT_LEFT);
+              nk_layout_row_end(ctx);
+              linecount += 1;
+            }
+            if (!sermon_isopen()) {
+              struct nk_color clr = nk_rgb(255, 120, 135);
+              nk_layout_row_dynamic(ctx, opt_fontsize, 1);
+              nk_label_colored(ctx, "No port opened", NK_TEXT_LEFT, clr);
+              linecount += 1;
+            }
+            nk_group_end(ctx);
+            if (linecount != sermon_lines && lineheight > 0.01) {
+              /* scroll to end */
+              int widgetlines = (int)((bounds.h - 2 * ctx->style.window.padding.y) / lineheight);
+              sermon_scroll = (int)((linecount - widgetlines) * lineheight);
+              if (sermon_scroll < 0)
+                sermon_scroll = 0;
+              sermon_lines = linecount;
+            }
+            nk_group_set_scroll(ctx, "serial", 0, sermon_scroll);
+          }
+          nk_style_pop_color(ctx);
+          /* make view height resizeable */
+          nk_layout_row_dynamic(ctx, SEPARATOR_VER, 1);
+          bounds = nk_widget_bounds(ctx);
+          if (nk_input_is_mouse_hovering_rect(&ctx->input, bounds))
+            mouse_hover |= CURSOR_UPDOWN;
+          nk_symbol(ctx, NK_SYMBOL_CIRCLE_SOLID, NK_TEXT_ALIGN_CENTERED | NK_TEXT_ALIGN_MIDDLE | NK_SYMBOL_REPEAT(3));
+          if (nk_input_is_mouse_hovering_rect(&ctx->input, bounds) && nk_input_is_mouse_pressed(&ctx->input, NK_BUTTON_LEFT))
+            insplitter = SIZER_SERIAL; /* in serial-view sizer */
+          else if (insplitter != SPLITTER_NONE && !nk_input_is_mouse_down(&ctx->input, NK_BUTTON_LEFT))
+            insplitter = SPLITTER_NONE;
+          if (insplitter == SIZER_SERIAL) {
+            tab_heights[TAB_SERMON] += ctx->input.mouse.delta.y;
+            if (tab_heights[TAB_SERMON] < ROW_HEIGHT)
+              tab_heights[TAB_SERMON] = ROW_HEIGHT;
+          }
+          nk_tree_state_pop(ctx);
+        } /* serial output */
+
+        /* SWO trace output */
         /* highlight tab text if new content arrives and the tab is closed */
         highlight = !tab_states[TAB_SWO] && tracestring_count() != swo_lines;
         if (highlight)
@@ -5297,6 +5568,7 @@ int main(int argc, char *argv[])
   bmscript_clear();
   dwarf_cleanup(&dwarf_linetable,&dwarf_symboltable,&dwarf_filetable);
   tcpip_cleanup();
+  sermon_close();
   return exitcode;
 }
 

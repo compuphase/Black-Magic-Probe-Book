@@ -2,7 +2,7 @@
  * General purpose Black Magic Probe support routines, based on the GDB-RSP
  * serial interface.
  *
- * Copyright 2019-2020 CompuPhase
+ * Copyright 2019-2021 CompuPhase
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -20,6 +20,7 @@
 #define _BMP_SUPPORT_H
 
 #include <stdio.h>
+#include "rs232.h"
 
 #if defined __cplusplus
   extern "C" {
@@ -50,6 +51,7 @@ void bmp_setcallback(BMP_STATCALLBACK func);
 int bmp_connect(int probe, const char *ipaddress);
 int bmp_disconnect(void);
 int bmp_isopen(void);
+HCOM *bmp_comport(void);
 
 int bmp_checkversionstring(void);
 int bmp_is_ip_address(const char *address);

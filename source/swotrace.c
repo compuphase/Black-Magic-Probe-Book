@@ -54,7 +54,6 @@
 #endif
 
 #include "bmp-scan.h"
-#include "dwarf.h"
 #include "guidriver.h"
 #include "parsetsdl.h"
 #include "decodectf.h"

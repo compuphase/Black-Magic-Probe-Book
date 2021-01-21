@@ -3,7 +3,7 @@
  * Black Magic Probe. This utility is built with Nuklear for a cross-platform
  * GUI.
  *
- * Copyright 2019-2020 CompuPhase
+ * Copyright 2019-2021 CompuPhase
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -442,7 +442,7 @@ int main(int argc, char *argv[])
         bitrate = 100000;
       if (opt_init_target || opt_init_bmp) {
         /* open/reset the serial port/device if any initialization must be done */
-        if (rs232_isopen())
+        if (bmp_comport() != NULL)
           bmp_break();
         result = bmp_connect(probe, (probe == netprobe) ? txtIPaddr : NULL);
         if (result) /* bmp_connect() also opens the (virtual) serial port/device */

@@ -3,7 +3,7 @@
  * Black Magic Probe. The name stands for "Black Magic Serial Wire Viewer".
  * This utility is built with Nuklear for a cross-platform GUI.
  *
- * Copyright 2019-2020 CompuPhase
+ * Copyright 2019-2021 CompuPhase
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -36,7 +36,7 @@ AppIcon ICON "res/icon_trace.ico"
 #define VERSIONDESCRIPTION   "Serial Wire Trace Viewer\0"
 #define VERSIONCOMPANYNAME   "CompuPhase\0"
 #define VERSIONPRODUCTNAME   "bmtrace\0"
-#define VERSIONCOPYRIGHT     "Copyright \251 CompuPhase 2019-2020\0"
+#define VERSIONCOPYRIGHT     "Copyright \251 CompuPhase 2019-2021\0"
 
 VS_VERSION_INFO VERSIONINFO
 FILEVERSION    VERSION, REVISION, BUILD, 0

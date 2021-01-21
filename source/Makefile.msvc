@@ -65,9 +65,10 @@ LFLAGS_C  = $(L_DEBUG) /NOLOGO /SUBSYSTEM:console
 
 OBJLIST_BMDEBUG = bmdebug.obj bmp-scan.obj bmp-script.obj dwarf.obj elf.obj \
                   guidriver.obj minini.obj nuklear_mousepointer.obj nuklear_tooltip.obj \
-                  rs232.obj specialfolder.obj strlcpy.obj tcpip.obj usb-support.obj \
-                  svd-support.obj decodectf.obj parsetsdl.obj swotrace.obj \
-                  xmltractor.obj nuklear.obj nuklear_gdip.obj noc_file_dialog.obj
+                  rs232.obj serialmon.obj specialfolder.obj strlcpy.obj tcpip.obj \
+                  usb-support.obj svd-support.obj decodectf.obj parsetsdl.obj \
+                  swotrace.obj xmltractor.obj nuklear.obj nuklear_gdip.obj \
+                  noc_file_dialog.obj
 
 OBJLIST_BMFLASH = bmflash.obj bmp-scan.obj bmp-script.obj bmp-support.obj crc32.obj \
                   elf.obj gdb-rsp.obj guidriver.obj minIni.obj nuklear_mousepointer.obj \
@@ -132,6 +133,8 @@ nuklear_mousepointer.obj : nuklear_mousepointer.c
 nuklear_tooltip.obj : nuklear_tooltip.c
 
 rs232.obj : rs232.c
+
+serialmon.obj : serialmon.c
 
 specialfolder.obj : specialfolder.c
 
