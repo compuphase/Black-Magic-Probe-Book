@@ -24,7 +24,7 @@ Prerequisites are
 
 The development packages for these modules must be present. If you build glfw from source (as a static library), you can configure the path to the include files and the library in makefile.cfg. In particular, on some Linux distributions the library is called `glfw` rather than `glfw3`; in this case, create a `makefile.cfg` file in the same directory as `Makefile.linux` and add the following line to it:
 ```
-GLFW_LIBNAME := glfw3
+GLFW_LIBNAME := glfw
 ```
 (Again, see the top of `Makefile.linux` for other options.)
 ### Windows with MingW
