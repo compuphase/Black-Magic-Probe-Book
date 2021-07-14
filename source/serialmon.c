@@ -356,3 +356,22 @@ const char *sermon_getmetadata(void)
   return tdsl_metadata;
 }
 
+int sermon_save(const char *filename)
+{
+  FILE *fp = fopen(filename, "wt");
+  if (fp != NULL) {
+    int count = 0;
+    SERIALSTRING *item = sermon_root.next;
+    while (item != NULL) {
+      assert(item->text != NULL);
+      fprintf(fp, "%s\n", item->text);
+      item = item->next;
+      count++;
+    }
+    fclose(fp);
+    return count;
+  }
+
+  return -1;
+}
+

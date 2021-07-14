@@ -4,14 +4,15 @@
 
 bmdebug.obj : bmp-scan.h bmp-script.h dwarf.h guidriver.h nuklear.h \
 	nuklear_config.h noc_file_dialog.h nuklear_mousepointer.h \
-	nuklear_tooltip.h minIni.h minGlue.h specialfolder.h svd-support.h \
-	tcpip.h parsetsdl.h decodectf.h swotrace.h serialmon.h
+	nuklear_tooltip.h memdump.h minIni.h minGlue.h specialfolder.h \
+	svd-support.h tcpip.h parsetsdl.h decodectf.h swotrace.h serialmon.h
 bmp-scan.obj : bmp-scan.h tcpip.h
 bmp-script.obj : bmp-script.h specialfolder.h
 dwarf.obj : dwarf.h elf.h
 elf.obj : elf.h
 guidriver.obj : guidriver.h nuklear.h nuklear_config.h \
 	nuklear_mousepointer.h nuklear_gdip.h
+memdump.obj : memdump.h
 minini.obj : minIni.h minGlue.h
 nuklear_mousepointer.obj : nuklear_mousepointer.h
 nuklear_tooltip.obj : nuklear_tooltip.h nuklear.h nuklear_config.h
@@ -50,15 +51,16 @@ tracegen.obj : parsetsdl.h
 
 bmdebug.o : bmp-scan.h bmp-script.h dwarf.h guidriver.h nuklear.h \
 	nuklear_config.h noc_file_dialog.h nuklear_mousepointer.h \
-	nuklear_tooltip.h minIni.h minGlue.h specialfolder.h svd-support.h \
-	tcpip.h parsetsdl.h decodectf.h swotrace.h serialmon.h \
-	res/icon_debug_64.h
+	nuklear_tooltip.h memdump.h minIni.h minGlue.h specialfolder.h \
+	svd-support.h tcpip.h parsetsdl.h decodectf.h swotrace.h \
+	serialmon.h res/icon_debug_64.h
 bmp-scan.o : bmp-scan.h tcpip.h
 bmp-script.o : bmp-script.h specialfolder.h
 dwarf.o : dwarf.h elf.h
 elf.o : elf.h
 guidriver.o : guidriver.h nuklear.h nuklear_config.h \
 	nuklear_mousepointer.h findfont.h lodepng.h nuklear_glfw_gl2.h
+memdump.o : memdump.h
 minIni.o : minIni.h minGlue.h
 nuklear_tooltip.o : nuklear_tooltip.h nuklear.h nuklear_config.h
 nuklear_mousepointer.o : nuklear_mousepointer.h

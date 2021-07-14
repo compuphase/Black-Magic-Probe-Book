@@ -18,6 +18,8 @@
 #ifndef _SWOTRACE_H
 #define _SWOTRACE_H
 
+#include "nuklear.h"
+
 #define NUM_CHANNELS  32  /* number of SWO channels */
 
 enum {
@@ -37,6 +39,11 @@ enum {
   TRACESTATMSG_BMP,
   TRACESTATMSG_CTF,
 };
+
+typedef struct tagTRACEFILTER {
+  char *expr;
+  int enabled;
+} TRACEFILTER;
 
 void channel_set(int index, int enabled, const char *name, struct nk_color color);
 int  channel_getenabled(int index);
@@ -67,7 +74,7 @@ void   tracelog_statusmsg(int type, const char *msg, int code);
 void   tracelog_statusclear(void);
 float  tracelog_labelwidth(float rowheight);
 void   tracelog_widget(struct nk_context *ctx, const char *id, float rowheight, int markline,
-                       char **filters, nk_flags widget_flags);
+                       const TRACEFILTER *filters, nk_flags widget_flags);
 
 void   timeline_getconfig(double *spacing, unsigned long *scale, unsigned long *delta);
 void   timeline_setconfig(double spacing, unsigned long scale, unsigned long delta);

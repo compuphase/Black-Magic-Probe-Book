@@ -61,6 +61,7 @@
 #include "bmp-script.h"
 #include "dwarf.h"
 #include "guidriver.h"
+#include "memdump.h"
 #include "noc_file_dialog.h"
 #include "nuklear_mousepointer.h"
 #include "nuklear_tooltip.h"
@@ -370,7 +371,6 @@ static void semihosting_add(STRINGLIST *root, const char *text, unsigned short f
     }
   }
 }
-
 
 static const char *skip_string(const char *buffer)
 {
@@ -705,7 +705,7 @@ static int console_autocomplete(char *text, size_t textsize, const DWARF_SYMBOLL
     { "file", NULL, NULL },
     { "find", NULL, NULL },
     { "finish", "fin", NULL },
-    { "frame", NULL, NULL },
+    { "frame", "f", NULL },
     { "help", NULL, "break breakpoints data files keyboard monitor running serial stack status support trace user-defined" },
     { "info", NULL, "args breakpoints frame functions locals scope set sources stack variables vtbl" },
     { "list", NULL, "%func %var %file" },
@@ -715,15 +715,15 @@ static int console_autocomplete(char *text, size_t textsize, const DWARF_SYMBOLL
     { "print", "p", "%var %reg" },
     { "ptype", NULL, "%var" },
     { "quit", NULL, NULL },
-    { "reset", NULL, NULL },
+    { "reset", NULL, "hard load" },
     { "run", NULL, NULL },
-    { "serial", NULL, "clear disable enable info plain" },
+    { "serial", NULL, "clear disable enable info plain save" },
     { "set", NULL, "%var" },
     { "start", NULL, NULL },
     { "step", "s", NULL },
     { "target", NULL, "extended-remote remote" },
     { "tbreak", NULL, "%func %file" },
-    { "trace", NULL, "async auto bitrate channel clear disable enable info passive plain" },
+    { "trace", NULL, "async auto bitrate channel clear disable enable info passive plain save" },
     { "undisplay", NULL, NULL },
     { "until", "u", NULL },
     { "up", NULL, NULL },
@@ -925,6 +925,7 @@ static int console_autocomplete(char *text, size_t textsize, const DWARF_SYMBOLL
                   }
                 }
               }
+            //??? check for %path to autocomplete path names
             } else if (strncmp(word, ptr, len)== 0) {
               if (first == NULL)
                 first = ptr;
@@ -1773,6 +1774,13 @@ typedef struct tagTASK {
   HANDLE prStdErr, pwStdErr;
 } TASK;
 
+void task_init(TASK *task)
+{
+  assert(task != NULL);
+  memset(task, -1, sizeof(TASK));
+  task->hProcess = task->hThread = INVALID_HANDLE_VALUE;
+}
+
 int task_launch(const char *program, const char *options, TASK *task)
 {
   STARTUPINFO startupInfo;
@@ -1858,7 +1866,7 @@ int task_close(TASK *task)
   if (task->hProcess != INVALID_HANDLE_VALUE)
     CloseHandle(task->hProcess);
 
-  memset(task, -1, sizeof(TASK));
+  task_init(task);
   return (int)dwExitCode;
 }
 
@@ -1965,6 +1973,12 @@ typedef struct tagTASK {
 
 int task_isrunning(TASK *task);
 
+void task_init(TASK *task)
+{
+  assert(task != NULL);
+  memset(task, 0, sizeof(TASK));
+}
+
 int task_launch(const char *program, const char *options, TASK *task)
 {
   assert(task != NULL);
@@ -2031,7 +2045,7 @@ int task_close(TASK *task)
   close(task->pStdOut[0]);
   close(task->pStdErr[0]);
 
-  memset(task, 0, sizeof(TASK));
+  task_init(task);
   return exitcode;
 }
 
@@ -2585,6 +2599,7 @@ enum {
   STATE_LIST_BREAKPOINTS,
   STATE_LIST_LOCALS,
   STATE_LIST_WATCHES,
+  STATE_VIEWMEMORY,
   STATE_BREAK_TOGGLE,
   STATE_WATCH_TOGGLE,
   STATE_WATCH_FORMAT,
@@ -2617,6 +2632,7 @@ enum {
 #define REFRESH_BREAKPOINTS 0x0001
 #define REFRESH_LOCALS      0x0002
 #define REFRESH_WATCHES     0x0004
+#define REFRESH_MEMORY      0x0008
 #define REFRESH_CONSOLE     0x8000  /* input comes from a console, check for extra "done" result */
 
 #define MSG_BMP_NOT_FOUND   0x0001
@@ -2730,6 +2746,8 @@ static int handle_help_cmd(char *command, STRINGLIST *textroot, int *active)
       stringlist_add(textroot, "Front end topics.", 0);
       stringlist_add(textroot, "", 0);
       stringlist_add(textroot, "keyboard -- list special keys.", 0);
+      stringlist_add(textroot, "serial -- configure the serial monitor.", 0);
+      stringlist_add(textroot, "trace -- configure SWO tracing.", 0);
       stringlist_add(textroot, "", 0);
       /* drop to the default "return 0", so that GDB's help follows */
     } else if (TERM_EQU(cmdptr, "find", 4)) {
@@ -2757,8 +2775,14 @@ static int handle_help_cmd(char *command, STRINGLIST *textroot, int *active)
       stringlist_add(textroot, "Ctrl-F2 -- reset program, same as \"start\".", 0);
       stringlist_add(textroot, "Ctrl-F5 -- interrupt program (stop).", 0);
       return 1;
+    } else if (TERM_EQU(cmdptr, "reset", 5)) {
+      stringlist_add(textroot, "Restart debugging.", 0);
+      stringlist_add(textroot, "", 0);
+      stringlist_add(textroot, "reset -- restart the target program; keep breakpoints and variable watches.", 0);
+      stringlist_add(textroot, "reset hard -- restart both the debugger and the target program.", 0);
+      return 1;
     } else if (TERM_EQU(cmdptr, "serial", 6)) {
-      stringlist_add(textroot, "Configure a serial monitor.", 0);
+      stringlist_add(textroot, "Configure the serial monitor.", 0);
       stringlist_add(textroot, "", 0);
       stringlist_add(textroot, "serial [port] [bitrate] -- open the port at the bitrate.", 0);
       stringlist_add(textroot, "    If no port is specified, the secondary UART of the Black Magic Probe is used.", 0);
@@ -2770,6 +2794,7 @@ static int handle_help_cmd(char *command, STRINGLIST *textroot, int *active)
       stringlist_add(textroot, "serial plain -- disable CTF decoding, display received data as text.", 0);
       stringlist_add(textroot, "", 0);
       stringlist_add(textroot, "serial clear -- clear the serial monitor view (delete contents).", 0);
+      stringlist_add(textroot, "serial save [filename] -- save the contents in the serial monitor to a file.", 0);
     } else if (TERM_EQU(cmdptr, "trace", 5) || TERM_EQU(cmdptr, "tracepoint", 10) || TERM_EQU(cmdptr, "tracepoints", 11)) {
       stringlist_add(textroot, "Configure SWO tracing.", 0);
       stringlist_add(textroot, "", 0);
@@ -2795,6 +2820,9 @@ static int handle_help_cmd(char *command, STRINGLIST *textroot, int *active)
       stringlist_add(textroot, "trace channel [index] #[colour] -- set the colour of a channel.", 0);
       stringlist_add(textroot, "    The option \"channel\" can be abbreviated to \"chan\" or \"ch\".", 0);
       stringlist_add(textroot, "    The parameter [index] may be a range, like 0-7 for the first eight channels.", 0);
+      stringlist_add(textroot, "", 0);
+      stringlist_add(textroot, "trace clear -- clear the trace view (delete contents).", 0);
+      stringlist_add(textroot, "trace save [filename] -- save the contents in the trace view to a file.", 0);
       return 1;
     } else if (TERM_EQU(cmdptr, "mon", 3)) {
       memcpy(command, "mon help", 8);       /* translate "help mon" -> "mon help" */
@@ -2938,19 +2966,45 @@ static int handle_display_cmd(const char *command, int *param, char *symbol, siz
   return 0;
 }
 
-static int handle_file_cmd(const char *command, char *filename, size_t namelength)
+#define RESET_FILE    1 /* equivalent to the GDB "file" command */
+#define HARD_RESET    2 /* stop & restart GDB */
+#define LOAD_CUR_ELF  3 /* equivalent to the GDB "load" command, plus running to the entry point */
+#define LOAD_FILE_ELF 4 /* equivalent to the GDB "load" command with a specific ELF file, plus running to the entry point */
+#define RESET_LOAD    5 /* equivalent to the GDB "file" command, but forcing ELF file download */
+
+static int handle_file_load_reset(const char *command, char *filename, size_t namelength)
 {
   assert(command != NULL);
   assert(filename != NULL && namelength > 0);
   command = skipwhite(command);
   if (TERM_EQU(command, "file", 4)) {
     const char *ptr = strchr(command, ' ');
-    assert(ptr != NULL);
-    strlcpy(filename, skipwhite(ptr), namelength);
-    translate_path(filename, 1);
-    return 1;
+    if (ptr != NULL) {
+      strlcpy(filename, skipwhite(ptr), namelength);
+      translate_path(filename, 1);
+    }
+    return RESET_FILE;
   } else if (TERM_EQU(command, "reset", 5)) {
-    return 1; /* interpret "reset" as "file ..." for the current ELF file */
+    /* interpret "reset" as "file ..." for the current ELF file, but "reset hard"
+       does a full reset (GDB is stopped and restarted) */
+    const char *ptr = strchr(command, ' ');
+    if (ptr != NULL) {
+      ptr = skipwhite(ptr);
+      if (TERM_EQU(ptr, "hard", 4))
+        return HARD_RESET;
+      if (TERM_EQU(ptr, "load", 4))
+        return RESET_LOAD;
+    }
+    return RESET_FILE;
+  } else if (TERM_EQU(command, "load", 4)) {
+    /* load has an optional filename */
+    const char *ptr = strchr(command, ' ');
+    if (ptr != NULL) {
+      strlcpy(filename, skipwhite(ptr), namelength);
+      translate_path(filename, 1);
+      return LOAD_FILE_ELF;
+    }
+    return LOAD_CUR_ELF;
   }
   return 0;
 }
@@ -3018,6 +3072,71 @@ static int handle_find_cmd(const char *command)
     return 1;
   }
   return 0;
+}
+
+/** handle_x_command()
+ *  \param command    [in] command string.
+ *  \param memdump    [out] the various settings, see below.
+ *
+ *  \note * expr      numeric address, or expression that resolves to an address
+ *        * count     count of elements
+ *        * fmt       'x', 'd', 'u', 'o', 't', 'f', 'c', 'a', 'i', 's'
+ *        * size      1, 2, 4, 8
+ */
+static int handle_x_cmd(const char *command, MEMDUMP *memdump)
+{
+  char *ptr;
+
+  assert(command != NULL);
+  command = skipwhite(command);
+  if (!TERM_EQU(command, "x", 1))
+    return 0;
+
+  assert(memdump != NULL);
+  ptr = (char*)skipwhite(command + 1);
+  if (*ptr == '/') {
+    ptr += 1;
+    while (*ptr > ' ') {
+      if (isdigit(*ptr)) {
+        memdump->count = strtol(ptr, &ptr, 10);
+      } else if (*ptr == 'x' || *ptr == 'd' || *ptr == 'u' || *ptr == 'o'
+                 || *ptr == 't' || *ptr == 'f' || *ptr == 'c' || *ptr == 'a'
+                 || *ptr == 'i' || *ptr == 's') {
+        memdump->fmt = *ptr;
+        ptr += 1;
+      } else if (*ptr == 'b') {
+        memdump->size = 1;
+        ptr += 1;
+      } else if (*ptr == 'h') {
+        memdump->size = 2;
+        ptr += 1;
+      } else if (*ptr == 'w') {
+        memdump->size = 4;
+        ptr += 1;
+      } else if (*ptr == 'g') {
+        memdump->size = 8;
+        ptr += 1;
+      }
+    }
+  }
+
+  /* get address expression */
+  ptr = (char*)skipwhite(ptr);
+  if (*ptr != '\0') {
+    if (memdump->expr != NULL)
+      free(memdump->expr);
+    memdump->expr = strdup(ptr);
+  }
+
+  if (!memdump_validate(memdump)) {
+    console_add("Missing address\n", STRFLG_ERROR);
+    return 1; /* still say return 1, because the command was recognized */
+  }
+
+  /* free memory of the previous dump */
+  memdump_cleanup(memdump);
+
+  return 1;
 }
 
 static int is_monitor_cmd(const char *command)
@@ -3468,6 +3587,22 @@ static int handle_serial_cmd(const char *command, char *port, int *baud,
     sermon_clear();
     return 4;
   }
+  if (TERM_EQU(ptr, "save", 4)) {
+    ptr = skipwhite(ptr + 4);
+    if (*ptr != '\0') {
+      int count = sermon_save(ptr);
+      if (count >= 0) {
+        char message[100];
+        sprintf(message,"%d lines saved\n", count);
+        console_add(message, STRFLG_STATUS);
+      } else {
+        console_add("Failed to save to file\n", STRFLG_ERROR);
+      }
+    } else {
+      console_add("Missing filename\n", STRFLG_ERROR);
+    }
+    return 4;
+  }
   if (TERM_EQU(ptr, "plain", 5) && tsdlfile != NULL && tsdlmaxlen > 0)
     tsdlfile[0] = '\0'; /* reset to plain mode (disable TSDL) */
 
@@ -3543,8 +3678,8 @@ static void usage(void)
 int main(int argc, char *argv[])
 {
   #define RESETSTATE(state) (prevstate = -1, curstate = (state))
-  enum { TAB_CONFIGURATION, TAB_BREAKPOINTS, TAB_WATCHES, TAB_SEMIHOSTING, TAB_SERMON, TAB_SWO, /* --- */ TAB_COUNT };
-  enum { SPLITTER_NONE, SPLITTER_VERTICAL, SPLITTER_HORIZONTAL, SIZER_SEMIHOSTING, SIZER_SERIAL, SIZER_SWO };
+  enum { TAB_CONFIGURATION, TAB_BREAKPOINTS, TAB_WATCHES, TAB_MEMORY, TAB_SEMIHOSTING, TAB_SERMON, TAB_SWO, /* --- */ TAB_COUNT };
+  enum { SPLITTER_NONE, SPLITTER_VERTICAL, SPLITTER_HORIZONTAL, SIZER_MEMORY, SIZER_SEMIHOSTING, SIZER_SERIAL, SIZER_SWO };
   enum { POPUP_NONE, POPUP_HELP, POPUP_INFO };
   #define CMD_BUFSIZE       2048
 
@@ -3570,6 +3705,7 @@ int main(int argc, char *argv[])
   int opt_fontsize = FONT_HEIGHT;
   char opt_fontstd[64] = "", opt_fontmono[64] = "";
   SWOSETTINGS opt_swo;
+  MEMDUMP memdump;
   float splitter_hor = 0.75, splitter_ver = 0.75;
   char console_edit[128] = "", watch_edit[128] = "", help_edit[128] = "";
   STRINGLIST consoleedit_root = { NULL, NULL, 0 }, *consoleedit_next, *console_mark;
@@ -3579,7 +3715,8 @@ int main(int argc, char *argv[])
   char statesymbol[128], ttipvalue[256];
   int curstate, prevstate, nextstate, stateparam[3];
   int refreshflags, trace_status, warn_source_tstamps;
-  int atprompt, insplitter, console_activate, cont_is_run, exitcode;
+  int atprompt, insplitter, console_activate, exitcode;
+  int cont_is_run, force_download;
   int monitor_cmd_active = 0, popup_active = POPUP_NONE;
   int idx, result, highlight;
   unsigned char trace_endpoint = BMP_EP_TRACE;
@@ -3619,7 +3756,7 @@ int main(int argc, char *argv[])
   for (idx = 0; idx < TAB_COUNT; idx++) {
     char key[32];
     int opened, size;
-    tab_states[idx] = (idx == TAB_SEMIHOSTING || idx == TAB_SERMON || idx == TAB_SWO) ? NK_MINIMIZED : NK_MAXIMIZED;
+    tab_states[idx] = (idx == TAB_MEMORY || idx == TAB_SEMIHOSTING || idx == TAB_SERMON || idx == TAB_SWO) ? NK_MINIMIZED : NK_MAXIMIZED;
     tab_heights[idx] = 5 * ROW_HEIGHT;
     sprintf(key, "view%d", idx);
     ini_gets("Settings", key, "", cmdline, CMD_BUFSIZE, txtConfigFile);
@@ -3648,6 +3785,7 @@ int main(int argc, char *argv[])
 
   txtFilename[0] = '\0';
   txtParamFile[0] = '\0';
+  txtSVDfile[0] = '\0';
   strcpy(txtEntryPoint, "main");
   for (idx = 1; idx < argc; idx++) {
     const char *ptr;
@@ -3722,6 +3860,13 @@ int main(int argc, char *argv[])
   }
   if (opt_swo.mode == SWOMODE_NONE || !opt_swo.enabled)
     tracelog_statusmsg(TRACESTATMSG_BMP, "Disabled", -1);
+  if (strlen(opt_swo.metadata) > 0) {
+    ctf_parse_cleanup();
+    ctf_decode_cleanup();
+    ctf_error_notify(CTFERR_NONE, 0, NULL);
+    if (!ctf_parse_init(opt_swo.metadata) || !ctf_parse_run())
+      ctf_parse_cleanup();
+  }
 
   /* collect debug probes, connect to the selected one */
   usbprobes = get_bmp_count();
@@ -3745,9 +3890,10 @@ int main(int argc, char *argv[])
     probe = 0;
   tcpip_init();
 
-  memset(&task, 0, sizeof task);
+  task_init(&task);
   insplitter = SPLITTER_NONE;
   RESETSTATE(STATE_INIT);
+  memdump_init(&memdump);
   prevstate = nextstate = -1;
   refreshflags = 0;
   console_hiddenflags = opt_allmsg ? 0 : STRFLG_NOTICE | STRFLG_RESULT | STRFLG_EXEC | STRFLG_MI_INPUT | STRFLG_TARGET | STRFLG_SCRIPT;
@@ -3755,6 +3901,7 @@ int main(int argc, char *argv[])
   console_activate = 1;
   consoleedit_next = NULL;
   cont_is_run = 0;
+  force_download = 0;
   monitor_cmd_active = 0;
   warn_source_tstamps = 0;
   source_cursorline = 0;
@@ -3777,6 +3924,9 @@ int main(int argc, char *argv[])
     if (!is_idle()) {
       switch (curstate) {
       case STATE_INIT:
+        /* kill GDB if it is running */
+        if (task_isrunning(&task))
+          task_close(&task);
         curstate = STATE_GDB_TASK;
         break;
       case STATE_GDB_TASK:
@@ -4092,7 +4242,7 @@ int main(int argc, char *argv[])
             console_replaceflags = STRFLG_LOG;  /* move LOG to SCRIPT, to hide script output by default */
             console_xlateflags = STRFLG_SCRIPT;
           } else {
-            curstate = STATE_VERIFY;
+            curstate = force_download ? STATE_DOWNLOAD : STATE_VERIFY;
           }
         } else if (gdbmi_isresult() != NULL) {
           /* run next line from the script (on the end of the script, move to
@@ -4102,7 +4252,7 @@ int main(int argc, char *argv[])
             atprompt = 0;
           } else {
             console_replaceflags = console_xlateflags = 0;
-            curstate = STATE_VERIFY;
+            curstate = force_download ? STATE_DOWNLOAD : STATE_VERIFY;
           }
           gdbmi_sethandled(0);
         }
@@ -4136,7 +4286,7 @@ int main(int argc, char *argv[])
         }
         break;
       case STATE_DOWNLOAD:
-        if (!opt_autodownload) {
+        if (!opt_autodownload && !force_download) {
           curstate = STATE_CHECK_MAIN;  /* skip this step if download is disabled */
           break;
         }
@@ -4146,6 +4296,7 @@ int main(int argc, char *argv[])
           task_stdin(&task, "-target-download\n");
           atprompt = 0;
           prevstate = curstate;
+          force_download = 0;
         } else if (gdbmi_isresult() != NULL) {
           STRINGLIST *item = stringlist_getlast(&consolestring_root, STRFLG_RESULT, STRFLG_HANDLED);
           assert(item != NULL);
@@ -4253,6 +4404,8 @@ int main(int argc, char *argv[])
           source_cursorline = source_execline;
           curstate = STATE_STOPPED;
           refreshflags = REFRESH_LOCALS | REFRESH_WATCHES;
+          if (memdump.count > 0 && memdump.size > 0 && tab_states[TAB_MEMORY] == NK_MAXIMIZED)
+            refreshflags |= REFRESH_MEMORY; /* only refresh memory format & count is set and if memory view is open */
         }
         break;
       case STATE_STOPPED:
@@ -4267,6 +4420,8 @@ int main(int argc, char *argv[])
           RESETSTATE(STATE_LIST_BREAKPOINTS);
         } else if (refreshflags & REFRESH_WATCHES) {
           RESETSTATE(STATE_LIST_WATCHES);
+        } else if (refreshflags & REFRESH_MEMORY) {
+          RESETSTATE(STATE_VIEWMEMORY);
         } else if (check_running()) {
           RESETSTATE(STATE_RUNNING);
         }
@@ -4283,13 +4438,13 @@ int main(int argc, char *argv[])
           atprompt = 0;
           prevstate = curstate;
         } else if (gdbmi_isresult() != NULL) {
-          if (!breakpoint_parse(gdbmi_isresult()) && (refreshflags & REFRESH_CONSOLE)) {
-            refreshflags &= ~REFRESH_CONSOLE;
-            gdbmi_sethandled(0);
-          } else {
+          if (breakpoint_parse(gdbmi_isresult()) && (refreshflags & REFRESH_CONSOLE)) {
             refreshflags &= ~(REFRESH_BREAKPOINTS | REFRESH_CONSOLE);
             curstate = STATE_STOPPED;
             gdbmi_sethandled(1);
+          } else {
+            refreshflags &= ~REFRESH_CONSOLE;
+            gdbmi_sethandled(0);
           }
         }
         break;
@@ -4308,6 +4463,30 @@ int main(int argc, char *argv[])
           curstate = STATE_STOPPED;
           watch_update(gdbmi_isresult());
           gdbmi_sethandled(0);
+        }
+        break;
+      case STATE_VIEWMEMORY:
+        if (!atprompt)
+          break;
+        if (memdump.count == 0 && memdump.size == 0) {
+          curstate = STATE_STOPPED;
+          break;
+        }
+        if (prevstate != curstate) {
+          assert(memdump.expr != NULL && strlen(memdump.expr) > 0);
+          sprintf(cmdline, "-data-read-memory \"%s\" %c %d 1 %d\n",
+                  memdump.expr, memdump.fmt, memdump.size, memdump.count);
+          task_stdin(&task, cmdline);
+          atprompt = 0;
+          prevstate = curstate;
+        } else if (gdbmi_isresult() != NULL) {
+          if (memdump_parse(gdbmi_isresult(), &memdump)) {
+            refreshflags &= ~REFRESH_MEMORY;
+            curstate = STATE_STOPPED;
+            gdbmi_sethandled(1);
+          } else {
+            gdbmi_sethandled(0);
+          }
         }
         break;
       case STATE_BREAK_TOGGLE:
@@ -4694,9 +4873,13 @@ int main(int argc, char *argv[])
           nk_layout_row_begin(ctx, NK_STATIC, ROW_HEIGHT, 7);
           nk_layout_row_push(ctx, BUTTON_WIDTH);
           bounds = nk_widget_bounds(ctx);
-          if (nk_button_label(ctx, "reset") || nk_input_is_key_pressed(&ctx->input, NK_KEY_CTRL_F2))
+          if (nk_button_label(ctx, "reset") || nk_input_is_key_pressed(&ctx->input, NK_KEY_CTRL_F2)) {
+            if (strlen(txtFilename) > 0 && access(txtFilename, 0) == 0)
+              save_settings(txtParamFile, txtEntryPoint, opt_tpwr, opt_connect_srst,
+                            opt_autodownload, txtSVDfile, &opt_swo);
             RESETSTATE(STATE_FILE);
-          tooltip(ctx, bounds, " Reload and restart the program (F2)", &rc_canvas);
+          }
+          tooltip(ctx, bounds, " Reload and restart the program (Ctrl+F2)", &rc_canvas);
           nk_layout_row_push(ctx, BUTTON_WIDTH);
           bounds = nk_widget_bounds(ctx);
           if (curstate == STATE_RUNNING) {
@@ -4874,9 +5057,19 @@ int main(int argc, char *argv[])
               /* some commands are handled internally (fully or partially) */
               if (handle_display_cmd(console_edit, stateparam, statesymbol, sizearray(statesymbol))) {
                 RESETSTATE(STATE_WATCH_TOGGLE);
-                tab_states[TAB_WATCHES] = nk_true; /* make sure the watch view to open */
-              } else if (handle_file_cmd(console_edit, txtFilename, sizearray(txtFilename))) {
-                RESETSTATE(STATE_FILE);
+                tab_states[TAB_WATCHES] = NK_MAXIMIZED; /* make sure the watch view to open */
+              } else if ((result = handle_file_load_reset(console_edit, txtFilename, sizearray(txtFilename))) != 0) {
+                force_download = 0;
+                if (result == HARD_RESET) {
+                  RESETSTATE(STATE_INIT);
+                } else if (result == LOAD_CUR_ELF) {
+                  force_download = 1;
+                  RESETSTATE(STATE_MEMACCESS_1);
+                } else {
+                  if (result == LOAD_FILE_ELF || result == RESET_LOAD)
+                    force_download = 1;
+                  RESETSTATE(STATE_FILE);
+                }
                 /* save target-specific settings in the parameter file before
                    switching to the new file (new options are loaded in the
                    STATE_FILE case) */
@@ -4899,7 +5092,7 @@ int main(int argc, char *argv[])
                         ctf_parse_cleanup();
                     }
                     serial_info_mode(NULL);
-                    tab_states[TAB_SERMON] = nk_true;  /* make sure the serial monitor view is open */
+                    tab_states[TAB_SERMON] = NK_MAXIMIZED;  /* make sure the serial monitor view is open */
                   } else {
                     console_add("Failed to configure the port.\n", STRFLG_STATUS);
                   }
@@ -4921,7 +5114,17 @@ int main(int argc, char *argv[])
                 } else if (result == 3) {
                   trace_info_mode(&opt_swo, 1, NULL);
                 }
-                tab_states[TAB_SWO] = nk_true;  /* make sure the SWO tracing view is open */
+                tab_states[TAB_SWO] = NK_MAXIMIZED;  /* make sure the SWO tracing view is open */
+              } else if (handle_x_cmd(console_edit, &memdump)) {
+                if (memdump.count > 0 && memdump.size > 0) {
+                  /* if in stopped state, perform the memory view command right
+                     away, otherwise make sure it is scheduled */
+                  if (curstate == STATE_STOPPED)
+                    RESETSTATE(STATE_VIEWMEMORY);
+                  else
+                    refreshflags |= REFRESH_MEMORY;
+                  tab_states[TAB_MEMORY] = NK_MAXIMIZED;  /* make sure the memory dump view is open */
+                }
               } else if (!handle_list_cmd(console_edit, &dwarf_symboltable, &dwarf_filetable)
                          && !handle_find_cmd(console_edit)
                          && !handle_help_cmd(console_edit, &helptext_root, &popup_active)
@@ -5096,7 +5299,7 @@ int main(int argc, char *argv[])
           nk_label(ctx, "SVD", NK_TEXT_LEFT);
           nk_layout_row_push(ctx, edtwidth);
           bounds = nk_widget_bounds(ctx);
-          nk_edit_string_zero_terminated(ctx, NK_EDIT_FIELD | NK_EDIT_READ_ONLY, basename, sizearray(basename), nk_filter_ascii);
+          result = nk_edit_string_zero_terminated(ctx, NK_EDIT_FIELD | NK_EDIT_SIG_ENTER, basename, sizearray(basename), nk_filter_ascii);
           tooltip(ctx, bounds, txtSVDfile, &rc_canvas);
           nk_layout_row_push(ctx, BROWSEBTN_WIDTH);
           if (nk_button_symbol(ctx, NK_SYMBOL_TRIPLE_DOT)) {
@@ -5277,6 +5480,45 @@ int main(int argc, char *argv[])
           }
           nk_tree_state_pop(ctx);
         } /* watches */
+
+        /* memory view */
+        result = tab_states[TAB_MEMORY];  /* save old state */
+        if (nk_tree_state_push(ctx, NK_TREE_TAB, "Memory", &tab_states[TAB_MEMORY])) {
+          /* if previous state for the memory was closed, force an update of the memory view */
+          if (result == NK_MINIMIZED) {
+            /* if in stopped state, perform the memory view command right away,
+               otherwise make sure it is scheduled */
+            if (curstate == STATE_STOPPED)
+              RESETSTATE(STATE_VIEWMEMORY);
+            else
+              refreshflags |= REFRESH_MEMORY;
+          }
+          if (memdump.data != NULL) {
+            memdump_widget(ctx, &memdump, tab_heights[TAB_MEMORY], ROW_HEIGHT);
+            /* make view height resizeable */
+            nk_layout_row_dynamic(ctx, SEPARATOR_VER, 1);
+            bounds = nk_widget_bounds(ctx);
+            if (nk_input_is_mouse_hovering_rect(&ctx->input, bounds))
+              mouse_hover |= CURSOR_UPDOWN;
+            nk_symbol(ctx, NK_SYMBOL_CIRCLE_SOLID, NK_TEXT_ALIGN_CENTERED | NK_TEXT_ALIGN_MIDDLE | NK_SYMBOL_REPEAT(3));
+            if (nk_input_is_mouse_hovering_rect(&ctx->input, bounds) && nk_input_is_mouse_pressed(&ctx->input, NK_BUTTON_LEFT))
+              insplitter = SIZER_MEMORY; /* in memory-dump sizer */
+            else if (insplitter != SPLITTER_NONE && !nk_input_is_mouse_down(&ctx->input, NK_BUTTON_LEFT))
+              insplitter = SPLITTER_NONE;
+            if (insplitter == SIZER_MEMORY) {
+              tab_heights[TAB_MEMORY] += ctx->input.mouse.delta.y;
+              if (tab_heights[TAB_MEMORY] < ROW_HEIGHT)
+                tab_heights[TAB_MEMORY] = ROW_HEIGHT;
+            }
+          } else {
+            nk_layout_row_dynamic(ctx, ROW_HEIGHT, 1);
+            if (memdump.message != NULL)
+              nk_label_colored(ctx, memdump.message, NK_TEXT_ALIGN_CENTERED | NK_TEXT_ALIGN_MIDDLE, nk_rgb(255, 100, 128));
+            else
+              nk_label(ctx, "Use \"x\" command to view memory", NK_TEXT_ALIGN_CENTERED | NK_TEXT_ALIGN_MIDDLE);
+          }
+          nk_tree_state_pop(ctx);
+        }
 
         /* semihosting */
         /* highlight tab text if new content arrives and the tab is closed */
@@ -5563,6 +5805,7 @@ int main(int argc, char *argv[])
   stringlist_clear(&semihosting_root);
   breakpoint_clear();
   svd_clear();
+  memdump_cleanup(&memdump);
   console_clear();
   sources_clear(nk_true);
   bmscript_clear();

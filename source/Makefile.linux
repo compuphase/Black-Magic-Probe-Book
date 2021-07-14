@@ -74,23 +74,24 @@ endif
 # -------------------------------------------------------------
 
 OBJLIST_BMDEBUG = bmdebug.o bmp-scan.o bmp-script.o dwarf.o elf.o \
-                  guidriver.o minIni.o nuklear_tooltip.o nuklear_mousepointer.o \
-                  rs232.o serialmon.o specialfolder.o tcpip.o svd-support.o \
-                  decodectf.o parsetsdl.o swotrace.o xmltractor.o \
+                  guidriver.o memdump.o minIni.o nuklear_mousepointer.o \
+                  nuklear_tooltip.o rs232.o serialmon.o specialfolder.o \
+                  svd-support.o swotrace.o tcpip.o xmltractor.o \
+                  decodectf.o parsetsdl.o \
                   nuklear.o nuklear_glfw_gl2.o noc_file_dialog.o \
                   findfont.o lodepng.o
 
 OBJLIST_BMFLASH = bmflash.o bmp-scan.o bmp-script.o bmp-support.o crc32.o \
-                  elf.o gdb-rsp.o guidriver.o minIni.o nuklear_tooltip.o \
-                  nuklear_mousepointer.o rs232.o specialfolder.o tcpip.o xmltractor.o \
+                  elf.o gdb-rsp.o guidriver.o minIni.o nuklear_mousepointer.o \
+                  nuklear_tooltip.o rs232.o specialfolder.o tcpip.o xmltractor.o \
                   nuklear.o nuklear_glfw_gl2.o noc_file_dialog.o \
                   findfont.o lodepng.o
 
 OBJLIST_BMTRACE = bmtrace.o bmp-scan.o bmp-script.o bmp-support.o crc32.o \
                   dwarf.o elf.o gdb-rsp.o guidriver.o minIni.o \
-                  nuklear_mousepointer.o nuklear_tooltip.o rs232.o specialfolder.o \
-                  tcpip.o xmltractor.o \
-                  decodectf.o parsetsdl.o swotrace.o \
+                  nuklear_mousepointer.o nuklear_tooltip.o rs232.o \
+                  specialfolder.o swotrace.o tcpip.o \
+                  xmltractor.o decodectf.o parsetsdl.o \
                   nuklear.o nuklear_glfw_gl2.o noc_file_dialog.o \
                   findfont.o lodepng.o
 
@@ -127,6 +128,8 @@ bmp-support.o : bmp-support.c
 
 crc32.o : crc32.c
 
+decodectf.ob : decodectf.c
+
 dwarf.o : dwarf.c
 
 elf.o : elf.c
@@ -141,11 +144,19 @@ guidriver.o : guidriver.c
 
 lodepng.o : lodepng.c
 
+memdump.o : memdump.c
+
 minIni.o : minIni.c
+
+noc_file_dialog.o : CFLAGS += -DNOC_FILE_DIALOG_GTK
+noc_file_dialog.o : INCLUDE += `pkg-config --cflags gtk+-3.0`
+noc_file_dialog.o : noc_file_dialog.c
 
 nuklear_mousepointer.o : nuklear_mousepointer.c
 
 nuklear_tooltip.o : nuklear_tooltip.c
+
+parsetsdl.o : parsetsdl.c
 
 rs232.o : rs232.c
 
@@ -162,14 +173,6 @@ tcpip.o : tcpip.c
 tracegen.o : tracegen.c
 
 xmltractor.o : xmltractor.c
-
-decodectf.o : decodectf.c
-
-parsetsdl.o : parsetsdl.c
-
-noc_file_dialog.o : CFLAGS += -DNOC_FILE_DIALOG_GTK
-noc_file_dialog.o : INCLUDE += `pkg-config --cflags gtk+-3.0`
-noc_file_dialog.o : noc_file_dialog.c
 
 nuklear.o : nuklear.c
 

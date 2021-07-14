@@ -752,7 +752,7 @@ int main(int argc, char *argv[])
         int arch;
         result = bmp_attach(opt_tpwr, opt_connect_srst, mcufamily, sizearray(mcufamily), NULL, 0);
         for (arch = 0; arch < sizearray(architectures); arch++)
-          if (stricmp(architectures[arch], mcufamily) == 0)
+          if (architecture_match(architectures[arch], mcufamily))
             break;
         if (arch >= sizearray(architectures))
           arch = 0;
@@ -761,6 +761,8 @@ int main(int argc, char *argv[])
           sprintf(msg, "^3Detected MCU family %s (check options)\n", architectures[arch]);
           log_addstring(msg);
         }
+        if (bmp_flashtotal() == 0)
+          result = 0; /* no use downloading firmware to a chip that has no Flash */
       }
       curstate = result ? STATE_PRE_DOWNLOAD : STATE_IDLE;
       waitidle = 0;
@@ -990,7 +992,7 @@ int main(int argc, char *argv[])
           opt_connect_srst = ini_getl("Settings", "connect-srst", 0, txtParamFile);
           ini_gets("Flash", "architecture", "", field, sizearray(field), txtParamFile);
           for (opt_architecture = 0; opt_architecture < sizearray(architectures); opt_architecture++)
-            if (stricmp(architectures[opt_architecture], field) == 0)
+            if (architecture_match(architectures[opt_architecture], field))
               break;
           if (opt_architecture >= sizearray(architectures))
             opt_architecture = 0;

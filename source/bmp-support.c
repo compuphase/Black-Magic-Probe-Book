@@ -78,6 +78,16 @@ static int notice(int code, const char *fmt, ...)
   return 0;
 }
 
+unsigned long bmp_flashtotal(void)
+{
+  int i;
+  long total = 0;
+
+  for (i = 0; i < FlashRgnCount; i++)
+    total += FlashRgn[i].size;
+  return total;
+}
+
 /** bmp_setcallback() sets the callback function for detailed status
  *  messages. The callback receives status codes as well as a text message.
  *  All error codes are negative.

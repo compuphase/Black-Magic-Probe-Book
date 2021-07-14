@@ -229,43 +229,83 @@ static const char *skiptrailing(const char *base, const char *end)
   return end;
 }
 
-static int mcu_match(const char *name, const char *list)
+/** architecture_match() compares two MCU "family" strings, where an "x" in the
+ *  "architecture" string is a wildcard. The comparison is case-insensitive
+ *  (but the "x" must be lower case).
+ */
+int architecture_match(const char *architecture, const char *mcufamily)
+{
+  int i;
+
+  for (i=0; architecture[i] != '\0' && mcufamily[i] != '\0'; i++) {
+    /* if the character in the architecture is a lower case "x", it is a
+       wild-card; otherwise the comparison is case-insensitive */
+    if (architecture[i] != 'x' && toupper(architecture[i]) != toupper(mcufamily[i]))
+      return 0;
+  }
+  return architecture[i] == '\0' && mcufamily[i] == '\0';
+}
+
+static int mcu_match(const char *mcufamily, const char *list)
 {
   const char *head, *separator;
-  size_t namelen;
+  char matchname[50];
+  size_t namelen, matchlen;
 
-  assert(name != NULL && list != NULL);
+  assert(mcufamily != NULL && list != NULL);
 
-  namelen = strlen(name);
+  namelen = strlen(mcufamily);
   /* name should never be empty and should not have leading or trailing
      whitespace */
-  assert(namelen > 0 && name[0] > ' ' && name[namelen - 1] > ' ');
+  assert(namelen > 0 && mcufamily[0] > ' ' && mcufamily[namelen - 1] > ' ');
   /* however, the name may have a suffix for the architecture (M3, M4 or M3/M4),
      and this suffix must be stripped off */
-  if ((separator = strrchr(name, ' ')) != NULL && separator[1] == 'M' && isdigit(separator[2])) {
-    separator = skiptrailing(name, separator);
-    namelen = separator - name;
-    assert(namelen > 0 && name[namelen - 1] > ' ');
+  if ((separator = strrchr(mcufamily, ' ')) != NULL && separator[1] == 'M' && isdigit(separator[2])) {
+    separator = skiptrailing(mcufamily, separator);
+    namelen = separator - mcufamily;
+    assert(namelen > 0 && mcufamily[namelen - 1] > ' ');
   }
 
+  head = skipleading(list);
+  while (*head != '\0') {
+    const char *tail;
+    if ((separator = strchr(head, ',')) == NULL)
+      separator = strchr(head, '\0');
+    tail = skiptrailing(head, separator);
+    matchlen = tail - head;
+    if (matchlen == namelen && matchlen < sizearray(matchname)) {
+      strncpy(matchname, head, matchlen);
+      matchname[matchlen] = '\0';
+      if (architecture_match(matchname, mcufamily))
+        return 1;   /* exact match */
+    }
+    head = (*separator != '\0') ? skipleading(separator + 1) : separator;
+  }
+
+  /* no exact match found, try matching items on prefix */
   head = skipleading(list);
   while (*head != '\0') {
     const char *tail, *wildcard;
     if ((separator = strchr(head, ',')) == NULL)
       separator = strchr(head, '\0');
     tail = skiptrailing(head, separator);
-    if ((size_t)(tail - head) == namelen && strnicmp(name, head, namelen) == 0)
-      return 1;   /* exact match */
     if ((wildcard = strchr(head, '*')) != NULL && wildcard < tail) {
       /* the entry in the MCU list has a wildcard, match up to this position */
-      size_t matchlen = wildcard - head;
+      matchlen = wildcard - head;
       /* wildcard must be at the end of the entry */
       assert(wildcard[1] == ',' || wildcard[1] == ' ' || wildcard[1] == '\0');
-      if (namelen > matchlen && (matchlen == 0 || strnicmp(name, head, matchlen) == 0))
-        return 1; /* match on prefix */
+      if (matchlen == 0)
+        return 1;   /* match-all wildcard */
+      if (namelen > matchlen && matchlen < sizearray(matchname)) {
+        strncpy(matchname, head, matchlen);
+        matchname[matchlen] = '\0';
+        if (architecture_match(matchname, mcufamily))
+          return 1; /* match on prefix */
+      }
     }
     head = (*separator != '\0') ? skipleading(separator + 1) : separator;
   }
+
   return 0;
 }
 

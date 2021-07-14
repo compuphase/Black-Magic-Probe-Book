@@ -456,6 +456,9 @@ int ctf_decode(const unsigned char *stream, size_t size, long channel)
 {
   size_t idx, len, result;
 
+  if (event_count(-1) == 0)     /* no events defined, nothing to do */
+    return 0;
+
   cache_reset();
   result = 0;
   idx = 0;
@@ -577,6 +580,30 @@ restart:
       if (s != NULL) {
         evt_header = &s->event;
         clock = (s->clock != NULL) ? clock_by_name(s->clock->selector) : NULL;
+      } else if (stream_count() == 0) {
+        /* stream not found, because there isn't one
+           meaning that there is only a single event */
+        evt_header = NULL;
+        event = event_next(NULL);
+        if (event == NULL) {
+          state = STATE_SCAN_MAGIC;
+          assert(cache_filled == 0);
+          goto restart;
+        }
+        assert(msgbuffer_filled == 0);
+        msgbuffer_append(event->name, -1);
+        field = event->field_root.next;
+        if (field == NULL) {
+          /* this event has no fields */
+          msgbuffer_append("", 1);  /* force zero-terminate msgbuffer */
+          msgstack_push((uint16_t)event->stream_id, timestamp, msgbuffer);
+          msgbuffer_reset();
+          result += 1;  /* flag: one more trace message completed */
+          state = STATE_SCAN_MAGIC;
+        } else {
+          state = STATE_GET_FIELDS;
+        }
+        goto restart;
       } else {
         /* stream not found, drop the decoding */
         state = STATE_SCAN_MAGIC;

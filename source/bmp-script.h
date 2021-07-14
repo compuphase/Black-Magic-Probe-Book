@@ -35,6 +35,8 @@ void bmscript_clearcache(void);
 int bmscript_line(const char *name, char *oper, uint32_t *address, uint32_t *value, uint8_t *size);
 int bmscript_line_fmt(const char *name, char *line, const unsigned long *params);
 
+int architecture_match(const char *architecture, const char *mcufamily);
+
 #if defined __cplusplus
   }
 #endif

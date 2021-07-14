@@ -35,6 +35,12 @@
 
 #include "parsetsdl.h"
 
+typedef struct tagPATHLIST {
+  struct tagPATHLIST *next;
+  char *path;
+  int system; /* 1 for system header, 0 for project-local header */
+} PATHLIST;
+
 #if !defined _MAX_PATH
   #define _MAX_PATH 260
 #endif
@@ -211,7 +217,7 @@ static int generate_functionheader(FILE *fp, const CTF_EVENT *evt, unsigned flag
   return 1;
 }
 
-void generate_prototypes(FILE *fp, unsigned flags, const char *trace_func, const char *includepath)
+void generate_prototypes(FILE *fp, unsigned flags, const char *trace_func, const PATHLIST *includepaths)
 {
   const CTF_EVENT *evt;
   const CTF_STREAM *stream;
@@ -226,8 +232,15 @@ void generate_prototypes(FILE *fp, unsigned flags, const char *trace_func, const
 
   if (flags & FLAG_C99)
     fprintf(fp, "#include <stdint.h>\n");
-  if (includepath != NULL && strlen(includepath) > 0)
-    fprintf(fp, "#include <%s>\n\n", includepath);
+  if (includepaths != NULL) {
+    const PATHLIST *path;
+    for (path = includepaths->next; path != NULL; path = path->next) {
+      if (path->system)
+        fprintf(fp, "#include <%s>\n\n", path->path);
+      else
+        fprintf(fp, "#include \"%s\"\n\n", path->path);
+    }
+  }
 
   assert(trace_func != NULL && strlen(trace_func) > 0);
   if (flags & FLAG_STREAMID)
@@ -460,7 +473,9 @@ static void usage(void)
          "-c99      Generate C99-compatible code (default is C90).\n"
          "-fs=name  Set the name for the time stamp function, default = trace_timestamp\n"
          "-fx=name  Set the name for the trace transmit function, default = trace_xmit\n"
-         "-i=path   Generate an #include directive with this path.\n"
+         "-i=path   Generate an #include <...> directive with this path.\n"
+         "-I=path   Generate an #include \"...\" directive with this path.\n"
+         "          The -i and -I options may appear multiple times.\n"
          "-no-instr Add a \"no_instrument_function\" attribute to the generated functions.\n"
          "-o=name   Base output filename; a .c and .h suffix is added to this name.\n"
          "-s        SWO tracing: use channels for stream ids.\n"
@@ -475,7 +490,8 @@ static void unknown_option(const char *option)
 
 int main(int argc, char *argv[])
 {
-  char infile[_MAX_PATH], outfile[_MAX_PATH], includepath[_MAX_PATH];
+  PATHLIST includepaths = { NULL, NULL }, *path;
+  char infile[_MAX_PATH], outfile[_MAX_PATH];
   char trace_func[64], timestamp_func[64];
   char *ptr;
   unsigned opt_flags;
@@ -489,7 +505,6 @@ int main(int argc, char *argv[])
   /* command line options */
   infile[0] = '\0';
   outfile[0] = '\0';
-  includepath[0] = '\0';
   strcpy(trace_func, "trace_xmit");
   opt_flags = 0;
   for (idx = 1; idx < argc; idx++) {
@@ -523,11 +538,25 @@ int main(int argc, char *argv[])
           unknown_option(argv[idx]);
         }
         break;
+      case 'I':
       case 'i':
         ptr = &argv[idx][2];
         if (*ptr == '=' || *ptr == ':')
           ptr++;
-        strlcpy(includepath, ptr, sizearray(includepath));
+        path = malloc(sizeof(PATHLIST));
+        if (path != NULL) {
+          path->path = strdup(ptr);
+          if (path->path != NULL) {
+            PATHLIST *last;
+            path->system =(argv[idx][1]== 'i');
+            path->next = NULL;
+            for (last = &includepaths; last->next != NULL; last = last->next)
+              {}
+            last->next = path;
+          } else {
+            free(path);
+          }
+        }
         break;
       case 'n':
         if (strcmp(argv[idx]+1, "no-instr") == 0)
@@ -584,7 +613,7 @@ int main(int argc, char *argv[])
     strlcat(outfile, ".h", sizearray(outfile));
     fp = fopen(outfile, "wt");
     if (fp != NULL) {
-      generate_prototypes(fp, opt_flags, trace_func, includepath);  //??? pass in timestamp_func
+      generate_prototypes(fp, opt_flags, trace_func, &includepaths);  //??? pass in timestamp_func
       fclose(fp);
     } else {
       fprintf(stderr, "Error writing file %s.\n", outfile);
@@ -613,6 +642,13 @@ int main(int argc, char *argv[])
   }
 
   ctf_parse_cleanup();
+  while (includepaths.next != NULL) {
+    path = includepaths.next;
+    includepaths.next = path->next;
+    free(path->path);
+    free(path);
+  }
+
   return 0;
 }
 

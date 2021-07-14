@@ -226,8 +226,8 @@ int main(int argc, char *argv[])
   int probe_type = PROBE_UNKNOWN;
   enum { MODE_MANCHESTER = 1, MODE_ASYNC } opt_mode = MODE_MANCHESTER;
   unsigned char trace_endpoint = BMP_EP_TRACE;
-  char **filterlist = NULL;
   char newfiltertext[FILTER_MAXSTRING] = "";
+  TRACEFILTER *filterlist = NULL;
   int filtercount = 0, filterlistsize = 0;
   int opt_init_target = nk_true;
   int opt_init_bmp = nk_true;
@@ -269,17 +269,21 @@ int main(int argc, char *argv[])
   /* read filters (initialize the filter list) */
   filtercount = ini_getl("Filters", "count", 0, txtConfigFile);;
   filterlistsize = filtercount + 1; /* at least 1 extra, for a NULL sentinel */
-  filterlist = malloc(filterlistsize * sizeof(char*));  /* make sure unused entries are NULL */
+  filterlist = malloc(filterlistsize * sizeof(TRACEFILTER));  /* make sure unused entries are NULL */
   if (filterlist != NULL) {
-    memset(filterlist, 0, filterlistsize * sizeof(char*));
+    memset(filterlist, 0, filterlistsize * sizeof(TRACEFILTER));
     for (idx = 0; idx < filtercount; idx++) {
-      char key[40];
-      filterlist[idx] = malloc(sizearray(newfiltertext) * sizeof(char));
-      if (filterlist[idx] == NULL)
+      char key[40], *ptr;
+      filterlist[idx].expr = malloc(sizearray(newfiltertext)* sizeof(char));
+      if (filterlist[idx].expr == NULL)
         break;
       sprintf(key, "filter%d", idx + 1);
       ini_gets("Filters", key, "", newfiltertext, sizearray(newfiltertext), txtConfigFile);
-      strcpy(filterlist[idx], newfiltertext);
+      filterlist[idx].enabled = (int)strtol(newfiltertext, &ptr, 10);
+      assert(ptr != NULL && *ptr != '\0');  /* a comma should be found */
+      if (*ptr == ',')
+        ptr += 1;
+      strcpy(filterlist[idx].expr, ptr);
     }
     filtercount = idx;
   } else {
@@ -864,37 +868,46 @@ int main(int argc, char *argv[])
           char filter[FILTER_MAXSTRING];
           assert(filterlistsize == 0 || filterlist != NULL);
           assert(filterlistsize == 0 || filtercount < filterlistsize);
-          assert(filterlistsize == 0 || filterlist[filtercount] == NULL);
+          assert(filterlistsize == 0 || (filterlist[filtercount].expr == NULL && !filterlist[filtercount].enabled));
           bounds = nk_widget_bounds(ctx);
-          txtwidth = bounds.w -  BROWSEBTN_WIDTH - (1 * 5);
+          txtwidth = bounds.w - 2 * BROWSEBTN_WIDTH - (2 * 5);
           for (idx = 0; idx < filtercount; idx++) {
-            nk_layout_row_begin(ctx, NK_STATIC, ROW_HEIGHT, 2);
+            nk_layout_row_begin(ctx, NK_STATIC, ROW_HEIGHT, 3);
+            nk_layout_row_push(ctx, BROWSEBTN_WIDTH);
+            bounds = nk_widget_bounds(ctx);
+            nk_checkbox_label(ctx, "", &filterlist[idx].enabled);
+            tooltip(ctx, bounds, "Enable/disable this filter", &rc_canvas);
             nk_layout_row_push(ctx, txtwidth);
-            assert(filterlist[idx] != NULL);
-            strcpy(filter, filterlist[idx]);
+            assert(filterlist[idx].expr != NULL);
+            strcpy(filter, filterlist[idx].expr);
             bounds = nk_widget_bounds(ctx);
             result = nk_edit_string_zero_terminated(ctx, NK_EDIT_FIELD | NK_EDIT_SIG_ENTER, filter, sizearray(filter), nk_filter_ascii);
-            if (strcmp(filter, filterlist[idx]) != 0) {
-              strcpy(filterlist[idx], filter);
+            if (strcmp(filter, filterlist[idx].expr) != 0) {
+              strcpy(filterlist[idx].expr, filter);
+              filterlist[idx].enabled = (strlen(filterlist[idx].expr) > 0);
             }
             tooltip(ctx, bounds, "Text to filter on (case-sensitive)", &rc_canvas);
-            nk_layout_row_push(ctx, ROW_HEIGHT);
+            nk_layout_row_push(ctx, BROWSEBTN_WIDTH);
+            bounds = nk_widget_bounds(ctx);
             if (nk_button_symbol(ctx, NK_SYMBOL_X) || ((result & NK_EDIT_COMMITED) && strlen(filter) == 0)) {
               /* remove row */
-              assert(filterlist[idx] != NULL);
-              free(filterlist[idx]);
+              assert(filterlist[idx].expr != NULL);
+              free(filterlist[idx].expr);
               filtercount -= 1;
               if (idx < filtercount)
-                memmove(&filterlist[idx], &filterlist[idx+1], (filtercount - idx) * sizeof(char*));
-              filterlist[filtercount] = NULL;
+                memmove(&filterlist[idx], &filterlist[idx+1], (filtercount - idx) * sizeof(TRACEFILTER));
+              filterlist[filtercount].expr = NULL;
+              filterlist[filtercount].enabled = 0;
             }
+            tooltip(ctx, bounds, "Remove this filter", &rc_canvas);
           }
+          txtwidth = bounds.w - 1 * BROWSEBTN_WIDTH - (1 * 5);
           nk_layout_row_begin(ctx, NK_STATIC, ROW_HEIGHT, 2);
           nk_layout_row_push(ctx, txtwidth);
           bounds = nk_widget_bounds(ctx);
           result = nk_edit_string_zero_terminated(ctx, NK_EDIT_FIELD | NK_EDIT_SIG_ENTER, newfiltertext, sizearray(newfiltertext), nk_filter_ascii);
           tooltip(ctx, bounds, "New filter (case-sensitive)", &rc_canvas);
-          nk_layout_row_push(ctx, ROW_HEIGHT);
+          nk_layout_row_push(ctx, BROWSEBTN_WIDTH);
           if ((nk_button_symbol(ctx, NK_SYMBOL_PLUS) || (result & NK_EDIT_COMMITED)) && strlen(newfiltertext) > 0) {
             /* add row */
             if (filterlistsize > 0) {
@@ -903,11 +916,11 @@ int main(int argc, char *argv[])
               assert(filtercount < filterlistsize);
               if (filtercount + 1 == filterlistsize) {
                 int newsize = 2 * filterlistsize;
-                char **newlist = malloc(newsize * sizeof(char*));
+                TRACEFILTER *newlist = malloc(newsize * sizeof(TRACEFILTER));
                 if (newlist != NULL) {
                   assert(filterlist != NULL);
-                  memset(newlist, 0, newsize * sizeof(char*));  /* set all new entries to NULL */
-                  memcpy(newlist, filterlist, filterlistsize * sizeof(char*));
+                  memset(newlist, 0, newsize * sizeof(TRACEFILTER));  /* set all new entries to NULL */
+                  memcpy(newlist, filterlist, filterlistsize * sizeof(TRACEFILTER));
                   free(filterlist);
                   filterlist = newlist;
                   filterlistsize = newsize;
@@ -915,9 +928,10 @@ int main(int argc, char *argv[])
               }
             }
             if (filtercount + 1 < filterlistsize) {
-              filterlist[filtercount] = malloc(sizearray(newfiltertext) * sizeof(char));
-              if (filterlist[filtercount] != NULL) {
-                strcpy(filterlist[filtercount], newfiltertext);
+              filterlist[filtercount].expr = malloc(sizearray(newfiltertext) * sizeof(char));
+              if (filterlist[filtercount].expr != NULL) {
+                strcpy(filterlist[filtercount].expr, newfiltertext);
+                filterlist[filtercount].enabled = 1;
                 filtercount += 1;
                 newfiltertext[0] = '\0';
               }
@@ -1072,11 +1086,12 @@ int main(int argc, char *argv[])
   }
   ini_putl("Filters", "count", filtercount, txtConfigFile);
   for (idx = 0; idx < filtercount; idx++) {
-    char key[40];
-    assert(filterlist != NULL && filterlist[idx] != NULL);
+    char key[40], expr[FILTER_MAXSTRING+10];
+    assert(filterlist != NULL && filterlist[idx].expr != NULL);
     sprintf(key, "filter%d", idx + 1);
-    ini_puts("Filters", key, filterlist[idx], txtConfigFile);
-    free(filterlist[idx]);
+    sprintf(expr, "%d,%s", filterlist[idx].enabled, filterlist[idx].expr);
+    ini_puts("Filters", key, expr, txtConfigFile);
+    free(filterlist[idx].expr);
   }
   if (filterlist != NULL)
     free(filterlist);

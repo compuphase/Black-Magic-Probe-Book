@@ -33,4 +33,6 @@ int    sermon_getbaud(void);
 void sermon_setmetadata(const char *tsdlfile);
 const char *sermon_getmetadata(void);
 
+int sermon_save(const char *filename);
+
 #endif /* _SERIALMON_H */

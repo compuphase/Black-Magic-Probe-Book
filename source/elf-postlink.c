@@ -3,7 +3,7 @@
  * micro-controllers. At this moment, the utility supports various ranges
  * of the LPC family by NXP.
  *
- * Copyright 2019 CompuPhase
+ * Copyright 2019-2021 CompuPhase
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -37,7 +37,7 @@ static void usage(int flags)
            "Usage: elf-postlink [mcu] [elf-file]\n\n");
   if (flags & FLAG_MCU_LIST)
     printf("MCU types:\n"
-           "\tlpc8xx  - NXP LPC810 and LPC820 Cortex-M0 series\n"
+           "\tlpc8xx  - NXP LPC800, LPC810, LPC820, LPC830 and LPC840 Cortex-M0/M0+ series\n"
            "\tlpc11xx - NXP LPC1100, LPC11C00 and LPC11U00 Cortex-M0+ series\n"
            "\tlpc15xx - NXP LPC1500 Cortex-M3 series\n"
            "\tlpc17xx - NXP LPC1700 Cortex-M3 series\n"

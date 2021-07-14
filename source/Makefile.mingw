@@ -70,25 +70,26 @@ endif
 # -------------------------------------------------------------
 
 OBJLIST_BMDEBUG = bmdebug.o bmp-scan.o bmp-script.o dwarf.o elf.o \
-		guidriver.o minIni.o nuklear_mousepointer.o nuklear_tooltip.o \
-		rs232.o serialmon.o specialfolder.o strlcpy.o tcpip.o \
-		usb-support.o svd-support.o decodectf.o parsetsdl.o swotrace.o \
-		xmltractor.o nuklear.o nuklear_gdip.o noc_file_dialog.o
+                  guidriver.o memdump.o minIni.o nuklear_mousepointer.o \
+                  nuklear_tooltip.o rs232.o serialmon.o specialfolder.o \
+                  strlcpy.o svd-support.o swotrace.o tcpip.o usb-support.o \
+                  xmltractor.o decodectf.o parsetsdl.o \
+                  nuklear.o nuklear_gdip.o noc_file_dialog.o
 
 OBJLIST_BMFLASH = bmflash.o bmp-scan.o bmp-script.o bmp-support.o crc32.o \
-		elf.o gdb-rsp.o guidriver.o minIni.o nuklear_mousepointer.o \
-		nuklear_tooltip.o rs232.o specialfolder.o strlcpy.o tcpip.o \
-		xmltractor.o \
-		nuklear.o nuklear_gdip.o noc_file_dialog.o
+                  elf.o gdb-rsp.o guidriver.o minIni.o nuklear_mousepointer.o \
+                  nuklear_tooltip.o rs232.o specialfolder.o strlcpy.o \
+                  tcpip.o xmltractor.o \
+                  nuklear.o nuklear_gdip.o noc_file_dialog.o
 
 OBJLIST_BMTRACE = bmtrace.o bmp-scan.o bmp-script.o bmp-support.o crc32.o \
-		dwarf.o elf.o gdb-rsp.o guidriver.o minIni.o nuklear_mousepointer.o \
-		nuklear_tooltip.o rs232.o specialfolder.o strlcpy.o tcpip.o \
-		usb-support.o xmltractor.o \
-		decodectf.o parsetsdl.o swotrace.o \
-		nuklear.o nuklear_gdip.o noc_file_dialog.o
+                  dwarf.o elf.o gdb-rsp.o guidriver.o minIni.o \
+                  nuklear_mousepointer.o nuklear_tooltip.o rs232.o \
+                  specialfolder.o swotrace.o strlcpy.o tcpip.o usb-support.o \
+                  xmltractor.o decodectf.o parsetsdl.o \
+                  nuklear.o nuklear_gdip.o noc_file_dialog.o``
 
-OBJLIST_BMSCAN = bmscan.o bmp-scan.o strlcpy.o tcpip.o
+OBJLIST_BMSCAN = bmscan.o bmp-scan.o tcpip.o
 
 OBJLIST_POSTLINK = elf-postlink.o elf.o
 
@@ -121,6 +122,8 @@ bmp-support.o : bmp-support.c
 
 crc32.o : crc32.c
 
+decodectf.ob : decodectf.c
+
 dwarf.o : dwarf.c
 
 elf.o : elf.c
@@ -131,11 +134,18 @@ gdb-rsp.o : gdb-rsp.c
 
 guidriver.o : guidriver.c
 
+memdump.o : memdump.c
+
 minIni.o : minIni.c
+
+noc_file_dialog.o : CFLAGS += -DNOC_FILE_DIALOG_WIN32
+noc_file_dialog.o : noc_file_dialog.c
 
 nuklear_mousepointer.o : nuklear_mousepointer.c
 
 nuklear_tooltip.o : nuklear_tooltip.c
+
+parsetsdl.o : parsetsdl.c
 
 rs232.o : rs232.c
 
@@ -156,13 +166,6 @@ tracegen.o : tracegen.c
 usb-support.o : usb-support.c
 
 xmltractor.o : xmltractor.c
-
-decodectf.o : decodectf.c
-
-parsetsdl.o : parsetsdl.c
-
-noc_file_dialog.o : CFLAGS += -DNOC_FILE_DIALOG_WIN32
-noc_file_dialog.o : noc_file_dialog.c
 
 nuklear.o : nuklear.c
 

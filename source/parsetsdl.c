@@ -3,7 +3,7 @@
  * parser is the base for the tracegen code generation utility and the CTF
  * binary stream decoder.
  *
- * Copyright 2019 CompuPhase
+ * Copyright 2019-2021 CompuPhase
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -779,6 +779,9 @@ int event_count(int stream_id)
   return count;
 }
 
+/** event_next() returns a pointer to the event following the one passed in
+ *  the parameter; it returns the first event if the "event" parameter is NULL.
+ */
 const CTF_EVENT *event_next(const CTF_EVENT *event)
 {
   if (event == NULL)

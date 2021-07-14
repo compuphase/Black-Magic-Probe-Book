@@ -1153,7 +1153,7 @@ float tracelog_labelwidth(float rowheight)
 /* tracelog_widget() draws the text in the log window and scrolls to the last line
    if new text was added */
 void tracelog_widget(struct nk_context *ctx, const char *id, float rowheight, int markline,
-                     char **filters, nk_flags widget_flags)
+                     const TRACEFILTER *filters, nk_flags widget_flags)
 {
   static int scrollpos = 0;
   static int linecount = 0;
@@ -1187,15 +1187,33 @@ void tracelog_widget(struct nk_context *ctx, const char *id, float rowheight, in
       int textwidth;
       struct nk_color clrtxt;
       assert(item->text != NULL);
-      if (filters != NULL && filters[0] != NULL && filters[0][0] != '\0') {
-        /* check filters */
-        int idx, match;
-        for (idx = match = 0; filters[idx] != NULL && !match; idx++) {
-          if (filters[idx][0] != '\0')
-            match =(strstr(item->text, filters[idx])!= NULL);
+      if (filters != NULL && filters[0].expr != NULL && filters[0].enabled) {
+        /* check filters (first count how many there are) */
+        int idx, match, count_enabled;
+        match = 1;  /* preset to "match all except inverted filters" */
+        for (idx = count_enabled = 0; filters[idx].expr != NULL; idx++) {
+          if (filters[idx].enabled) {
+            count_enabled += 1;
+            if (filters[idx].expr[0] != '~')
+              match = 0;  /* valid non-inverted filter, switch to "match only filters" */
+          }
+        }
+        /* check normal filters */
+        if (!match) {
+          for (idx = 0; filters[idx].expr != NULL && !match; idx++) {
+            if (filters[idx].enabled && filters[idx].expr[0] != '~')
+              match = (strstr(item->text, filters[idx].expr) != NULL);
+          }
+        }
+        /* check inverted filters */
+        if (match) {
+          for (idx = 0; filters[idx].expr != NULL && match; idx++) {
+            if (filters[idx].enabled && filters[idx].expr[0] == '~')
+              match = (strstr(item->text, filters[idx].expr + 1) == NULL);
+          }
         }
         if (!match)
-          continue; /* text matches none of the filters, skip it */
+          continue; /* text matches none of the normal filters, or matches one of the inverted filters -> skip it */
       }
       nk_layout_row_begin(ctx, NK_STATIC, rowheight, 4);
       if (lineheight <= 0.1) {

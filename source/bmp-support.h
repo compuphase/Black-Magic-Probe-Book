@@ -45,9 +45,11 @@ enum {
   BMPERR_GENERAL    = -14,
 };
 
-typedef int (*BMP_STATCALLBACK)(int code, const char *message);
+unsigned long bmp_flashtotal(void);
 
+typedef int (*BMP_STATCALLBACK)(int code, const char *message);
 void bmp_setcallback(BMP_STATCALLBACK func);
+
 int bmp_connect(int probe, const char *ipaddress);
 int bmp_disconnect(void);
 int bmp_isopen(void);
