@@ -87,11 +87,15 @@ static void cache_grow(size_t extra)
       cache_size = 32;
     while (cache_size < cache_filled + extra)
       cache_size *= 2;
-    if (cache == NULL)
+    if (cache == NULL) {
       cache = (unsigned char*)malloc(cache_size);
-    else
-      cache = (unsigned char*)realloc(cache, cache_size);
-    assert(cache != NULL);
+    } else {
+      unsigned char *newcache = (unsigned char*)realloc(cache, cache_size);
+      if (newcache == NULL)
+        free((void*)cache);
+      cache = newcache;
+    }
+    assert(cache != NULL);  /* should be handled as a run-time error */
   }
 }
 
@@ -117,10 +121,14 @@ static void msgbuffer_grow(size_t extra)
       msgbuffer_size = 32;
     while (msgbuffer_size < msgbuffer_filled + extra)
       msgbuffer_size *= 2;
-    if (msgbuffer == NULL)
+    if (msgbuffer == NULL) {
       msgbuffer = (char*)malloc(msgbuffer_size);
-    else
-      msgbuffer = (char*)realloc(msgbuffer, msgbuffer_size);
+    } else {
+      char *newbuffer = (char*)realloc(msgbuffer, msgbuffer_size);
+      if (newbuffer == NULL)
+        free((void*)msgbuffer);
+      msgbuffer = newbuffer;
+    }
     assert(msgbuffer != NULL);
   }
 }
@@ -385,6 +393,8 @@ static void format_field(const char *fieldname, const CTF_TYPE *type, const unsi
         if (!lookup_symbol(v, txt, sizearray(txt)))
           fmt_uint32(v, txt, 16);
       } else if (type->flags & TYPEFLAG_SIGNED) {
+        if (type->size < 32 && (v & (1 << (type->size - 1))) != 0)
+          v |= ~0u << type->size;  /* sign-extend 8-bit & 16-bit values */
         fmt_int32((int32_t)v, txt, base);
       } else {
         fmt_uint32(v, txt, base);

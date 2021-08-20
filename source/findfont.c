@@ -67,7 +67,7 @@ int font_locate(char *path, size_t maxlength, const char *family, const char *st
     }
     if (FcPatternGetString(font, FC_STYLE, 0, &ptr) == FcResultMatch) {
       int styles_to_match, idx;
-      char *style_string, *token;
+      char *style_string;
       /* compare words in the font's style with words in the requested style */
       styles_to_match = 0;
       for (idx = 0; idx < MAX_STYLES && style_fields[idx] != NULL; idx++)
@@ -75,6 +75,7 @@ int font_locate(char *path, size_t maxlength, const char *family, const char *st
           styles_to_match |= (1 << idx);
       style_string = strdup((const char*)ptr);
       if (style_string != NULL) {
+        char *token;
         for (token = strtok(style_string, " "); token != NULL; token = strtok(NULL, " ")) {
           if (strcasecmp(token, "Roman") == 0 || strcasecmp(token, "Regular") == 0 || strcasecmp(token, "Book") == 0)
             continue; /* these are implied (unless Bold or Italic or Condensed are set) */

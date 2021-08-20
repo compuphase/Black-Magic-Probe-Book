@@ -51,6 +51,7 @@ int elf_section_by_address(FILE *fp,unsigned long baseaddr,
                            unsigned long *address,unsigned long *length);
 
 int elf_patch_vecttable(FILE *fp,const char *driver,unsigned int *checksum);
+int elf_check_crp(FILE *fp,int *crp);
 
 #if defined __cplusplus
   }

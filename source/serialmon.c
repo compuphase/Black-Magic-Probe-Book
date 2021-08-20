@@ -174,11 +174,10 @@ static void sermon_addstring(const unsigned char *buffer, size_t length)
 static DWORD __stdcall sermon_process(LPVOID arg)
 {
   unsigned char buffer[256];
-  size_t count;
 
   (void)arg;
   while (rs232_isopen(hCom)) {
-    count = rs232_recv(hCom, buffer, sizearray(buffer));
+    size_t count = rs232_recv(hCom, buffer, sizearray(buffer));
     if (count > 0) {
       sermon_addstring(buffer, count);
       PostMessage((HWND)guidriver_apphandle(), WM_USER, 0, 0L); /* just a flag to wake up the GUI */
@@ -196,11 +195,10 @@ static DWORD __stdcall sermon_process(LPVOID arg)
 static void *sermon_process(void *arg)
 {
   unsigned char buffer[256];
-  size_t count;
 
   (void)arg;
   while (rs232_isopen(hCom)) {
-    count = rs232_recv(hCom, buffer, sizearray(buffer));
+    size_t count = rs232_recv(hCom, buffer, sizearray(buffer));
     if (count > 0)
       sermon_addstring(buffer, count);
     else

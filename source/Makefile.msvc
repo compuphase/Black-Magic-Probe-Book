@@ -4,7 +4,7 @@
 #       o  uses nmake & Microsoft Visual C/C++
 #
 #       For release version, use NDEBUG=
-#       Do "make depend" to update dependencies in this makefile
+#       Do "nmake depend" to update dependencies in this makefile
 #
 # -------------------------------------------------------------
 
@@ -63,24 +63,25 @@ LFLAGS_C  = $(L_DEBUG) /NOLOGO /SUBSYSTEM:console
 #               Project
 # -------------------------------------------------------------
 
-OBJLIST_BMDEBUG = bmdebug.obj bmp-scan.obj bmp-script.obj dwarf.obj elf.obj \
-                  guidriver.obj memdump.obj minIni.obj nuklear_mousepointer.obj \
-                  nuklear_tooltip.obj rs232.obj serialmon.obj specialfolder.obj \
-                  strlcpy.obj svd-support.obj swotrace.obj tcpip.obj usb-support.obj \
+OBJLIST_BMDEBUG = bmdebug.obj bmp-scan.obj bmp-script.obj dirent.obj dwarf.obj \
+                  elf.obj guidriver.obj memdump.obj minIni.obj \
+                  nuklear_mousepointer.obj nuklear_style.obj nuklear_tooltip.obj \
+                  rs232.obj serialmon.obj specialfolder.obj strlcpy.obj \
+                  svd-support.obj swotrace.obj tcpip.obj usb-support.obj \
                   xmltractor.obj decodectf.obj parsetsdl.obj \
                   nuklear.obj nuklear_gdip.obj noc_file_dialog.obj
 
 OBJLIST_BMFLASH = bmflash.obj bmp-scan.obj bmp-script.obj bmp-support.obj crc32.obj \
                   elf.obj gdb-rsp.obj guidriver.obj minIni.obj nuklear_mousepointer.obj \
-                  nuklear_tooltip.obj rs232.obj specialfolder.obj strlcpy.obj \
-                  tcpip.obj xmltractor.obj \
+                  nuklear_style.obj nuklear_tooltip.obj rs232.obj specialfolder.obj \
+                  strlcpy.obj tcpip.obj xmltractor.obj \
                   nuklear.obj nuklear_gdip.obj noc_file_dialog.obj
 
 OBJLIST_BMTRACE = bmtrace.obj bmp-scan.obj bmp-script.obj bmp-support.obj crc32.obj \
                   dwarf.obj elf.obj gdb-rsp.obj guidriver.obj minIni.obj \
-                  nuklear_mousepointer.obj nuklear_tooltip.obj rs232.obj \
-                  specialfolder.obj swotrace.obj strlcpy.obj tcpip.obj usb-support.obj \
-                  xmltractor.obj decodectf.obj parsetsdl.obj \
+                  nuklear_mousepointer.obj nuklear_style.obj nuklear_tooltip.obj \
+                  rs232.obj specialfolder.obj swotrace.obj strlcpy.obj tcpip.obj \
+                  usb-support.obj xmltractor.obj decodectf.obj parsetsdl.obj \
                   nuklear.obj nuklear_gdip.obj noc_file_dialog.obj
 
 OBJLIST_BMSCAN = bmscan.obj bmp-scan.obj tcpip.obj
@@ -118,6 +119,8 @@ crc32.obj : crc32.c
 
 decodectf.obj : decodectf.c
 
+dirent.obj : dirent.c
+
 dwarf.obj : dwarf.c
 
 elf.obj : elf.c
@@ -135,6 +138,8 @@ minIni.obj : minIni.c
 noc_file_dialog.obj : noc_file_dialog.c
 
 nuklear_mousepointer.obj : nuklear_mousepointer.c
+
+nuklear_style.obj : nuklear_style.c
 
 nuklear_tooltip.obj : nuklear_tooltip.c
 

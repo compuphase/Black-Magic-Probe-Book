@@ -975,15 +975,17 @@ nk_gdip_handle_event(HWND wnd, UINT msg, WPARAM wparam, LPARAM lparam)
             break;
 
         case VK_UP:
-            if (!ctrl && !shift && !alt) {
-                nk_input_key(&gdip.ctx, NK_KEY_UP, down);
+            if (!shift && !alt) {
+                nk_input_key(&gdip.ctx, ctrl ? NK_KEY_PAR_UP
+				                             : NK_KEY_UP, down);
                 return 1;
             }
             break;
 
         case VK_DOWN:
-            if (!ctrl && !shift && !alt) {
-                nk_input_key(&gdip.ctx, NK_KEY_DOWN, down);
+            if (!shift && !alt) {
+                nk_input_key(&gdip.ctx, ctrl ? NK_KEY_PAR_DOWN
+				                             : NK_KEY_DOWN, down);
                 return 1;
             }
             break;

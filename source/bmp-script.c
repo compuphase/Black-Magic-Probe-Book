@@ -3,7 +3,7 @@
  * automatically handle device-specific settings. It can use the GDB-RSP serial
  * interface, or the GDB-MI console interface.
  *
- * Copyright 2019-2020 CompuPhase
+ * Copyright 2019-2021 CompuPhase
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -89,11 +89,11 @@ typedef struct tagREG_CACHE {
 
 
 static const REG_DEF register_defaults[] = {
-  { "SYSCON_SYSMEMREMAP",   0x40048000, 4, "lpc8xx,lpc11xx,lpc12xx,lpc13xx" },  /**< LPC Cortex M0 series */
-  { "SYSCON_SYSMEMREMAP",   0x40074000, 4, "lpc15xx" },                         /**< LPC15xx series */
-  { "SCB_MEMMAP",           0x400FC040, 4, "lpc17xx" },                         /**< LPC175x/176x series */
-  { "SCB_MEMMAP",           0xE01FC040, 4, "lpc21xx,lpc22xx,lpc23xx,lpc24xx" }, /**< LPC ARM7TDMI series */
-  { "M4MEMMAP",             0x40043100, 4, "LPC43xx Cortex-M4" },               /**< LPC43xx series */
+  { "SYSCON_SYSMEMREMAP",   0x40048000, 4, "LPC8xx,LPC11xx*,LPC11Uxx,LPC12xx,LPC13xx" }, /**< LPC Cortex M0 series */
+  { "SYSCON_SYSMEMREMAP",   0x40074000, 4, "LPC15xx" },                         /**< LPC15xx series */
+  { "SCB_MEMMAP",           0x400FC040, 4, "LPC17xx" },                         /**< LPC175x/176x series */
+  { "SCB_MEMMAP",           0xE01FC040, 4, "LPC21xx,LPC22xx,LPC23xx,LPC24xx" }, /**< LPC ARM7TDMI series */
+  { "M4MEMMAP",             0x40043100, 4, "LPC43xx*" },                        /**< LPC43xx series */
 
   { "RCC_APB2ENR",          0x40021018, 4, "STM32F1*" },                        /**< STM32F1 APB2 Peripheral Clock Enable Register */
   { "AFIO_MAPR",            0x40010004, 4, "STM32F1*" },                        /**< STM32F1 AF remap and debug I/O configuration */
@@ -135,19 +135,19 @@ static const REG_DEF register_defaults[] = {
 
 static const SCRIPT_DEF script_defaults[] = {
   /* memory mapping (for Flash programming) */
-  { "memremap", "lpc8xx,lpc11xx,lpc12xx,lpc13xx",
+  { "memremap", "LPC8xx,LPC11xx*,LPC11Uxx,LPC12xx,LPC13xx",
     "SYSCON_SYSMEMREMAP = 2"
   },
-  { "memremap", "lpc15xx",
+  { "memremap", "LPC15xx",
     "SYSCON_SYSMEMREMAP = 2"
   },
-  { "memremap", "lpc17xx",
+  { "memremap", "LPC17xx",
     "SCB_MEMMAP = 1"
   },
-  { "memremap", "lpc21xx,lpc22xx,lpc23xx,lpc24xx",
+  { "memremap", "LPC21xx,LPC22xx,LPC23xx,LPC24xx",
     "SCB_MEMMAP = 1"
   },
-  { "memremap", "LPC43xx Cortex-M4",
+  { "memremap", "LPC43xx*",
     "M4MEMMAP = 0"
   },
 
@@ -297,9 +297,12 @@ static int mcu_match(const char *mcufamily, const char *list)
       if (matchlen == 0)
         return 1;   /* match-all wildcard */
       if (namelen > matchlen && matchlen < sizearray(matchname)) {
+        char mcuname[50];
+        strncpy(mcuname, mcufamily, matchlen);
+        mcuname[matchlen] = '\0';
         strncpy(matchname, head, matchlen);
         matchname[matchlen] = '\0';
-        if (architecture_match(matchname, mcufamily))
+        if (architecture_match(matchname, mcuname))
           return 1; /* match on prefix */
       }
     }
@@ -455,8 +458,9 @@ int bmscript_load(const char *mcu, const char *arch)
 
   /* second step: get the registers from the file */
   if (strlen(path) > 0 && (fp = fopen(path, "rt")) != NULL) {
-    char line[512], regname[64], address[64], mcu_list[256], *ptr;
+    char line[512], regname[64], address[64], mcu_list[256];
     while (fgets(line, sizearray(line), fp) != NULL) {
+      char *ptr;
       if ((ptr = strchr(line, '#')) != NULL)
         *ptr = '\0';  /* strip comments */
       /* check whether this matches a register definition line */

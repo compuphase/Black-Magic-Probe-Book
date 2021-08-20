@@ -758,6 +758,7 @@ enum nk_keys {
     NK_KEY_NONE,
     NK_KEY_SHIFT,
     NK_KEY_CTRL,
+    NK_KEY_ALT,
     NK_KEY_DEL,
     NK_KEY_ENTER,
     NK_KEY_ESCAPE,
@@ -775,6 +776,8 @@ enum nk_keys {
     NK_KEY_DOWN,
     NK_KEY_LEFT,
     NK_KEY_RIGHT,
+    NK_KEY_PAR_DOWN,
+    NK_KEY_PAR_UP,
     NK_KEY_REFRESH,
     /* Shortcuts: text field */
     NK_KEY_TEXT_INSERT_MODE,
@@ -3597,12 +3600,12 @@ NK_API void nk_contextual_end(struct nk_context*);
  *                                  TOOLTIP
  *
  * ============================================================================= */
-NK_API void nk_tooltip(struct nk_context *ctx, const char *text, struct nk_rect *viewport);
+NK_API void nk_tooltip(struct nk_context *ctx, const char *text, const struct nk_rect *viewport);
 #ifdef NK_INCLUDE_STANDARD_VARARGS
 NK_API void nk_tooltipf(struct nk_context*, struct nk_rect *viewport, NK_PRINTF_FORMAT_STRING const char*, ...) NK_PRINTF_VARARG_FUNC(3);
 NK_API void nk_tooltipfv(struct nk_context*, struct nk_rect *viewport, NK_PRINTF_FORMAT_STRING const char*, va_list) NK_PRINTF_VALIST_FUNC(3);
 #endif
-NK_API nk_bool nk_tooltip_begin(struct nk_context*, float width, struct nk_rect *viewport);
+NK_API nk_bool nk_tooltip_begin(struct nk_context*, float width, const struct nk_rect *viewport);
 NK_API void nk_tooltip_end(struct nk_context*);
 /* =============================================================================
  *

@@ -61,6 +61,7 @@ int bmp_is_ip_address(const char *address);
 int bmp_attach(int tpwr, int connect_srst, char *name, size_t namelength, char *arch, size_t archlength);
 int bmp_detach(int powerdown);
 
+int bmp_monitor(const char *command);
 int bmp_fullerase(void);
 int bmp_download(FILE *fp);
 int bmp_verify(FILE *fp);

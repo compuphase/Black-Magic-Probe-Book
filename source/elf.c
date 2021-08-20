@@ -3,10 +3,7 @@
  * for requirements of specific micro-controllers. At this moment, the utility
  * supports various ranges of the LPC family by NXP.
  *
- * Build this file with the macro STANDALONE defined on the command line to
- * create a self-contained executable.
- *
- * Copyright 2015,2019 CompuPhase
+ * Copyright 2015,2019-2021 CompuPhase
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -573,18 +570,13 @@ int elf_patch_vecttable(FILE *fp,const char *driver,unsigned int *checksum)
 
   assert(fp!=NULL);
   result=elf_info(fp,&wordsize,&bigendian,&machine);
-  if (result!=ELFERR_NONE || wordsize!=32 || machine!=EM_ARM) {
-    /* only 32-bit ARM architecture */
-    fclose(fp);
-    return ELFERR_FILEFORMAT;
-  }
+  if (result!=ELFERR_NONE || wordsize!=32 || machine!=EM_ARM)
+    return ELFERR_FILEFORMAT; /* only 32-bit ARM architecture */
 
   /* find the section at memory address 0 (the vector table) */
   result=elf_section_by_address(fp,0,NULL,0,&offset,&address,&length);
-  if (result!=ELFERR_NONE || address!=0 || length<8*sizeof(uint32_t)) {
-    fclose(fp);
+  if (result!=ELFERR_NONE || address!=0 || length<8*sizeof(uint32_t))
     return ELFERR_FILEFORMAT;
-  }
 
   result=ELFERR_NONE;
 
@@ -651,6 +643,64 @@ int elf_patch_vecttable(FILE *fp,const char *driver,unsigned int *checksum)
     }
   } else {
     return ELFERR_UNKNOWNDRIVER;
+  }
+
+  return result;
+}
+
+/** elf_check_crp() checks the code-read-protection level for LPC
+ *  micro-controllers in the ELF file.
+ *  file.
+ *  \param fp         The file poiner to the ELF file.
+ *  \param crp        Will be set to the crp level on return (0 for none, 4 for
+ *                    "no isp" mode).
+ *
+ *  \return An error value.
+ */
+int elf_check_crp(FILE *fp,int *crp)
+{
+  #define CRP_ADDRESS 0x000002fc  /* hard-coded address for the CRP magic value */
+  unsigned long offset,base,address,length;
+  uint32_t magic;
+  int wordsize,bigendian,machine,result;
+
+  assert(crp!=NULL);
+  *crp=0;
+
+  assert(fp!=NULL);
+  result=elf_info(fp,&wordsize,&bigendian,&machine);
+  if (result!=ELFERR_NONE || wordsize!=32 || machine!=EM_ARM)
+    return ELFERR_FILEFORMAT;   /* only 32-bit ARM architecture */
+
+  /* find the section where the CRP "magic" may be stored */
+  base=0;
+  for ( ;; ) {
+    result=elf_section_by_address(fp,base,NULL,0,&offset,&address,&length);
+    if (result!=ELFERR_NONE || address>CRP_ADDRESS)
+      return ELFERR_FILEFORMAT;
+    if (address<=CRP_ADDRESS && address+length>CRP_ADDRESS+4)
+      break;
+    base+=length;
+  }
+
+  result=ELFERR_NONE;
+
+  offset+=(CRP_ADDRESS-address);
+  fseek(fp,offset,SEEK_SET);
+  fread(&magic,sizeof(uint32_t),1,fp);
+  switch (magic) {
+  case 0x12345678:
+    *crp=1;
+    break;
+  case 0x87654321:
+    *crp=2;
+    break;
+  case 0x43218765:
+    *crp=3;
+    break;
+  case 0x4E697370:
+    *crp=4;
+    break;
   }
 
   return result;

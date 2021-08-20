@@ -3,7 +3,7 @@
  * the Black Magic Probe on a system. This utility is built with Nuklear for a
  * cross-platform GUI.
  *
- * Copyright 2019-2020 CompuPhase
+ * Copyright 2019-2021 CompuPhase
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -47,6 +47,7 @@
 
 #include "guidriver.h"
 #include "noc_file_dialog.h"
+#include "nuklear_style.h"
 #include "nuklear_tooltip.h"
 #include "bmp-scan.h"
 #include "bmp-script.h"
@@ -84,70 +85,11 @@
 
 #define FONT_HEIGHT     14              /* default font size */
 #define WINDOW_WIDTH    (30 * opt_fontsize)
-#define WINDOW_HEIGHT   (21 * opt_fontsize)
+#define WINDOW_HEIGHT   (23 * opt_fontsize)
 #define ROW_HEIGHT      (2 * opt_fontsize)
 #define COMBOROW_CY     (0.9 * opt_fontsize)
 #define BROWSEBTN_WIDTH (1.5 * opt_fontsize)
 
-
-static float *nk_ratio(int count, ...)
-{
-  #define MAX_ROW_FIELDS 10
-  static float r_array[MAX_ROW_FIELDS];
-  va_list ap;
-  int i;
-
-  assert(count < MAX_ROW_FIELDS);
-  va_start(ap, count);
-  for (i = 0; i < count; i++)
-    r_array[i] = (float) va_arg(ap, double);
-  va_end(ap);
-  return r_array;
-}
-
-static void set_style(struct nk_context *ctx)
-{
-  struct nk_color table[NK_COLOR_COUNT];
-
-  assert(ctx != NULL);
-
-  table[NK_COLOR_TEXT] = nk_rgba(205, 201, 171, 255);
-  table[NK_COLOR_WINDOW] = nk_rgba(35, 52, 71, 255);
-  table[NK_COLOR_HEADER] = nk_rgba(58, 86, 117, 255);
-  table[NK_COLOR_BORDER] = nk_rgba(128, 128, 128, 255);
-  table[NK_COLOR_BUTTON] = nk_rgba(58, 86, 117, 255);
-  table[NK_COLOR_BUTTON_HOVER] = nk_rgba(127, 23, 45, 255);
-  table[NK_COLOR_BUTTON_ACTIVE] = nk_rgba(127, 23, 45, 255);
-  table[NK_COLOR_TOGGLE] = nk_rgba(20, 29, 38, 255);
-  table[NK_COLOR_TOGGLE_HOVER] = nk_rgba(204, 199, 141, 255);
-  table[NK_COLOR_TOGGLE_CURSOR] = nk_rgba(179, 175, 132, 255);
-  table[NK_COLOR_SELECT] = nk_rgba(20, 29, 38, 255);
-  table[NK_COLOR_SELECT_ACTIVE] = nk_rgba(204, 199, 141, 255);
-  table[NK_COLOR_SLIDER] = nk_rgba(20, 29, 38, 255);
-  table[NK_COLOR_SLIDER_CURSOR] = nk_rgba(179, 175, 132, 255);
-  table[NK_COLOR_SLIDER_CURSOR_HOVER] = nk_rgba(127, 23, 45, 255);
-  table[NK_COLOR_SLIDER_CURSOR_ACTIVE] = nk_rgba(127, 23, 45, 255);
-  table[NK_COLOR_PROPERTY] = nk_rgba(20, 29, 38, 255);
-  table[NK_COLOR_EDIT] = nk_rgba(20, 29, 38, 225);
-  table[NK_COLOR_EDIT_CURSOR] = nk_rgba(205, 201, 171, 255);
-  table[NK_COLOR_COMBO] = nk_rgba(20, 29, 38, 255);
-  table[NK_COLOR_CHART] = nk_rgba(20, 29, 38, 255);
-  table[NK_COLOR_CHART_COLOR] = nk_rgba(170, 40, 60, 255);
-  table[NK_COLOR_CHART_COLOR_HIGHLIGHT] = nk_rgba(255, 0, 0, 255);
-  table[NK_COLOR_SCROLLBAR] = nk_rgba(30, 40, 60, 255);
-  table[NK_COLOR_SCROLLBAR_CURSOR] = nk_rgba(179, 175, 132, 255);
-  table[NK_COLOR_SCROLLBAR_CURSOR_HOVER] = nk_rgba(204, 199, 141, 255);
-  table[NK_COLOR_SCROLLBAR_CURSOR_ACTIVE] = nk_rgba(204, 199, 141, 255);
-  table[NK_COLOR_TAB_HEADER] = nk_rgba(58, 86, 117, 255);
-  table[NK_COLOR_TOOLTIP] = nk_rgba(204, 199, 141, 255);
-  table[NK_COLOR_TOOLTIP_TEXT] = nk_rgba(35, 52, 71, 255);
-
-  nk_style_from_table(ctx, table);
-
-  /* button */
-  ctx->style.button.rounding = 0;
-  ctx->style.button.padding.x = 2;
-}
 
 /* log_addstring() adds a string to the log data; the parameter "text" may be NULL
    to return the current log string without adding new data to it */
@@ -506,24 +448,8 @@ static void usage(void)
          "-h\t This help.\n");
 }
 
-
-enum {
-  STATE_IDLE,
-  STATE_SAVE,
-  STATE_ATTACH,
-  STATE_PRE_DOWNLOAD,
-  STATE_PATCH_ELF,
-  STATE_FULLERASE,
-  STATE_DOWNLOAD,
-  STATE_VERIFY,
-  STATE_FINISH,
-};
-
-int main(int argc, char *argv[])
+static int help_popup(struct nk_context *ctx, int opt_fontsize)
 {
-  static const char *architectures[] = { "generic", "lpc8xx", "lpc11xx", "lpc15xx",
-                                         "lpc17xx", "lpc21xx", "lpc22xx", "lpc23xx",
-                                         "lpc24xx", "lpc43xx"};
   static const char helptext[] =
     "This utility downloads firmware into a micro-controller\n"
     "using the Black Magic Probe. It automatically handles\n"
@@ -563,6 +489,44 @@ int main(int argc, char *argv[])
     "number is in bytes. The format can be chosen as binary,\n"
     "ASCII or Unicode. In the latter two cases, the serial\n"
     "number is stored as readable text.\n\n";
+  int is_active = 1;
+  struct nk_rect rc = nk_rect(10, 10, WINDOW_WIDTH - 20, WINDOW_HEIGHT - 20);
+  if (nk_popup_begin(ctx, NK_POPUP_STATIC, "Help", NK_WINDOW_NO_SCROLLBAR, rc)) {
+    float viewrows = WINDOW_HEIGHT/(2.0 * opt_fontsize) - 2.3;
+    nk_layout_row_dynamic(ctx, viewrows*ROW_HEIGHT, 1);
+    log_widget(ctx, "help", helptext, opt_fontsize, NULL);
+    nk_layout_row_dynamic(ctx, ROW_HEIGHT, 4);
+    nk_spacing(ctx, 3);
+    if (nk_button_label(ctx, "Close") || nk_input_is_key_pressed(&ctx->input, NK_KEY_ESCAPE)) {
+      is_active = 0;
+      nk_popup_close(ctx);
+    }
+    nk_popup_end(ctx);
+  } else {
+    is_active = 0;
+  }
+  return is_active;
+}
+
+
+enum {
+  STATE_IDLE,
+  STATE_SAVE,
+  STATE_ATTACH,
+  STATE_PRE_DOWNLOAD,
+  STATE_PATCH_ELF,
+  STATE_ERASE_OPTBYTES,
+  STATE_FULLERASE,
+  STATE_DOWNLOAD,
+  STATE_VERIFY,
+  STATE_FINISH,
+};
+
+int main(int argc, char *argv[])
+{
+  static const char *architectures[] = { "Generic", "LPC8xx", "LPC11xx", "LPC15xx",
+                                         "LPC17xx", "LPC21xx", "LPC22xx", "LPC23xx",
+                                         "LPC24xx", "LPC43xx"};
 
   enum { SER_NONE, SER_ADDRESS, SER_MATCH };
   enum { FMT_BIN, FMT_ASCII, FMT_UNICODE };
@@ -582,14 +546,16 @@ int main(int argc, char *argv[])
   FILE *fpTgt, *fpWork;
   int probe, usbprobes, netprobe;
   const char **probelist;
-  int opt_tpwr = nk_false;
-  int opt_fullerase = nk_false;
-  int opt_connect_srst = nk_false;
+  nk_bool opt_tpwr = nk_false;
+  nk_bool opt_erase_optbytes = nk_false;
+  nk_bool opt_fullerase = nk_false;
+  nk_bool opt_connect_srst = nk_false;
   int opt_architecture = 0;
   int opt_serialize = SER_NONE;
   int opt_format = FMT_BIN;
   int help_active = 0;
   int load_options = 0;
+  int skip_download = 0;  /* perform all steps for a code download, except the actual download */
   int opt_fontsize = FONT_HEIGHT;
   char opt_fontstd[64] = "", opt_fontmono[64] = "";
 
@@ -671,10 +637,10 @@ int main(int argc, char *argv[])
   netprobe = (usbprobes > 0) ? usbprobes : 1;
   probelist = malloc((netprobe+1)*sizeof(char*));
   if (probelist != NULL) {
-    char portname[64];
     if (usbprobes == 0) {
       probelist[0] = strdup("-");
     } else {
+      char portname[64];
       for (idx = 0; idx < usbprobes; idx++) {
         find_bmp(idx, BMP_IF_GDB, portname, sizearray(portname));
         probelist[idx] = strdup(portname);
@@ -692,7 +658,7 @@ int main(int argc, char *argv[])
 
   ctx = guidriver_init("BlackMagic Flash Programmer", WINDOW_WIDTH, WINDOW_HEIGHT, GUIDRV_TIMER,
                        opt_fontstd, opt_fontmono, opt_fontsize);
-  set_style(ctx);
+  nuklear_style(ctx);
 
   tab_states[TAB_OPTIONS] = NK_MINIMIZED;
   tab_states[TAB_SERIALIZATION] = NK_MINIMIZED;
@@ -713,6 +679,8 @@ int main(int argc, char *argv[])
         fclose(fpWork);
         fpWork = NULL;
       }
+      bmp_detach(1);  /* if currently attached, detach */
+      skip_download = 0;
       break;
     case STATE_SAVE:
       tab_states[TAB_OPTIONS] = NK_MINIMIZED;
@@ -749,17 +717,31 @@ int main(int argc, char *argv[])
       result = bmp_connect(probe, (probe == netprobe) ? txtIPaddr : NULL);
       if (result) {
         char mcufamily[32];
-        int arch;
         result = bmp_attach(opt_tpwr, opt_connect_srst, mcufamily, sizearray(mcufamily), NULL, 0);
-        for (arch = 0; arch < sizearray(architectures); arch++)
-          if (architecture_match(architectures[arch], mcufamily))
-            break;
-        if (arch >= sizearray(architectures))
-          arch = 0;
-        if (arch != opt_architecture) {
-          char msg[128];
-          sprintf(msg, "^3Detected MCU family %s (check options)\n", architectures[arch]);
-          log_addstring(msg);
+        if (result) {
+          int arch;
+          /* try exact match first */
+          for (arch = 0; arch < sizearray(architectures); arch++)
+            if (architecture_match(architectures[arch], mcufamily))
+              break;
+          if (arch >= sizearray(architectures)) {
+            /* try prefix match */
+            for (arch = 0; arch < sizearray(architectures); arch++) {
+              int len = strlen(architectures[arch]);
+              char pattern[32];
+              strcpy(pattern, mcufamily);
+              pattern[len] = '\0';
+              if (architecture_match(architectures[arch], pattern))
+                break;
+            }
+          }
+          if (arch >= sizearray(architectures))
+            arch = 0;
+          if (arch != opt_architecture) {
+            char msg[128];
+            sprintf(msg, "^3Detected MCU family %s (check options)\n", architectures[arch]);
+            log_addstring(msg);
+          }
         }
         if (bmp_flashtotal() == 0)
           result = 0; /* no use downloading firmware to a chip that has no Flash */
@@ -807,7 +789,21 @@ int main(int argc, char *argv[])
             log_addstring(msg);
           }
         }
+        curstate = result ? STATE_ERASE_OPTBYTES : STATE_IDLE;
+      } else {
+        curstate = STATE_ERASE_OPTBYTES;
+      }
+      waitidle = 0;
+      break;
+    case STATE_ERASE_OPTBYTES:
+      /* optionally erase all Flash memory */
+      if (opt_erase_optbytes && !skip_download) {
+        result = bmp_monitor("option erase");
+        if (!result)
+          log_addstring("^1Failed to erase the option bytes\n");
         curstate = result ? STATE_FULLERASE : STATE_IDLE;
+        //??? if (opt_tpwr) -> move to state to detach/power-down and re-attach/power-up
+        //??? otherwise pop up a message box to tell the user to power-cycle before proceeding
       } else {
         curstate = STATE_FULLERASE;
       }
@@ -815,7 +811,7 @@ int main(int argc, char *argv[])
       break;
     case STATE_FULLERASE:
       /* optionally erase all Flash memory */
-      if (opt_fullerase) {
+      if (opt_fullerase && !skip_download) {
         result = bmp_fullerase();
         curstate = result ? STATE_DOWNLOAD : STATE_IDLE;
       } else {
@@ -825,13 +821,40 @@ int main(int argc, char *argv[])
       break;
     case STATE_DOWNLOAD:
       /* download to target */
-      if (opt_architecture > 0)
-        bmp_runscript("memremap", architectures[opt_architecture], NULL, NULL);
-      result = bmp_download((fpWork != NULL) ? fpWork : fpTgt);
-      curstate = result ? STATE_VERIFY : STATE_IDLE;
+      if (!skip_download) {
+        if (opt_architecture > 0)
+          bmp_runscript("memremap", architectures[opt_architecture], NULL, NULL);
+        result = bmp_download((fpWork != NULL) ? fpWork : fpTgt);
+        curstate = result ? STATE_VERIFY : STATE_IDLE;
+      } else {
+        curstate = STATE_VERIFY;
+      }
       waitidle = 0;
       break;
     case STATE_VERIFY:
+      if (opt_architecture > 0) {
+        /* check whether CRP was set; if so, verification will always fail */
+        assert(fpWork != NULL);
+        result=elf_check_crp(fpWork, &idx);
+        if (result==ELFERR_NONE && idx>0 && idx<4) {
+          /* CRP level set, which makes verification impossible */
+          char msg[100];
+          if (skip_download) {
+            /* it may still be that the code in the target does not have CRP set,
+               but regardless, it won't match the code in the file */
+            sprintf(msg, "^3Code Read Protection (CRP%d) is set on the file on disk\n", idx);
+            log_addstring(msg);
+          } else {
+            /* so we just downloaded a file with CRP -> skip the verification
+               step */
+            sprintf(msg, "^3Code Read Protection (CRP%d) is set, verification skipped\n", idx);
+            log_addstring(msg);
+            curstate = STATE_FINISH;
+            waitidle = 0;
+            break;
+          }
+        }
+      }
       /* compare the checksum of Flash memory to the file */
       if (opt_architecture > 0)
         bmp_runscript("memremap", architectures[opt_architecture], NULL, NULL);
@@ -879,11 +902,10 @@ int main(int argc, char *argv[])
       }
       nk_layout_row_end(ctx);
 
-      nk_layout_row_dynamic(ctx, 7.5*ROW_HEIGHT, 1);
+      nk_layout_row_dynamic(ctx, 8.5*ROW_HEIGHT, 1);
       if (nk_group_begin(ctx, "options", 0)) {
         if (nk_tree_state_push(ctx, NK_TREE_TAB, "Options", &tab_states[TAB_OPTIONS])) {
           struct nk_rect rc_canvas = nk_rect(0, 0, WINDOW_WIDTH, WINDOW_HEIGHT);
-          struct nk_rect bounds;
           nk_layout_row(ctx, NK_DYNAMIC, ROW_HEIGHT * 0.8, 2, nk_ratio(2, 0.45, 0.55));
           nk_label(ctx, "Black Magic Probe", NK_TEXT_ALIGN_LEFT | NK_TEXT_ALIGN_MIDDLE);
           rcwidget = nk_widget_bounds(ctx);
@@ -926,15 +948,15 @@ int main(int argc, char *argv[])
           opt_architecture = nk_combo(ctx, architectures, NK_LEN(architectures), opt_architecture, (int)COMBOROW_CY, nk_vec2(rcwidget.w, 4.5*ROW_HEIGHT));
 
           nk_layout_row_dynamic(ctx, ROW_HEIGHT, 1);
-          bounds = nk_widget_bounds(ctx);
-          nk_checkbox_label(ctx, "Power Target (3.3V)", &opt_tpwr);
-          tooltip(ctx, bounds, " Let the debug probe provide power to the target", &rc_canvas);
-          bounds = nk_widget_bounds(ctx);
-          nk_checkbox_label(ctx, "Full Flash erase before download", &opt_fullerase);
-          tooltip(ctx, bounds, " Required to remove code-protection on NXP LPC-series MCUs", &rc_canvas);
-          bounds = nk_widget_bounds(ctx);
-          nk_checkbox_label(ctx, "Reset target during connect", &opt_connect_srst);
-          tooltip(ctx, bounds, " Keep target MCU reset while debug probe attaches", &rc_canvas);
+          checkbox_tooltip(ctx, "Power Target (3.3V)", &opt_tpwr,
+                           " Let the debug probe provide power to the target", &rc_canvas);
+          //??? erase option bytes requires power cycle -> some work is needed
+          //checkbox_tooltip(ctx, "Erase option bytes", &opt_erase_optbytes,
+          //                 " Required to remove code-protection on STM32-series MCUs", &rc_canvas);
+          checkbox_tooltip(ctx, "Full Flash erase before download", &opt_fullerase,
+                           " Required to remove code-protection on NXP LPC-series MCUs", &rc_canvas);
+          checkbox_tooltip(ctx, "Reset target during connect", &opt_connect_srst,
+                           " Keep target MCU reset while debug probe attaches", &rc_canvas);
 
           nk_tree_state_pop(ctx);
         }
@@ -974,7 +996,7 @@ int main(int argc, char *argv[])
         }
 
         if (nk_tree_state_push(ctx, NK_TREE_TAB, "Status", &tab_states[TAB_STATUS])) {
-          nk_layout_row_dynamic(ctx, 4*ROW_HEIGHT, 1);
+          nk_layout_row_dynamic(ctx, 5*ROW_HEIGHT, 1);
           log_widget(ctx, "status", logtext, opt_fontsize, &loglines);
           nk_tree_state_pop(ctx);
         }
@@ -1035,29 +1057,22 @@ int main(int argc, char *argv[])
         load_options = 0;
       }
 
-      nk_layout_row(ctx, NK_DYNAMIC, ROW_HEIGHT, 3, nk_ratio(3, 0.2, 0.4, 0.4));
+      nk_layout_row(ctx, NK_DYNAMIC, ROW_HEIGHT, 5, nk_ratio(5, 0.25, 0.025, 0.30, 0.025, 0.4));
       if (nk_button_label(ctx, "Help") || nk_input_is_key_pressed(&ctx->input, NK_KEY_F1))
         help_active = 1;
       nk_spacing(ctx, 1);
-      if (nk_button_label(ctx, "Download") || nk_input_is_key_pressed(&ctx->input, NK_KEY_F5))
-        curstate = STATE_SAVE;  /* start the download sequence */
-
-      if (help_active) {
-        struct nk_rect rc = nk_rect(10, 10, WINDOW_WIDTH - 20, WINDOW_HEIGHT - 20);
-        if (nk_popup_begin(ctx, NK_POPUP_STATIC, "Help", NK_WINDOW_NO_SCROLLBAR, rc)) {
-          nk_layout_row_dynamic(ctx, 8*ROW_HEIGHT, 1);
-          log_widget(ctx, "help", helptext, opt_fontsize, NULL);
-          nk_layout_row_dynamic(ctx, ROW_HEIGHT, 4);
-          nk_spacing(ctx, 3);
-          if (nk_button_label(ctx, "Close") || nk_input_is_key_pressed(&ctx->input, NK_KEY_ESCAPE)) {
-            help_active = 0;
-            nk_popup_close(ctx);
-          }
-          nk_popup_end(ctx);
-        } else {
-          help_active = 0;
-        }
+      if (nk_button_label(ctx, "Verify")) {
+        skip_download = 1;
+        curstate = STATE_SAVE;  /* start the pseudo-download sequence */
       }
+      nk_spacing(ctx, 1);
+      if (nk_button_label(ctx, "Download") || nk_input_is_key_pressed(&ctx->input, NK_KEY_F5)) {
+        skip_download = 0;      /* should already be 0 */
+        curstate = STATE_SAVE;  /* start the real download sequence */
+      }
+
+      if (help_active)
+        help_active = help_popup(ctx, opt_fontsize);
 
     }
     nk_end(ctx);
@@ -1078,7 +1093,7 @@ int main(int argc, char *argv[])
   if (probelist != NULL) {
     for (idx = 0; idx < netprobe + 1; idx++)
       free((void*)probelist[idx]);
-    free(probelist);
+    free((void*)probelist);
   }
   guidriver_close();
   bmscript_clear();

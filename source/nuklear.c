@@ -25,6 +25,9 @@
 #ifdef NK_INCLUDE_STANDARD_VARARGS
 #include <stdarg.h> /* valist, va_start, va_end, ... */
 #endif
+#ifdef NK_INCLUDE_STRING
+#include <string.h> /* standard string functions */
+#endif
 #ifndef NK_ASSERT
 #include <assert.h>
 #define NK_ASSERT(expr) assert(expr)
@@ -21657,7 +21660,8 @@ nk_edit_buffer(struct nk_context *ctx, nk_flags flags,
     } else if (prev_state && !edit->active) {
         /* current edit is now cold */
         win->edit.active = nk_false;
-    } return ret_flags;
+    }
+    return ret_flags;
 }
 NK_API nk_flags
 nk_edit_string_zero_terminated(struct nk_context *ctx, nk_flags flags,
@@ -23495,7 +23499,7 @@ nk_combobox_callback(struct nk_context *ctx,
  *
  * ===============================================================*/
 NK_API nk_bool
-nk_tooltip_begin(struct nk_context *ctx, float width, struct nk_rect *viewport)
+nk_tooltip_begin(struct nk_context *ctx, float width, const struct nk_rect *viewport)
 {
     int x,y,w,h;
     struct nk_window *win;
@@ -23523,6 +23527,7 @@ nk_tooltip_begin(struct nk_context *ctx, float width, struct nk_rect *viewport)
             x = viewport->x + viewport->w - (width + 10);
         if (x < viewport->x)
             x = viewport->x;
+        //??? also handle y vs tooltip height
     }
 
     w = nk_iceilf(width + 10);
@@ -23554,14 +23559,14 @@ nk_tooltip_end(struct nk_context *ctx)
     nk_popup_end(ctx);
 }
 NK_API void
-nk_tooltip(struct nk_context *ctx, const char *text, struct nk_rect *viewport)
+nk_tooltip(struct nk_context *ctx, const char *text, const struct nk_rect *viewport)
 {
     const struct nk_style *style;
     struct nk_vec2 padding;
 
-    int text_len;
     float text_width;
-    float text_height;
+    float line_height;
+    const char *head, *tail;
 
     NK_ASSERT(ctx);
     NK_ASSERT(ctx->current);
@@ -23578,16 +23583,34 @@ nk_tooltip(struct nk_context *ctx, const char *text, struct nk_rect *viewport)
     padding = style->tooltip.padding;
 
     /* calculate size of the text and tooltip */
-    text_len = nk_strlen(text);
-    text_width = style->font->width(style->font->userdata,
-                    style->font->height, text, text_len);
+    text_width = 0;
+    for (head = text; *head != '\0'; head = tail) {
+        int width;
+        tail = strchr(head, '\n');
+        if (!tail)
+            tail = strchr(head, '\0');
+        width = style->font->width(style->font->userdata,
+                                   style->font->height, head,
+                                   (int)(tail - head));
+        if (width > text_width)
+            text_width = width;
+        if (*tail == '\n')
+            tail++;
+    }
+    line_height = style->font->height;
     text_width += (4 * padding.x);
-    text_height = (style->font->height + 2 * padding.y);
 
     /* execute tooltip and fill with text */
     if (nk_tooltip_begin(ctx, (float)text_width, viewport)) {
-        nk_layout_row_dynamic(ctx, (float)text_height, 1);
-        nk_text(ctx, text, text_len, NK_TEXT_LEFT);
+        for (head = text; *head != '\0'; head = tail) {
+            tail = strchr(head, '\n');
+            if (!tail)
+                tail = strchr(head, '\0');
+            nk_layout_row_dynamic(ctx, line_height, 1);
+            nk_text(ctx, head, (int)(tail - head), NK_TEXT_LEFT);
+            if (*tail == '\n')
+                tail++;
+        }
         nk_tooltip_end(ctx);
     }
 

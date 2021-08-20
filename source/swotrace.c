@@ -855,8 +855,6 @@ static DWORD __stdcall trace_read(LPVOID arg)
  */
 int trace_init(unsigned short endpoint, const char *ipaddress)
 {
-  TCHAR guid[100], path[_MAX_PATH];
-
   loc_errno = 0;
   win_errno = 0;
   if (hThread != NULL && hUSBiface != INVALID_HANDLE_VALUE)
@@ -882,6 +880,7 @@ int trace_init(unsigned short endpoint, const char *ipaddress)
       return TRACESTAT_NO_PIPE;
     }
   } else {
+    TCHAR guid[100], path[_MAX_PATH];
     if (!find_bmp(0, BMP_IF_TRACE, guid, sizearray(guid)))
       return TRACESTAT_NO_INTERFACE;  /* Black Magic Probe not found (trace interface not found) */
     if (!usb_GetDevicePath(guid, path, sizearray(path)))
@@ -1122,6 +1121,8 @@ void tracelog_statusmsg(int type, const char *msg, int code)
       for (tail = &statusmessage_root; tail->next != NULL; tail = tail->next)
         {}
       tail->next = item;
+    } else {
+      free((void*)item);
     }
   }
 }
@@ -1155,9 +1156,6 @@ float tracelog_labelwidth(float rowheight)
 void tracelog_widget(struct nk_context *ctx, const char *id, float rowheight, int markline,
                      const TRACEFILTER *filters, nk_flags widget_flags)
 {
-  static int scrollpos = 0;
-  static int linecount = 0;
-  static int recent_markline = -1;
   TRACESTRING *item;
   int labelwidth, tstampwidth;
   struct nk_rect rcwidget = nk_layout_widget_bounds(ctx);
@@ -1181,6 +1179,9 @@ void tracelog_widget(struct nk_context *ctx, const char *id, float rowheight, in
   /* (near) black background on group */
   nk_style_push_color(ctx, &stwin->fixed_background.data.color, nk_rgba(20, 29, 38, 225));
   if (nk_group_begin(ctx, id, widget_flags)) {
+    static int recent_markline = -1;
+    static int scrollpos = 0;
+    static int linecount = 0;
     int lines = 0, widgetlines = 0, ypos;
     float lineheight = 0;
     for (item = tracestring_root.next; item != NULL; item = item->next) {
@@ -1419,7 +1420,6 @@ void timeline_rebuild(void)
 
 double timeline_widget(struct nk_context *ctx, const char *id, float rowheight, nk_flags widget_flags)
 {
-  static float timeline_maxpos_prev = 0.0f;
   int labelwidth;
   double click_time = -1.0;
   struct nk_rect rcwidget;
@@ -1450,12 +1450,13 @@ double timeline_widget(struct nk_context *ctx, const char *id, float rowheight, 
   nk_style_push_vec2(ctx, &ctx->style.window.spacing, nk_vec2(0, 0));
   nk_style_push_color(ctx, &ctx->style.window.fixed_background.data.color, nk_rgba(20, 29, 38, 225));
   if (nk_group_begin(ctx, id, widget_flags | NK_WINDOW_NO_SCROLLBAR)) {
+    static float timeline_maxpos_prev = 0.0f;
     struct nk_window *win = ctx->current;
     struct nk_user_font const *font = ctx->style.font;
     struct nk_rect rc;
     long mark_stamp, mark_inv_scale;
     int submark_count, submark_iter;
-    int len, chan;
+    int chan;
     char valstr[60];
     float x1, x2;
     const char *unit;
@@ -1558,6 +1559,7 @@ double timeline_widget(struct nk_context *ctx, const char *id, float rowheight, 
       for (chan = 0; chan < NUM_CHANNELS; chan++) {
         struct nk_color clrtxt;
         float textwidth;
+        int len;
         if (!channels[chan].enabled)
           continue; /* only draw enable channels */
         nk_layout_row_dynamic(ctx, rowheight + VERPADDING, 1);

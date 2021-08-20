@@ -72,6 +72,7 @@ int ctf_error_notify(int code, int linenr, const char *message)
     fprintf(stderr, "ERROR on line %d: ", linenr);
   else
     fprintf(stderr, "ERROR: ");
+  assert(message != NULL);
   fprintf(stderr, "%s\n", message);
   return 0;
 }
@@ -297,7 +298,7 @@ void generate_funcstubs(FILE *fp, unsigned flags, const char *trace_func, const 
     const CTF_STREAM *stream = stream_by_id(evt->stream_id);
     const CTF_EVENT_HEADER *evthdr = (stream != NULL) ? &stream->event : NULL;
     const CTF_EVENT_FIELD *field;
-    int pos, seq, stringcount, headersz, fixedsz;
+    int pos, stringcount, headersz, fixedsz;
     const char *var_totallength, *var_index;
 
     generate_functionheader(fp, evt, flags);
@@ -381,7 +382,7 @@ void generate_funcstubs(FILE *fp, unsigned flags, const char *trace_func, const 
     /* if there are string parameters, create variables for their lengths and
        their positions in the buffer */
     if (stringcount > 0) {
-      int count = 0, idx;
+      int count = 0;
       if (stringcount > 1)
         fprintf(fp, "  unsigned index = 0;\n");
       for (field = evt->field_root.next; field != NULL; field = field->next)
@@ -391,6 +392,7 @@ void generate_funcstubs(FILE *fp, unsigned flags, const char *trace_func, const 
         var_totallength = "length0";
         var_index = "length0";
       } else {
+        int idx;
         var_totallength = "totallength";
         var_index = "index";
         fprintf(fp, "  unsigned %s = ", var_totallength);
@@ -408,6 +410,7 @@ void generate_funcstubs(FILE *fp, unsigned flags, const char *trace_func, const 
          in the message, so the generated code can be very simple */
       fprintf(fp, "  %sheader, %d);\n", xmit_call, headersz);
     } else {
+      int seq;
       /* create a variable for the buffer (the stringcount count is added to the
          fixed size because the zero byte of each string must be allocated too */
       if ((flags & FLAG_C99) == 0 || stringcount == 0)

@@ -274,7 +274,7 @@ static int readline_next(void)
         if (*ptr == '\\')
           ptr++;      /* skip '\', the letter following it is skipped in the for loop (after "continue") */
         else if (*ptr == in_quotes)
-          in_quotes = 0;
+          in_quotes = '\0';
         continue;
       } else if (*ptr == '/' && *(ptr + 1) == '/') {
         *ptr = '\0';    /* terminate line at the start of a single-line comment */
@@ -282,6 +282,8 @@ static int readline_next(void)
       } else if (*ptr == '/' && *(ptr + 1) == '*') {
         comment_block_start = linenumber;
         *ptr = ' ';     /* replace the comment by white-space */
+      } else if (*ptr == '"' || *ptr == '\'') {
+        in_quotes = *ptr;
       } else if (*ptr < ' ') {
         *ptr = ' ';
       }
@@ -513,7 +515,7 @@ static int token_next(void)
     recent_token.id = TOK_LINTEGER; /* may be overruled later */
     recent_token.number = 0;
     recent_token.real = 0.0;
-    if (linebuffer[linebuffer_index] == '0' && (linebuffer[linebuffer_index] == 'x' || linebuffer[linebuffer_index] == 'X')) {
+    if (linebuffer[linebuffer_index] == '0' && (linebuffer[linebuffer_index + 1] == 'x' || linebuffer[linebuffer_index + 1] == 'X')) {
       /* hexadecimal */
       linebuffer_index += 2;
       while (isxdigit(linebuffer[linebuffer_index])) {
@@ -1175,6 +1177,7 @@ static void parse_packet_header(void)
   }
   if (knowntype == NULL) {
     CTF_TYPE type;
+    memset(&type, 0, sizeof type);
     while (!token_match('}')) {
       parse_declaration(&type, identifier, sizearray(identifier));
       if (strcmp(identifier, "magic") == 0) {
@@ -1254,6 +1257,7 @@ static void parse_event_header(CTF_EVENT_HEADER *evthdr, CTF_TYPE **clock)
   }
   if (knowntype == NULL) {
     CTF_TYPE type;
+    memset(&type, 0, sizeof type);
     while (!token_match('}')) {
       parse_declaration(&type, identifier, sizearray(identifier));
       if (strcmp(identifier, "event.id") == 0 || strcmp(identifier, "id") == 0) {

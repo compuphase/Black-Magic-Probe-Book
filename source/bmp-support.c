@@ -320,21 +320,11 @@ int bmp_attach(int tpwr, int connect_srst, char *name, size_t namelength, char *
 
 restart:
   if (connect_srst != 0) {
-    gdbrsp_xmit("qRcmd,connect_srst enable", -1);
-    do {
-      size = gdbrsp_recv(buffer, sizearray(buffer), 1000);
-    } while (size > 0 && buffer[0] == 'o'); /* ignore console output */
-    if (size != 2 || memcmp(buffer, "OK", size) != 0)
+    if (!bmp_monitor("connect_srst enable"))
       notice(BMPERR_MONITORCMD, "Setting connect-with-reset option failed");
   }
   if (tpwr == 1) {
-    gdbrsp_xmit("qRcmd,tpwr enable", -1);
-    do {
-      size = gdbrsp_recv(buffer, sizearray(buffer), 1000);
-    } while (size > 0 && buffer[0] == 'o'); /* ignore console output */
-    if (size != 2 || memcmp(buffer, "OK", size) != 0) {
-      notice(BMPERR_MONITORCMD, "Power to target failed");
-    } else {
+    if (bmp_monitor("tpwr enable")) {
       /* give the micro-controller a bit of time to start up, before issuing
          the swdp_scan command */
       #if defined _WIN32
@@ -342,6 +332,8 @@ restart:
       #else
         usleep(100 * 1000);
       #endif
+    } else {
+      notice(BMPERR_MONITORCMD, "Power to target failed");
     }
   }
   gdbrsp_xmit("qRcmd,swdp_scan", -1);
@@ -433,25 +425,22 @@ restart:
 
 int bmp_detach(int powerdown)
 {
-  int result = 1;
+  int result = 0;
 
   if (bmp_isopen()) {
     char buffer[100];
     size_t size;
-    /* optionally disable power */
-    if (powerdown) {
-      gdbrsp_xmit("qRcmd,tpwr disable", -1);
-      do {
-        size = gdbrsp_recv(buffer, sizearray(buffer), 1000);
-      } while (size > 0 && buffer[0] == 'o'); /* ignore console output */
-      if (size != 2 || memcmp(buffer, "OK", size) != 0)
-        result = 0;
-    }
+    result = 1;
     /* detach */
     gdbrsp_xmit("D", -1);
     size = gdbrsp_recv(buffer, sizearray(buffer), 1000);
     if (size != 2 || memcmp(buffer, "OK", size) != 0)
       result = 0;
+    /* optionally disable power */
+    if (powerdown) {
+      if (!bmp_monitor("tpwr disable"))
+        result = 0;
+    }
   }
 
   return result;
@@ -484,6 +473,32 @@ int bmp_checkversionstring(void)
   if (size != 2 || memcmp(buffer, "OK", size) != 0)
     return PROBE_UNKNOWN;
   return probe;
+}
+
+/** bmp_monitor() executes a "monitor" command and returns whether the reply
+ *  indicates success. This is suitable for simple monitor commands, that do
+ *  not require analysis of the reply strings sent by the device (other than
+ *  OK or error)
+ */
+int bmp_monitor(const char *command)
+{
+  char buffer[512];
+  size_t size;
+
+  assert(command != NULL && strlen(command) > 0);
+
+  if (!bmp_isopen()) {
+    notice(BMPERR_ATTACHFAIL, "No connection to debug probe");
+    return 0;
+  }
+
+  strlcpy(buffer, "qRcmd,", sizearray(buffer));
+  strlcat(buffer, command, sizearray(buffer));
+  gdbrsp_xmit(buffer, -1);
+  do {
+    size = gdbrsp_recv(buffer, sizearray(buffer), 1000);
+  } while (size > 0 && buffer[0] == 'o'); /* ignore console output */
+  return (size == 2 || memcmp(buffer, "OK", size) == 0);
 }
 
 int bmp_fullerase(void)

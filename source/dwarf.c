@@ -2,7 +2,7 @@
  * information * in an ELF file. For the symbol table, only the function
  * symbols are stored.
  *
- * Copyright (c) 2015,2019-2020 CompuPhase
+ * Copyright (c) 2015,2019-2021 CompuPhase
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -691,7 +691,7 @@ static long read_leb128(FILE *fp,int sign,int *size)
   /* sign-extend; since bit 7 in the last byte read is the continuation bit,
      bit 6 is the sign bit */
   if (sign && (byte & 0x40)!=0 && shift < (sizeof(long)*8))
-    value |= ~0 << shift;
+    value |= ~0u << shift;
 
   return value;
 }
@@ -842,7 +842,7 @@ static void read_string(FILE *fp,int format,int stringtable,char *string,int max
 static void dwarf_abbrev(FILE *fp,const DWARFTABLE tables[],ABBREVLIST *abbrevlist)
 {
   #define MAX_ATTRIBUTES  25  /* max. number of attributes for a single tag (in practice, no more than 11 attributes have been observed) */
-  int unit,idx,tag,attrib,format;
+  int unit,tag,attrib,format;
   int size,count;
   unsigned char flag;
   unsigned long tablesize;
@@ -860,7 +860,7 @@ static void dwarf_abbrev(FILE *fp,const DWARFTABLE tables[],ABBREVLIST *abbrevli
   unit=0;
   while (tablesize > 0) {
     /* get and chech the abbreviation id (a sequence number relative to its unit) */
-    idx=(int)read_leb128(fp,0,&size);
+    int idx=(int)read_leb128(fp,0,&size);
     tablesize-=size;
     if (idx==0) {
       unit+=1;  /* an id that is zero, indicates the end of a unit */
@@ -920,12 +920,11 @@ static int dwarf_linetable(FILE *fp,const DWARFTABLE tables[],
 {
   DWARF_FIXEDPROLOGUE prologue;
   STATE state;
-  int byte,dirpos,opcode,lebsize;
+  int dirpos,opcode,lebsize;
   int unit,idx;
-  long count,value;
+  long value;
   unsigned tableoffset,tablesize;
   char path[_MAX_PATH];
-  uint8_t *std_argcnt;  /* array with argument counts for standard opcodes */
   DWARF_PATHLIST include_list = { NULL };
   DWARF_PATHLIST file_list = { NULL };
   DWARF_LINELOOKUP line_list = { NULL };
@@ -948,6 +947,9 @@ static int dwarf_linetable(FILE *fp,const DWARFTABLE tables[],
 
   unit=0;
   while (tablesize > sizeof(prologue)) {
+    uint8_t *std_argcnt;  /* array with argument counts for standard opcodes */
+    long count;
+    int byte;
     /* check the prologue */
     fread(&prologue,sizeof(prologue),1,fp);
     //??? on big_endian, swap fields
@@ -1159,12 +1161,11 @@ static int dwarf_infotable(FILE *fp,const DWARFTABLE tables[],
   INFO_HDR32 header;
   ABBREVLIST abbrev_root = { NULL };
   const ABBREVLIST *abbrev;
-  int unit,level,idx,size;
-  uint32_t code_addr,data_addr;
-  unsigned long tablesize,unitsize;
+  int unit,idx,size;
+  unsigned long tablesize;
   char name[256],str[256];
   int64_t value;
-  int file,line,external;
+  int file,line;
 
   assert(fp!=NULL);
   assert(tables!=NULL);
@@ -1182,15 +1183,17 @@ static int dwarf_infotable(FILE *fp,const DWARFTABLE tables[],
   unit=0;
   tablesize=tables[TABLE_INFO].size;
   while (tablesize>sizeof(header)) {
+    unsigned long unitsize;
+    uint32_t code_addr=0;
+    uint32_t data_addr=0;
+    int external=0;
+    int level=0;
     fread(&header,sizeof(header),1,fp);
     unitsize=header.unit_length-(sizeof(header)-4);
     assert(unitsize<0xfffffff0);  /* if larger, should read the 64-bit version of the structure */
     *address_size=header.address_size;
     tablesize-=unitsize+sizeof(header);
     name[0]='\0';
-    code_addr=0;
-    data_addr=0;
-    external=0;
     level=0;
     /* browse through the tags */
     while (unitsize>0) {

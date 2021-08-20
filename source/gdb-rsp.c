@@ -79,9 +79,10 @@ void gdbrsp_packetsize(size_t size)
   } else if (size > cache_size) {
     unsigned char *buf = malloc(size * sizeof(char));
     if (buf != NULL) {
-      memcpy(buf, cache, cache_idx * sizeof(char));
-      if (cache != NULL)
+      if (cache != NULL) {
+        memcpy(buf, cache, cache_idx * sizeof(char));
         free(cache);
+      }
       cache = buf;
       cache_size = size;
     }

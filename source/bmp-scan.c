@@ -383,8 +383,7 @@ int find_bmp(int seqnr, int iface, char *name, size_t namelen)
                   strlcpy(name, ptr, namelen);  /* return <bus> '-' <port> ':' <???> '.' <iface> */
                 }
               } else {
-                char *ptr;
-                FILE *fp;
+                FILE *fpser;
                 assert(iface == BMP_IF_SERIAL);
                 assert(strlen(path) > 4);
                 ptr = path + strlen(path) - 4;  /* -4 for "/tty" */
@@ -394,12 +393,12 @@ int find_bmp(int seqnr, int iface, char *name, size_t namelen)
                 assert(ptr > path && *ptr == ':');
                 *ptr = '\0';  /* remove sub-path */
                 strlcat(path, "/serial", sizearray(path));
-                fp = fopen(path, "r");
-                if (fp != NULL) {
-                  fgets(name, namelen, fp);
+                fpser = fopen(path, "r");
+                if (fpser != NULL) {
+                  fgets(name, namelen, fpser);
                   if ((ptr = strchr(name, '\n')) != NULL)
                     *ptr = '\0';  /* drop trailing newline */
-                  fclose(fp);
+                  fclose(fpser);
                 }
               }
             }

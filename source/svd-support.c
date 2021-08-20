@@ -2,7 +2,7 @@
  * Functions for reading and parsing CMSIS SVD files with MCU-specific register
  * definitions.
  *
- * Copyright 2020 CompuPhase
+ * Copyright 2020-2021 CompuPhase
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -26,6 +26,8 @@
   #include "strlcpy.h"
 #elif defined __linux__
   #include <bsd/string.h>
+#elif defined(_MSC_VER) && _MSC_VER < 1900
+  #include "c99_snprintf.h"
 #endif
 
 struct tagPERIPHERAL;
@@ -490,12 +492,12 @@ int svd_xlate_all_names(char *text, size_t maxsize)
 {
   char *head, *tail;
   int count = 0;
-  unsigned len;
   char word[50], alias[50];
 
   assert(text != NULL);
   head = text;
   while (*head != '\0') {
+    unsigned len;
     /* extract next word */
     while (*head != '\0' && *head <= ' ')
       head += 1;

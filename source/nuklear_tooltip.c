@@ -1,7 +1,7 @@
 /*
  * Tooltip with delay for the Nuklear GUI.
  *
- * Copyright 2019-2020 CompuPhase
+ * Copyright 2019-2021 CompuPhase
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -38,7 +38,7 @@ unsigned long timestamp(void)
   #endif
 }
 
-int tooltip(struct nk_context *ctx, struct nk_rect bounds, const char *text, struct nk_rect *viewport)
+int tooltip(struct nk_context *ctx, struct nk_rect bounds, const char *text, const struct nk_rect *viewport)
 {
   static struct nk_rect recent_bounds;
   static unsigned long start_tstamp;
@@ -53,10 +53,47 @@ int tooltip(struct nk_context *ctx, struct nk_rect bounds, const char *text, str
     start_tstamp = tstamp;
     return 0;
   }
-  if (tstamp - start_tstamp < TOOLTIP_DELAY)
+  if (tstamp - start_tstamp < TOOLTIP_DELAY
+      || tstamp - start_tstamp > TOOLTIP_TIMEOUT)
     return 0;           /* delay time has not reached its value yet */
   if (text != NULL)
     nk_tooltip(ctx, text, viewport);
   return 1;
 }
 
+nk_bool button_tooltip(struct nk_context *ctx, const char *title,
+                       const char *tiptext, struct nk_rect *viewport)
+{
+  struct nk_rect bounds = nk_widget_bounds(ctx);
+  nk_bool result = nk_button_label(ctx, title);
+  tooltip(ctx, bounds, tiptext, viewport);
+  return result;
+}
+
+nk_bool button_symbol_tooltip(struct nk_context *ctx, enum nk_symbol_type symbol,
+                              const char *tiptext, struct nk_rect *viewport)
+{
+  struct nk_rect bounds = nk_widget_bounds(ctx);
+  nk_bool result = nk_button_symbol(ctx, symbol);
+  tooltip(ctx, bounds, tiptext, viewport);
+  return result;
+}
+
+nk_bool checkbox_tooltip(struct nk_context *ctx, const char *label, nk_bool *active,
+                         const char *tiptext, struct nk_rect *viewport)
+{
+  struct nk_rect bounds = nk_widget_bounds(ctx);
+  nk_bool result = nk_checkbox_label(ctx, label, active);
+  tooltip(ctx, bounds, tiptext, viewport);
+  return result;
+}
+
+nk_flags editctrl_tooltip(struct nk_context *ctx, nk_flags flags,
+                          char *buffer, int max, nk_plugin_filter filter,
+                          const char *tiptext, struct nk_rect *viewport)
+{
+  struct nk_rect bounds = nk_widget_bounds(ctx);
+  nk_flags result = nk_edit_string_zero_terminated(ctx, flags, buffer, max, filter);
+  tooltip(ctx, bounds, tiptext, viewport);
+  return result;
+}

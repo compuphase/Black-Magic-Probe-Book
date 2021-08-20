@@ -297,10 +297,7 @@ static void calc_layout(struct nk_context *ctx, struct nk_user_font const *font,
 
 void memdump_widget(struct nk_context *ctx, MEMDUMP *memdump, int widgetheight, int rowheight)
 {
-  const char *head, *tail, *prev_head;
-  char field[128];
   int fonttype;
-  unsigned len;
   struct nk_user_font const *font;
 
   assert(ctx != NULL);
@@ -321,6 +318,7 @@ void memdump_widget(struct nk_context *ctx, MEMDUMP *memdump, int widgetheight, 
     struct nk_rect rcwidget = nk_layout_widget_bounds(ctx);
     int col = 0;
     unsigned long addr = memdump->address;
+    const char *head, *tail, *prev_head;
 
     /* calculate values for lay-out (but only on a refresh) */
     if (memdump->columns == 0) {
@@ -331,6 +329,8 @@ void memdump_widget(struct nk_context *ctx, MEMDUMP *memdump, int widgetheight, 
     head = memdump->data;
     prev_head = memdump->prev;
     while (*head != '\0') {
+      char field[128];
+      unsigned len;
       int modified = 0;
       /* check for a new row */
       if (col == 0) {

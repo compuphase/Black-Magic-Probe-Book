@@ -272,7 +272,8 @@ nk_glfw3_font_stash_end(void)
 NK_API void
 nk_glfw3_new_frame(void)
 {
-    int i;
+    int i, shift, ctrl, alt;
+    int plain, ctrl_plain, shift_plain;
     double x, y;
     struct nk_context *ctx = &glfw.ctx;
     struct GLFWwindow *win = glfw.win;
@@ -292,92 +293,89 @@ nk_glfw3_new_frame(void)
     else if (ctx->input.mouse.ungrab)
         glfwSetInputMode(glfw.win, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
 
-    nk_input_key(ctx, NK_KEY_DEL, glfwGetKey(win, GLFW_KEY_DELETE) == GLFW_PRESS);
-    nk_input_key(ctx, NK_KEY_ENTER, glfwGetKey(win, GLFW_KEY_ENTER) == GLFW_PRESS);
-    nk_input_key(ctx, NK_KEY_TAB, glfwGetKey(win, GLFW_KEY_TAB) == GLFW_PRESS);
-    nk_input_key(ctx, NK_KEY_BACKSPACE, glfwGetKey(win, GLFW_KEY_BACKSPACE) == GLFW_PRESS);
-    nk_input_key(ctx, NK_KEY_UP, glfwGetKey(win, GLFW_KEY_UP) == GLFW_PRESS);
-    nk_input_key(ctx, NK_KEY_DOWN, glfwGetKey(win, GLFW_KEY_DOWN) == GLFW_PRESS);
-    nk_input_key(ctx, NK_KEY_TEXT_START, glfwGetKey(win, GLFW_KEY_HOME) == GLFW_PRESS);
-    nk_input_key(ctx, NK_KEY_TEXT_END, glfwGetKey(win, GLFW_KEY_END) == GLFW_PRESS);
-    nk_input_key(ctx, NK_KEY_SCROLL_START, glfwGetKey(win, GLFW_KEY_HOME) == GLFW_PRESS);
-    nk_input_key(ctx, NK_KEY_SCROLL_END, glfwGetKey(win, GLFW_KEY_END) == GLFW_PRESS);
-    nk_input_key(ctx, NK_KEY_SCROLL_DOWN, glfwGetKey(win, GLFW_KEY_PAGE_DOWN) == GLFW_PRESS);
-    nk_input_key(ctx, NK_KEY_SCROLL_UP, glfwGetKey(win, GLFW_KEY_PAGE_UP) == GLFW_PRESS);
-    nk_input_key(ctx, NK_KEY_SHIFT, glfwGetKey(win, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS ||
-                                    glfwGetKey(win, GLFW_KEY_RIGHT_SHIFT) == GLFW_PRESS);
+    shift = (glfwGetKey(win, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS || glfwGetKey(win, GLFW_KEY_RIGHT_SHIFT) == GLFW_PRESS);
+    ctrl = (glfwGetKey(win, GLFW_KEY_LEFT_CONTROL) == GLFW_PRESS || glfwGetKey(win, GLFW_KEY_RIGHT_CONTROL) == GLFW_PRESS);
+    alt = (glfwGetKey(win, GLFW_KEY_LEFT_ALT) == GLFW_PRESS || glfwGetKey(win, GLFW_KEY_RIGHT_ALT) == GLFW_PRESS);
 
-    if (glfwGetKey(win, GLFW_KEY_LEFT_CONTROL) == GLFW_PRESS ||
-        glfwGetKey(win, GLFW_KEY_RIGHT_CONTROL) == GLFW_PRESS) {
-        nk_input_key(ctx, NK_KEY_OPEN, glfwGetKey(win, GLFW_KEY_O) == GLFW_PRESS);
-        nk_input_key(ctx, NK_KEY_SAVE, glfwGetKey(win, GLFW_KEY_S) == GLFW_PRESS);
-        nk_input_key(ctx, NK_KEY_FIND, glfwGetKey(win, GLFW_KEY_F) == GLFW_PRESS);
-        nk_input_key(ctx, NK_KEY_GOTO, glfwGetKey(win, GLFW_KEY_G) == GLFW_PRESS);
-        nk_input_key(ctx, NK_KEY_REPLACE, glfwGetKey(win, GLFW_KEY_H) == GLFW_PRESS);
-        nk_input_key(ctx, NK_KEY_COPY, glfwGetKey(win, GLFW_KEY_C) == GLFW_PRESS);
-        nk_input_key(ctx, NK_KEY_PASTE, glfwGetKey(win, GLFW_KEY_V) == GLFW_PRESS);
-        nk_input_key(ctx, NK_KEY_CUT, glfwGetKey(win, GLFW_KEY_X) == GLFW_PRESS);
-        nk_input_key(ctx, NK_KEY_REFRESH, glfwGetKey(win, GLFW_KEY_R) == GLFW_PRESS);
-        nk_input_key(ctx, NK_KEY_TEXT_REDO, glfwGetKey(win, GLFW_KEY_Y) == GLFW_PRESS);
-        nk_input_key(ctx, NK_KEY_TEXT_UNDO, glfwGetKey(win, GLFW_KEY_Z) == GLFW_PRESS);
-        nk_input_key(ctx, NK_KEY_TEXT_WORD_LEFT, glfwGetKey(win, GLFW_KEY_LEFT) == GLFW_PRESS);
-        nk_input_key(ctx, NK_KEY_TEXT_WORD_RIGHT, glfwGetKey(win, GLFW_KEY_RIGHT) == GLFW_PRESS);
-        nk_input_key(ctx, NK_KEY_TEXT_LINE_START, glfwGetKey(win, GLFW_KEY_B) == GLFW_PRESS);
-        nk_input_key(ctx, NK_KEY_TEXT_LINE_END, glfwGetKey(win, GLFW_KEY_E) == GLFW_PRESS);
-        nk_input_key(ctx, NK_KEY_SCROLL_TOP, glfwGetKey(win, GLFW_KEY_HOME) == GLFW_PRESS);
-        nk_input_key(ctx, NK_KEY_SCROLL_BOTTOM, glfwGetKey(win, GLFW_KEY_END) == GLFW_PRESS);
-        nk_input_key(ctx, NK_KEY_CTRL_F1, glfwGetKey(win, GLFW_KEY_F1) == GLFW_PRESS);
-        nk_input_key(ctx, NK_KEY_CTRL_F2, glfwGetKey(win, GLFW_KEY_F2) == GLFW_PRESS);
-        nk_input_key(ctx, NK_KEY_CTRL_F3, glfwGetKey(win, GLFW_KEY_F3) == GLFW_PRESS);
-        nk_input_key(ctx, NK_KEY_CTRL_F4, glfwGetKey(win, GLFW_KEY_F4) == GLFW_PRESS);
-        nk_input_key(ctx, NK_KEY_CTRL_F5, glfwGetKey(win, GLFW_KEY_F5) == GLFW_PRESS);
-        nk_input_key(ctx, NK_KEY_CTRL_F6, glfwGetKey(win, GLFW_KEY_F6) == GLFW_PRESS);
-        nk_input_key(ctx, NK_KEY_CTRL_F7, glfwGetKey(win, GLFW_KEY_F7) == GLFW_PRESS);
-        nk_input_key(ctx, NK_KEY_CTRL_F8, glfwGetKey(win, GLFW_KEY_F8) == GLFW_PRESS);
-        nk_input_key(ctx, NK_KEY_CTRL_F9, glfwGetKey(win, GLFW_KEY_F9) == GLFW_PRESS);
-        nk_input_key(ctx, NK_KEY_CTRL_F10, glfwGetKey(win, GLFW_KEY_F10) == GLFW_PRESS);
-        nk_input_key(ctx, NK_KEY_CTRL_F11, glfwGetKey(win, GLFW_KEY_F11) == GLFW_PRESS);
-        nk_input_key(ctx, NK_KEY_CTRL_F12, glfwGetKey(win, GLFW_KEY_F12) == GLFW_PRESS);
-    } else if (glfwGetKey(win, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS ||
-               glfwGetKey(win, GLFW_KEY_RIGHT_SHIFT) == GLFW_PRESS) {
-        nk_input_key(ctx, NK_KEY_SHIFT_F1, glfwGetKey(win, GLFW_KEY_F1) == GLFW_PRESS);
-        nk_input_key(ctx, NK_KEY_SHIFT_F2, glfwGetKey(win, GLFW_KEY_F2) == GLFW_PRESS);
-        nk_input_key(ctx, NK_KEY_SHIFT_F3, glfwGetKey(win, GLFW_KEY_F3) == GLFW_PRESS);
-        nk_input_key(ctx, NK_KEY_SHIFT_F4, glfwGetKey(win, GLFW_KEY_F4) == GLFW_PRESS);
-        nk_input_key(ctx, NK_KEY_SHIFT_F5, glfwGetKey(win, GLFW_KEY_F5) == GLFW_PRESS);
-        nk_input_key(ctx, NK_KEY_SHIFT_F6, glfwGetKey(win, GLFW_KEY_F6) == GLFW_PRESS);
-        nk_input_key(ctx, NK_KEY_SHIFT_F7, glfwGetKey(win, GLFW_KEY_F7) == GLFW_PRESS);
-        nk_input_key(ctx, NK_KEY_SHIFT_F8, glfwGetKey(win, GLFW_KEY_F8) == GLFW_PRESS);
-        nk_input_key(ctx, NK_KEY_SHIFT_F9, glfwGetKey(win, GLFW_KEY_F9) == GLFW_PRESS);
-        nk_input_key(ctx, NK_KEY_SHIFT_F10, glfwGetKey(win, GLFW_KEY_F10) == GLFW_PRESS);
-        nk_input_key(ctx, NK_KEY_SHIFT_F11, glfwGetKey(win, GLFW_KEY_F11) == GLFW_PRESS);
-        nk_input_key(ctx, NK_KEY_SHIFT_F12, glfwGetKey(win, GLFW_KEY_F12) == GLFW_PRESS);
-    } else {
-        nk_input_key(ctx, NK_KEY_LEFT, glfwGetKey(win, GLFW_KEY_LEFT) == GLFW_PRESS);
-        nk_input_key(ctx, NK_KEY_RIGHT, glfwGetKey(win, GLFW_KEY_RIGHT) == GLFW_PRESS);
-        nk_input_key(ctx, NK_KEY_F1, glfwGetKey(win, GLFW_KEY_F1) == GLFW_PRESS);
-        nk_input_key(ctx, NK_KEY_F2, glfwGetKey(win, GLFW_KEY_F2) == GLFW_PRESS);
-        nk_input_key(ctx, NK_KEY_F3, glfwGetKey(win, GLFW_KEY_F3) == GLFW_PRESS);
-        nk_input_key(ctx, NK_KEY_F4, glfwGetKey(win, GLFW_KEY_F4) == GLFW_PRESS);
-        nk_input_key(ctx, NK_KEY_F5, glfwGetKey(win, GLFW_KEY_F5) == GLFW_PRESS);
-        nk_input_key(ctx, NK_KEY_F6, glfwGetKey(win, GLFW_KEY_F6) == GLFW_PRESS);
-        nk_input_key(ctx, NK_KEY_F7, glfwGetKey(win, GLFW_KEY_F7) == GLFW_PRESS);
-        nk_input_key(ctx, NK_KEY_F8, glfwGetKey(win, GLFW_KEY_F8) == GLFW_PRESS);
-        nk_input_key(ctx, NK_KEY_F9, glfwGetKey(win, GLFW_KEY_F9) == GLFW_PRESS);
-        nk_input_key(ctx, NK_KEY_F10, glfwGetKey(win, GLFW_KEY_F10) == GLFW_PRESS);
-        nk_input_key(ctx, NK_KEY_F11, glfwGetKey(win, GLFW_KEY_F11) == GLFW_PRESS);
-        nk_input_key(ctx, NK_KEY_F12, glfwGetKey(win, GLFW_KEY_F12) == GLFW_PRESS);
-        nk_input_key(ctx, NK_KEY_OPEN, 0);
-        nk_input_key(ctx, NK_KEY_SAVE, 0);
-        nk_input_key(ctx, NK_KEY_FIND, 0);
-        nk_input_key(ctx, NK_KEY_GOTO, 0);
-        nk_input_key(ctx, NK_KEY_REPLACE, 0);
-        nk_input_key(ctx, NK_KEY_COPY, 0);
-        nk_input_key(ctx, NK_KEY_PASTE, 0);
-        nk_input_key(ctx, NK_KEY_CUT, 0);
-        nk_input_key(ctx, NK_KEY_SHIFT, 0);
-        nk_input_key(ctx, NK_KEY_REFRESH, 0);
-    }
+    plain = !(shift || ctrl || alt);
+    ctrl_plain = ctrl && !(shift || alt);
+    shift_plain = shift && !(ctrl || alt);
+
+    nk_input_key(ctx, NK_KEY_SHIFT, shift);
+    nk_input_key(ctx, NK_KEY_CTRL, ctrl);
+    nk_input_key(ctx, NK_KEY_ALT, alt);
+
+    nk_input_key(ctx, NK_KEY_DEL,           plain && glfwGetKey(win, GLFW_KEY_DELETE) == GLFW_PRESS);
+    nk_input_key(ctx, NK_KEY_ENTER,         plain && glfwGetKey(win, GLFW_KEY_ENTER) == GLFW_PRESS);
+    nk_input_key(ctx, NK_KEY_TAB,           plain && glfwGetKey(win, GLFW_KEY_TAB) == GLFW_PRESS);
+    nk_input_key(ctx, NK_KEY_BACKSPACE,     plain && glfwGetKey(win, GLFW_KEY_BACKSPACE) == GLFW_PRESS);
+    nk_input_key(ctx, NK_KEY_UP,            plain && glfwGetKey(win, GLFW_KEY_UP) == GLFW_PRESS);
+    nk_input_key(ctx, NK_KEY_DOWN,          plain && glfwGetKey(win, GLFW_KEY_DOWN) == GLFW_PRESS);
+    nk_input_key(ctx, NK_KEY_TEXT_START,    plain && glfwGetKey(win, GLFW_KEY_HOME) == GLFW_PRESS);
+    nk_input_key(ctx, NK_KEY_TEXT_END,      plain && glfwGetKey(win, GLFW_KEY_END) == GLFW_PRESS);
+    nk_input_key(ctx, NK_KEY_SCROLL_START,  plain && glfwGetKey(win, GLFW_KEY_HOME) == GLFW_PRESS);
+    nk_input_key(ctx, NK_KEY_SCROLL_END,    plain && glfwGetKey(win, GLFW_KEY_END) == GLFW_PRESS);
+    nk_input_key(ctx, NK_KEY_SCROLL_DOWN,   plain && glfwGetKey(win, GLFW_KEY_PAGE_DOWN) == GLFW_PRESS);
+    nk_input_key(ctx, NK_KEY_SCROLL_UP,     plain && glfwGetKey(win, GLFW_KEY_PAGE_UP) == GLFW_PRESS);
+    nk_input_key(ctx, NK_KEY_LEFT,          plain && glfwGetKey(win, GLFW_KEY_LEFT) == GLFW_PRESS);
+    nk_input_key(ctx, NK_KEY_RIGHT,         plain && glfwGetKey(win, GLFW_KEY_RIGHT) == GLFW_PRESS);
+    nk_input_key(ctx, NK_KEY_F1,            plain && glfwGetKey(win, GLFW_KEY_F1) == GLFW_PRESS);
+    nk_input_key(ctx, NK_KEY_F2,            plain && glfwGetKey(win, GLFW_KEY_F2) == GLFW_PRESS);
+    nk_input_key(ctx, NK_KEY_F3,            plain && glfwGetKey(win, GLFW_KEY_F3) == GLFW_PRESS);
+    nk_input_key(ctx, NK_KEY_F4,            plain && glfwGetKey(win, GLFW_KEY_F4) == GLFW_PRESS);
+    nk_input_key(ctx, NK_KEY_F5,            plain && glfwGetKey(win, GLFW_KEY_F5) == GLFW_PRESS);
+    nk_input_key(ctx, NK_KEY_F6,            plain && glfwGetKey(win, GLFW_KEY_F6) == GLFW_PRESS);
+    nk_input_key(ctx, NK_KEY_F7,            plain && glfwGetKey(win, GLFW_KEY_F7) == GLFW_PRESS);
+    nk_input_key(ctx, NK_KEY_F8,            plain && glfwGetKey(win, GLFW_KEY_F8) == GLFW_PRESS);
+    nk_input_key(ctx, NK_KEY_F9,            plain && glfwGetKey(win, GLFW_KEY_F9) == GLFW_PRESS);
+    nk_input_key(ctx, NK_KEY_F10,           plain && glfwGetKey(win, GLFW_KEY_F10) == GLFW_PRESS);
+    nk_input_key(ctx, NK_KEY_F11,           plain && glfwGetKey(win, GLFW_KEY_F11) == GLFW_PRESS);
+    nk_input_key(ctx, NK_KEY_F12,           plain && glfwGetKey(win, GLFW_KEY_F12) == GLFW_PRESS);
+
+    nk_input_key(ctx, NK_KEY_SHIFT_F1,      shift_plain && glfwGetKey(win, GLFW_KEY_F1) == GLFW_PRESS);
+    nk_input_key(ctx, NK_KEY_SHIFT_F2,      shift_plain && glfwGetKey(win, GLFW_KEY_F2) == GLFW_PRESS);
+    nk_input_key(ctx, NK_KEY_SHIFT_F3,      shift_plain && glfwGetKey(win, GLFW_KEY_F3) == GLFW_PRESS);
+    nk_input_key(ctx, NK_KEY_SHIFT_F4,      shift_plain && glfwGetKey(win, GLFW_KEY_F4) == GLFW_PRESS);
+    nk_input_key(ctx, NK_KEY_SHIFT_F5,      shift_plain && glfwGetKey(win, GLFW_KEY_F5) == GLFW_PRESS);
+    nk_input_key(ctx, NK_KEY_SHIFT_F6,      shift_plain && glfwGetKey(win, GLFW_KEY_F6) == GLFW_PRESS);
+    nk_input_key(ctx, NK_KEY_SHIFT_F7,      shift_plain && glfwGetKey(win, GLFW_KEY_F7) == GLFW_PRESS);
+    nk_input_key(ctx, NK_KEY_SHIFT_F8,      shift_plain && glfwGetKey(win, GLFW_KEY_F8) == GLFW_PRESS);
+    nk_input_key(ctx, NK_KEY_SHIFT_F9,      shift_plain && glfwGetKey(win, GLFW_KEY_F9) == GLFW_PRESS);
+    nk_input_key(ctx, NK_KEY_SHIFT_F10,     shift_plain && glfwGetKey(win, GLFW_KEY_F10) == GLFW_PRESS);
+    nk_input_key(ctx, NK_KEY_SHIFT_F11,     shift_plain && glfwGetKey(win, GLFW_KEY_F11) == GLFW_PRESS);
+    nk_input_key(ctx, NK_KEY_SHIFT_F12,     shift_plain && glfwGetKey(win, GLFW_KEY_F12) == GLFW_PRESS);
+
+    nk_input_key(ctx, NK_KEY_OPEN,            ctrl_plain && glfwGetKey(win, GLFW_KEY_O) == GLFW_PRESS);
+    nk_input_key(ctx, NK_KEY_SAVE,            ctrl_plain && glfwGetKey(win, GLFW_KEY_S) == GLFW_PRESS);
+    nk_input_key(ctx, NK_KEY_FIND,            ctrl_plain && glfwGetKey(win, GLFW_KEY_F) == GLFW_PRESS);
+    nk_input_key(ctx, NK_KEY_GOTO,            ctrl_plain && glfwGetKey(win, GLFW_KEY_G) == GLFW_PRESS);
+    nk_input_key(ctx, NK_KEY_REPLACE,         ctrl_plain && glfwGetKey(win, GLFW_KEY_H) == GLFW_PRESS);
+    nk_input_key(ctx, NK_KEY_COPY,            ctrl_plain && glfwGetKey(win, GLFW_KEY_C) == GLFW_PRESS);
+    nk_input_key(ctx, NK_KEY_PASTE,           ctrl_plain && glfwGetKey(win, GLFW_KEY_V) == GLFW_PRESS);
+    nk_input_key(ctx, NK_KEY_CUT,             ctrl_plain && glfwGetKey(win, GLFW_KEY_X) == GLFW_PRESS);
+    nk_input_key(ctx, NK_KEY_REFRESH,         ctrl_plain && glfwGetKey(win, GLFW_KEY_R) == GLFW_PRESS);
+    nk_input_key(ctx, NK_KEY_TEXT_REDO,       ctrl_plain && glfwGetKey(win, GLFW_KEY_Y) == GLFW_PRESS);
+    nk_input_key(ctx, NK_KEY_TEXT_UNDO,       ctrl_plain && glfwGetKey(win, GLFW_KEY_Z) == GLFW_PRESS);
+    nk_input_key(ctx, NK_KEY_TEXT_WORD_LEFT,  ctrl_plain && glfwGetKey(win, GLFW_KEY_LEFT) == GLFW_PRESS);
+    nk_input_key(ctx, NK_KEY_TEXT_WORD_RIGHT, ctrl_plain && glfwGetKey(win, GLFW_KEY_RIGHT) == GLFW_PRESS);
+    nk_input_key(ctx, NK_KEY_TEXT_LINE_START, ctrl_plain && glfwGetKey(win, GLFW_KEY_B) == GLFW_PRESS);
+    nk_input_key(ctx, NK_KEY_TEXT_LINE_END,   ctrl_plain && glfwGetKey(win, GLFW_KEY_E) == GLFW_PRESS);
+    nk_input_key(ctx, NK_KEY_SCROLL_TOP,      ctrl_plain && glfwGetKey(win, GLFW_KEY_HOME) == GLFW_PRESS);
+    nk_input_key(ctx, NK_KEY_SCROLL_BOTTOM,   ctrl_plain && glfwGetKey(win, GLFW_KEY_END) == GLFW_PRESS);
+    nk_input_key(ctx, NK_KEY_PAR_UP,          ctrl_plain && glfwGetKey(win, GLFW_KEY_UP) == GLFW_PRESS);
+    nk_input_key(ctx, NK_KEY_PAR_DOWN,        ctrl_plain && glfwGetKey(win, GLFW_KEY_DOWN) == GLFW_PRESS);
+    nk_input_key(ctx, NK_KEY_CTRL_F1,         ctrl_plain && glfwGetKey(win, GLFW_KEY_F1) == GLFW_PRESS);
+    nk_input_key(ctx, NK_KEY_CTRL_F2,         ctrl_plain && glfwGetKey(win, GLFW_KEY_F2) == GLFW_PRESS);
+    nk_input_key(ctx, NK_KEY_CTRL_F3,         ctrl_plain && glfwGetKey(win, GLFW_KEY_F3) == GLFW_PRESS);
+    nk_input_key(ctx, NK_KEY_CTRL_F4,         ctrl_plain && glfwGetKey(win, GLFW_KEY_F4) == GLFW_PRESS);
+    nk_input_key(ctx, NK_KEY_CTRL_F5,         ctrl_plain && glfwGetKey(win, GLFW_KEY_F5) == GLFW_PRESS);
+    nk_input_key(ctx, NK_KEY_CTRL_F6,         ctrl_plain && glfwGetKey(win, GLFW_KEY_F6) == GLFW_PRESS);
+    nk_input_key(ctx, NK_KEY_CTRL_F7,         ctrl_plain && glfwGetKey(win, GLFW_KEY_F7) == GLFW_PRESS);
+    nk_input_key(ctx, NK_KEY_CTRL_F8,         ctrl_plain && glfwGetKey(win, GLFW_KEY_F8) == GLFW_PRESS);
+    nk_input_key(ctx, NK_KEY_CTRL_F9,         ctrl_plain && glfwGetKey(win, GLFW_KEY_F9) == GLFW_PRESS);
+    nk_input_key(ctx, NK_KEY_CTRL_F10,        ctrl_plain && glfwGetKey(win, GLFW_KEY_F10) == GLFW_PRESS);
+    nk_input_key(ctx, NK_KEY_CTRL_F11,        ctrl_plain && glfwGetKey(win, GLFW_KEY_F11) == GLFW_PRESS);
+    nk_input_key(ctx, NK_KEY_CTRL_F12,        ctrl_plain && glfwGetKey(win, GLFW_KEY_F12) == GLFW_PRESS);
 
     glfwGetCursorPos(win, &x, &y);
     nk_input_motion(ctx, (int)x, (int)y);
