@@ -18,7 +18,7 @@ The larger utilities (with a user interface) use the [Nuklear](https://github.co
 
 All GUI utilities have a `-f` command line option to set the font size in pixels (excluding leading). The default size is 14. If that is too small for ease of reading, you can use `-f=16` (or simply `-f16`). The font size that you set is saved, so it is used on any next run of the utility too (without you needing to add the command line parameter every time). The font size must be set for each GUI utility individually, though. With recent releases, you can also set the names of the fonts used for the user interface with `-f=16,Arial,Inconsolata`. The first name is for the font for all buttons and controls, the second font is the monospaced font for the source code (if applicable). You can leave out any of the three parts by leaving the commas: `-f,,Inconsolata` changes only the monospaced font and leaves the other parameters at their defaults.
 
-As an aside: the utilities have more command line options that just `-f`. The `-f` option is common to all GUI utilities.
+As an aside: the utilities have more command line options that just `-f`. The `-f` option is common to all GUI utilities. Use the `-h` or `-?` options to get a summary of the command line options for each utility.
 ### Linux
 Prerequisites are
 * libbsd-dev
