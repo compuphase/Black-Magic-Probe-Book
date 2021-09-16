@@ -31,9 +31,9 @@ GLFW_LIBNAME := glfw
 ```
 (Again, see the top of `Makefile.linux` for other options.)
 ### Windows with MingW
-A makefile is provided for MingW, called `makefile.mingw`.
+A makefile is provided for MingW, called `Makefile.mingw`.
 
 The current release links to either WinUSB or libusbK dynamically. It is no longer necessary to get the headers for WinUSB from the Windows DDK or create an import library from a .def file. However, for the libusbK option, you will need to download the appropriate libusbK.dll and place it into the directory where the binaries are built. See the [libusbK project](https://sourceforge.net/projects/libusbk/).
 
 ### Windows with Visual C/C++
-The makefile for Visual C/C++ uses Microsoft's `nmake`, which is a bare-bones `make` clone.
+The makefile for Visual C/C++ (`Makefile.msvc`) uses Microsoft's `nmake`, which is a bare-bones `make` clone.
