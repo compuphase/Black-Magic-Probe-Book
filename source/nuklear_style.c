@@ -28,6 +28,7 @@ void nuklear_style(struct nk_context *ctx)
   assert(ctx != NULL);
 
   table[NK_COLOR_TEXT] = nk_rgba(205, 201, 171, 255);
+  table[NK_COLOR_TEXT_GRAY]= nk_rgba(128, 128, 128, 255);
   table[NK_COLOR_WINDOW] = nk_rgba(35, 52, 71, 255);
   table[NK_COLOR_HEADER] = nk_rgba(58, 86, 117, 255);
   table[NK_COLOR_BORDER] = nk_rgba(128, 128, 128, 255);

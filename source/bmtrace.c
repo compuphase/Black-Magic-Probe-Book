@@ -27,6 +27,7 @@
 #if defined WIN32 || defined _WIN32
   #define STRICT
   #define WIN32_LEAN_AND_MEAN
+  #define _WIN32_WINNT   0x0500 /* for AttachConsole() */
   #include <windows.h>
   #include <direct.h>
   #include <io.h>
@@ -133,14 +134,25 @@ static int bmp_callback(int code, const char *message)
 #define ERROR_NO_TSDL 0x0001
 #define ERROR_NO_ELF  0x0002
 
-static void usage(void)
+static void usage(const char *invalid_option)
 {
-  printf("bmtrace - SWO Trace Viewer for the Black Magic Probe.\n\n"
-         "Usage: bmtrace [options]\n\n"
+  #if defined _WIN32  /* fix console output on Windows */
+    if (AttachConsole(ATTACH_PARENT_PROCESS)) {
+      freopen("CONOUT$", "wb", stdout);
+      freopen("CONOUT$", "wb", stderr);
+    }
+    printf("\n");
+  #endif
+
+  if (invalid_option != NULL)
+    fprintf(stderr, "Unknown option %s; use -h for help.\n\n", invalid_option);
+  else
+    printf("BMTrace - SWO Trace Viewer for the Black Magic Probe.\n\n");
+  printf("Usage: bmtrace [options]\n\n"
          "Options:\n"
-         "-f=value\t Font size to use (value must be 8 or larger).\n"
-         "-h\t This help.\n"
-         "-t=path\t path to the TSDL metadata file to use.\n");
+         "-f=value  Font size to use (value must be 8 or larger).\n"
+         "-h        This help.\n"
+         "-t=path   Path to the TSDL metadata file to use.\n");
 }
 
 int main(int argc, char *argv[])
@@ -290,7 +302,7 @@ int main(int argc, char *argv[])
       switch (argv[idx][1]) {
       case '?':
       case 'h':
-        usage();
+        usage(NULL);
         return 0;
       case 'f':
         ptr = &argv[idx][2];
@@ -318,8 +330,8 @@ int main(int argc, char *argv[])
           strlcpy(txtTSDLfile, ptr, sizearray(txtTSDLfile));
         break;
       default:
-        fprintf(stderr, "Unknown option %s; use option -h for help.\n", argv[idx]);
-        return 1;
+        usage(argv[idx]);
+        return EXIT_FAILURE;
       }
     } else if (access(argv[idx], 0) == 0) {
       /* parameter is a filename, test whether that is an ELF file */
@@ -412,7 +424,7 @@ int main(int argc, char *argv[])
           const DWARF_SYMBOLLIST *symbol;
           bmp_runscript("swo_device", mcu_driver, mcu_architecture, NULL);
           assert(opt_mode == MODE_MANCHESTER || opt_mode == MODE_ASYNC);
-          symbol = dwarf_sym_from_name(&dwarf_symboltable, "TRACESWO_BPS");
+          symbol = dwarf_sym_from_name(&dwarf_symboltable, "TRACESWO_BPS", -1, -1);
           params[0] = opt_mode;
           params[1] = cpuclock / bitrate - 1;
           params[2] = bitrate;
@@ -423,7 +435,7 @@ int main(int argc, char *argv[])
           for (chan = 0; chan < NUM_CHANNELS; chan++)
             if (channel_getenabled(chan))
               channelmask |= (1 << chan);
-          symbol = dwarf_sym_from_name(&dwarf_symboltable, "TRACESWO_TER");
+          symbol = dwarf_sym_from_name(&dwarf_symboltable, "TRACESWO_TER", -1, -1);
           params[0] = channelmask;
           params[1] = (symbol != NULL) ? (unsigned long)symbol->data_addr : ~0;
           bmp_runscript("swo_channels", mcu_driver, mcu_architecture, params);
@@ -537,7 +549,6 @@ int main(int argc, char *argv[])
       #define SEPARATOR_VER 4
       #define SPACING       4
       float splitter_columns[3];
-      struct nk_rect rc_canvas = nk_rect(0, 0, canvas_width, canvas_height);
       struct nk_rect bounds;
       int mouse_hover = 0;
 
@@ -649,13 +660,13 @@ int main(int argc, char *argv[])
             nk_layout_row_push(ctx, LABEL_WIDTH);
             nk_label(ctx, "IP Addr", NK_TEXT_ALIGN_LEFT | NK_TEXT_ALIGN_MIDDLE);
             nk_layout_row_push(ctx, VALUE_WIDTH - BROWSEBTN_WIDTH - 5);
-            result = editctrl_tooltip(ctx, NK_EDIT_FIELD | NK_EDIT_SIG_ENTER,
+            result = editctrl_tooltip(ctx, NK_EDIT_FIELD|NK_EDIT_SIG_ENTER|NK_EDIT_CLIPBOARD,
                                            txtIPaddr, sizearray(txtIPaddr), nk_filter_ascii,
-                                           "IP address of the ctxLink", &rc_canvas);
+                                           "IP address of the ctxLink");
             if ((result & NK_EDIT_COMMITED) != 0 && bmp_is_ip_address(txtIPaddr))
               reconnect = 1;
             nk_layout_row_push(ctx, BROWSEBTN_WIDTH);
-            if (button_symbol_tooltip(ctx, NK_SYMBOL_TRIPLE_DOT, "Scan network for ctxLink probes.", &rc_canvas)) {
+            if (button_symbol_tooltip(ctx, NK_SYMBOL_TRIPLE_DOT, NK_KEY_NONE, "Scan network for ctxLink probes.")) {
               #if defined WIN32 || defined _WIN32
                 HCURSOR hcur = SetCursor(LoadCursor(NULL, IDC_WAIT));
               #endif
@@ -693,14 +704,14 @@ int main(int argc, char *argv[])
             nk_layout_row_end(ctx);
           }
           nk_layout_row_dynamic(ctx, ROW_HEIGHT, 1);
-          if (checkbox_tooltip(ctx, "Configure Target", &opt_init_target, "Configure the target microcontroller for SWO", &rc_canvas))
+          if (checkbox_tooltip(ctx, "Configure Target", &opt_init_target, "Configure the target microcontroller for SWO"))
             reinitialize = 1;
           nk_layout_row_dynamic(ctx, ROW_HEIGHT, 1);
-          if (checkbox_tooltip(ctx, "Configure Debug Probe", &opt_init_bmp, "Activate SWO trace capture in the Black Magic Probe", &rc_canvas))
+          if (checkbox_tooltip(ctx, "Configure Debug Probe", &opt_init_bmp, "Activate SWO trace capture in the Black Magic Probe"))
             reinitialize = 1;
           if (opt_init_target || opt_init_bmp) {
             nk_layout_row_dynamic(ctx, ROW_HEIGHT, 1);
-            if (checkbox_tooltip(ctx, "Reset target during connect", &opt_connect_srst, "Keep the target in reset state while scanning and attaching", &rc_canvas))
+            if (checkbox_tooltip(ctx, "Reset target during connect", &opt_connect_srst, "Keep the target in reset state while scanning and attaching"))
               reinitialize = 1;
           }
           if (opt_init_target) {
@@ -708,9 +719,9 @@ int main(int argc, char *argv[])
             nk_layout_row_push(ctx, LABEL_WIDTH);
             nk_label(ctx, "CPU clock", NK_TEXT_ALIGN_LEFT | NK_TEXT_ALIGN_MIDDLE);
             nk_layout_row_push(ctx, VALUE_WIDTH);
-            result = editctrl_tooltip(ctx, NK_EDIT_FIELD | NK_EDIT_SIG_ENTER,
+            result = editctrl_tooltip(ctx, NK_EDIT_FIELD|NK_EDIT_SIG_ENTER|NK_EDIT_CLIPBOARD,
                                       cpuclock_str, sizearray(cpuclock_str), nk_filter_decimal,
-                                      "CPU clock of the target microcontroller", &rc_canvas);
+                                      "CPU clock of the target microcontroller");
             if ((result & NK_EDIT_COMMITED) != 0 || ((result & NK_EDIT_DEACTIVATED) && strtoul(cpuclock_str, NULL, 10) != cpuclock))
               reinitialize = 1;
             nk_layout_row_end(ctx);
@@ -720,9 +731,9 @@ int main(int argc, char *argv[])
             nk_layout_row_push(ctx, LABEL_WIDTH);
             nk_label(ctx, "Bit rate", NK_TEXT_ALIGN_LEFT | NK_TEXT_ALIGN_MIDDLE);
             nk_layout_row_push(ctx, VALUE_WIDTH);
-            result = editctrl_tooltip(ctx, NK_EDIT_FIELD | NK_EDIT_SIG_ENTER,
+            result = editctrl_tooltip(ctx, NK_EDIT_FIELD|NK_EDIT_SIG_ENTER|NK_EDIT_CLIPBOARD,
                                            bitrate_str, sizearray(bitrate_str), nk_filter_decimal,
-                                           "SWO bit rate (data rate)", &rc_canvas);
+                                           "SWO bit rate (data rate)");
             if ((result & NK_EDIT_COMMITED) != 0 || ((result & NK_EDIT_DEACTIVATED) && strtoul(bitrate_str, NULL, 10) != bitrate))
               reinitialize = 1;
             nk_layout_row_end(ctx);
@@ -740,17 +751,17 @@ int main(int argc, char *argv[])
             if (trace_status == TRACESTAT_OK)
               tracelog_statusmsg(TRACESTATMSG_BMP, "Listening ...", BMPSTAT_SUCCESS);
           }
-          tooltip(ctx, bounds, "Payload size of an SWO packet (in bits); auto for autodetect", &rc_canvas);
+          tooltip(ctx, bounds, "Payload size of an SWO packet (in bits); auto for autodetect");
           nk_layout_row_end(ctx);
           nk_layout_row_begin(ctx, NK_STATIC, ROW_HEIGHT, 3);
           nk_layout_row_push(ctx, LABEL_WIDTH);
           nk_label(ctx, "TSDL file", NK_TEXT_ALIGN_LEFT | NK_TEXT_ALIGN_MIDDLE);
           nk_layout_row_push(ctx, VALUE_WIDTH - BROWSEBTN_WIDTH - 5);
           if (error_flags & ERROR_NO_TSDL)
-            nk_style_push_color(ctx,&ctx->style.edit.text_normal, nk_rgba(255, 100, 120, 255));
-          result = editctrl_tooltip(ctx, NK_EDIT_FIELD | NK_EDIT_SIG_ENTER,
+            nk_style_push_color(ctx,&ctx->style.edit.text_normal, nk_rgb(255, 80, 100));
+          result = editctrl_tooltip(ctx, NK_EDIT_FIELD|NK_EDIT_SIG_ENTER|NK_EDIT_CLIPBOARD,
                                     txtTSDLfile, sizearray(txtTSDLfile), nk_filter_ascii,
-                                    "Metadata file for Common Trace Format (CTF)", &rc_canvas);
+                                    "Metadata file for Common Trace Format (CTF)");
           if (result & (NK_EDIT_COMMITED | NK_EDIT_DEACTIVATED))
             reload_format = 1;
           if (error_flags & ERROR_NO_TSDL)
@@ -773,10 +784,10 @@ int main(int argc, char *argv[])
           nk_label(ctx, "ELF file", NK_TEXT_ALIGN_LEFT | NK_TEXT_ALIGN_MIDDLE);
           nk_layout_row_push(ctx, VALUE_WIDTH - BROWSEBTN_WIDTH - 5);
           if (error_flags & ERROR_NO_ELF)
-            nk_style_push_color(ctx,&ctx->style.edit.text_normal, nk_rgba(255, 100, 120, 255));
-          result = editctrl_tooltip(ctx, NK_EDIT_FIELD | NK_EDIT_SIG_ENTER,
+            nk_style_push_color(ctx,&ctx->style.edit.text_normal, nk_rgb(255, 80, 100));
+          result = editctrl_tooltip(ctx, NK_EDIT_FIELD|NK_EDIT_SIG_ENTER|NK_EDIT_CLIPBOARD,
                                          txtELFfile, sizearray(txtELFfile), nk_filter_ascii,
-                                         "ELF file for symbol lookup", &rc_canvas);
+                                         "ELF file for symbol lookup");
           if (result & (NK_EDIT_COMMITED | NK_EDIT_DEACTIVATED))
             reload_format = 1;
           if (error_flags & ERROR_NO_ELF)
@@ -808,19 +819,19 @@ int main(int argc, char *argv[])
           for (idx = 0; idx < filtercount; idx++) {
             nk_layout_row_begin(ctx, NK_STATIC, ROW_HEIGHT, 3);
             nk_layout_row_push(ctx, BROWSEBTN_WIDTH);
-            checkbox_tooltip(ctx, "", &filterlist[idx].enabled, "Enable/disable this filter", &rc_canvas);
+            checkbox_tooltip(ctx, "", &filterlist[idx].enabled, "Enable/disable this filter");
             nk_layout_row_push(ctx, txtwidth);
             assert(filterlist[idx].expr != NULL);
             strcpy(filter, filterlist[idx].expr);
-            result = editctrl_tooltip(ctx, NK_EDIT_FIELD | NK_EDIT_SIG_ENTER,
+            result = editctrl_tooltip(ctx, NK_EDIT_FIELD|NK_EDIT_SIG_ENTER|NK_EDIT_CLIPBOARD,
                                       filter, sizearray(filter), nk_filter_ascii,
-                                      "Text to filter on (case-sensitive)", &rc_canvas);
+                                      "Text to filter on (case-sensitive)");
             if (strcmp(filter, filterlist[idx].expr) != 0) {
               strcpy(filterlist[idx].expr, filter);
               filterlist[idx].enabled = (strlen(filterlist[idx].expr) > 0);
             }
             nk_layout_row_push(ctx, BROWSEBTN_WIDTH);
-            if (button_symbol_tooltip(ctx, NK_SYMBOL_X, "Remove this filter", &rc_canvas)
+            if (button_symbol_tooltip(ctx, NK_SYMBOL_X, NK_KEY_NONE, "Remove this filter")
                 || ((result & NK_EDIT_COMMITED) && strlen(filter) == 0))
             {
               /* remove row */
@@ -836,11 +847,12 @@ int main(int argc, char *argv[])
           txtwidth = bounds.w - 1 * BROWSEBTN_WIDTH - (1 * 5);
           nk_layout_row_begin(ctx, NK_STATIC, ROW_HEIGHT, 2);
           nk_layout_row_push(ctx, txtwidth);
-          result = editctrl_tooltip(ctx, NK_EDIT_FIELD | NK_EDIT_SIG_ENTER,
+          result = editctrl_tooltip(ctx, NK_EDIT_FIELD|NK_EDIT_SIG_ENTER|NK_EDIT_CLIPBOARD,
                                     newfiltertext, sizearray(newfiltertext), nk_filter_ascii,
-                                    "New filter (case-sensitive)", &rc_canvas);
+                                    "New filter (case-sensitive)");
           nk_layout_row_push(ctx, BROWSEBTN_WIDTH);
-          if ((button_symbol_tooltip(ctx, NK_SYMBOL_PLUS, "Add filter", &rc_canvas) || (result & NK_EDIT_COMMITED))
+          if ((button_symbol_tooltip(ctx, NK_SYMBOL_PLUS, NK_KEY_NONE, "Add filter")
+               || (result & NK_EDIT_COMMITED))
               && strlen(newfiltertext) > 0)
           {
             /* add row */
@@ -888,7 +900,7 @@ int main(int argc, char *argv[])
             nk_layout_row_push(ctx, 3 * opt_fontsize);
             sprintf(label, "%2d", chan);
             enabled = channel_getenabled(chan);
-            if (checkbox_tooltip(ctx, label, &enabled, "Enable/disable this channel",&rc_canvas)) {
+            if (checkbox_tooltip(ctx, label, &enabled, "Enable/disable this channel")) {
               /* enable/disable channel in the target */
               channel_setenabled(chan, enabled);
               if (opt_init_target) {
@@ -897,7 +909,7 @@ int main(int argc, char *argv[])
                 else
                   channelmask &= ~(1 << chan);
                 if (trace_status != TRACESTAT_NO_CONNECT) {
-                  const DWARF_SYMBOLLIST *symbol = dwarf_sym_from_name(&dwarf_symboltable, "TRACESWO_TER");
+                  const DWARF_SYMBOLLIST *symbol = dwarf_sym_from_name(&dwarf_symboltable, "TRACESWO_TER", -1, -1);
                   unsigned long params[2];
                   params[0] = channelmask;
                   params[1] = (symbol != NULL) ? (unsigned long)symbol->data_addr : ~0;
@@ -921,7 +933,7 @@ int main(int argc, char *argv[])
               nk_input_button(ctx, NK_BUTTON_RIGHT, bounds.x, bounds.y + bounds.h - 1, 0);
             }
             nk_layout_row_end(ctx);
-            if (nk_contextual_begin_fitview(ctx, 0, nk_vec2(9*opt_fontsize, 5*ROW_HEIGHT), bounds, &rc_canvas)) {
+            if (nk_contextual_begin(ctx, 0, nk_vec2(9*opt_fontsize, 5*ROW_HEIGHT), bounds)) {
               nk_layout_row_dynamic(ctx, ROW_HEIGHT, 1);
               clrbk.r = (nk_byte)nk_propertyi(ctx, "#R", 0, clrbk.r, 255, 1, 1);
               nk_layout_row_dynamic(ctx, ROW_HEIGHT, 1);
@@ -937,7 +949,8 @@ int main(int argc, char *argv[])
               }
               nk_layout_row(ctx, NK_DYNAMIC, ROW_HEIGHT, 2, nk_ratio(2, 0.35, 0.65));
               nk_label(ctx, "name", NK_TEXT_ALIGN_LEFT | NK_TEXT_ALIGN_MIDDLE);
-              nk_edit_string_zero_terminated(ctx, NK_EDIT_FIELD, valstr, sizearray(valstr), nk_filter_ascii);
+              nk_edit_string_zero_terminated(ctx, NK_EDIT_FIELD|NK_EDIT_CLIPBOARD,
+                                             valstr, sizearray(valstr), nk_filter_ascii);
               nk_contextual_end(ctx);
             } else if (cur_chan_edit == chan) {
               /* contextual popup is closed, copy the name back */
@@ -970,11 +983,12 @@ int main(int argc, char *argv[])
           nk_layout_row(ctx, NK_DYNAMIC, ROW_HEIGHT, 2, nk_ratio(2, 0.2, 0.8));
           nk_label(ctx, "Text", NK_TEXT_ALIGN_LEFT | NK_TEXT_ALIGN_MIDDLE);
           nk_edit_focus(ctx, 0);
-          nk_edit_string_zero_terminated(ctx, NK_EDIT_FIELD, findtext, sizearray(findtext), nk_filter_ascii);
+          nk_edit_string_zero_terminated(ctx, NK_EDIT_FIELD|NK_EDIT_CLIPBOARD,
+                                         findtext, sizearray(findtext), nk_filter_ascii);
           nk_layout_row(ctx, NK_DYNAMIC, opt_fontsize, 2, nk_ratio(2, 0.2, 0.8));
           nk_spacing(ctx, 1);
           if (find_popup == 2)
-            nk_label_colored(ctx, "Text not found", NK_TEXT_ALIGN_LEFT | NK_TEXT_ALIGN_MIDDLE, nk_rgb(255, 100, 128));
+            nk_label_colored(ctx, "Text not found", NK_TEXT_ALIGN_LEFT | NK_TEXT_ALIGN_MIDDLE, nk_rgb(255, 80, 100));
           nk_layout_row_dynamic(ctx, ROW_HEIGHT, 3);
           nk_spacing(ctx, 1);
           if (nk_button_label(ctx, "Find") || nk_input_is_key_pressed(&ctx->input, NK_KEY_ENTER)) {
@@ -1077,6 +1091,6 @@ int main(int argc, char *argv[])
   dwarf_cleanup(&dwarf_linetable, &dwarf_symboltable, &dwarf_filetable);
   bmp_disconnect();
   tcpip_cleanup();
-  return 0;
+  return EXIT_SUCCESS;
 }
 

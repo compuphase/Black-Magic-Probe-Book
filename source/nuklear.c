@@ -12181,6 +12181,7 @@ nk_input_is_key_down(const struct nk_input *i, enum nk_keys key)
 NK_API void nk_style_default(struct nk_context *ctx){nk_style_from_table(ctx, 0);}
 #define NK_COLOR_MAP(NK_COLOR)\
     NK_COLOR(NK_COLOR_TEXT,                     175,175,175,255) \
+    NK_COLOR(NK_COLOR_TEXT_GRAY,                140,140,140,255) \
     NK_COLOR(NK_COLOR_WINDOW,                   45, 45, 45, 255) \
     NK_COLOR(NK_COLOR_HEADER,                   40, 40, 40, 255) \
     NK_COLOR(NK_COLOR_BORDER,                   65, 65, 65, 255) \
@@ -12272,7 +12273,7 @@ nk_style_from_table(struct nk_context *ctx, const struct nk_color *table)
     NK_ASSERT(ctx);
     if (!ctx) return;
     style = &ctx->style;
-    table = (!table) ? nk_default_color_style: table;
+    table = (!table) ? nk_default_color_style : table;
 
     /* default text */
     text = &style->text;
@@ -12290,6 +12291,7 @@ nk_style_from_table(struct nk_context *ctx, const struct nk_color *table)
     button->text_normal     = table[NK_COLOR_TEXT];
     button->text_hover      = table[NK_COLOR_TEXT];
     button->text_active     = table[NK_COLOR_TEXT];
+    button->text_disabled   = table[NK_COLOR_TEXT_GRAY];
     button->padding         = nk_vec2(2.0f,2.0f);
     button->image_padding   = nk_vec2(0.0f,0.0f);
     button->touch_padding   = nk_vec2(0.0f, 0.0f);
@@ -14815,7 +14817,8 @@ nk_popup_begin(struct nk_context *ctx, enum nk_popup_type type,
 
     win = ctx->current;
     panel = win->layout;
-    NK_ASSERT(!(panel->type & NK_PANEL_SET_POPUP) && "popups are not allowed to have popups");
+    //    the assert gives a problem with tooltips (without the assert, everything works fine)
+    //??? NK_ASSERT(!(panel->type & NK_PANEL_SET_POPUP) && "popups are not allowed to have popups");
     (void)panel;
     title_len = (int)nk_strlen(title);
     title_hash = nk_murmur_hash(title, (int)title_len, NK_PANEL_POPUP);
@@ -15059,18 +15062,13 @@ nk_popup_set_scroll(struct nk_context *ctx, nk_uint offset_x, nk_uint offset_y)
  *
  * ===============================================================*/
 NK_API nk_bool
-nk_contextual_begin(struct nk_context *ctx, nk_flags flags, struct nk_vec2 size,
-    struct nk_rect trigger_bounds)
-{
-    return nk_contextual_begin_fitview(ctx, flags, size, trigger_bounds, 0);
-}
-NK_API nk_bool
-nk_contextual_begin_fitview(struct nk_context *ctx, nk_flags flags,
-    struct nk_vec2 size, struct nk_rect trigger_bounds, struct nk_rect *viewport)
+nk_contextual_begin(struct nk_context *ctx, nk_flags flags,
+    struct nk_vec2 size, struct nk_rect trigger_bounds)
 {
     struct nk_window *win;
     struct nk_window *popup;
     struct nk_rect body;
+    struct nk_rect viewport;
 
     NK_STORAGE const struct nk_rect null_rect = {-1,-1,0,0};
     int is_clicked = 0;
@@ -15112,16 +15110,15 @@ nk_contextual_begin_fitview(struct nk_context *ctx, nk_flags flags,
     body.h = size.y;
 
     /* make sure the popup fits in the viewport */
-    if (viewport) {
-        if (body.x + body.w > viewport->x + viewport->w)
-            body.x = viewport->x + viewport->w - body.w;
-        if (body.y + body.h > viewport->y + viewport->h)
-            body.y = viewport->y + viewport->h - body.h;
-        if (body.x < viewport->x)
-            body.x = viewport->x;
-        if (body.y < viewport->y)
-            body.y = viewport->y;
-    }
+    viewport = nk_window_get_bounds(ctx);
+    if (body.x + body.w > viewport.x + viewport.w)
+        body.x = viewport.x + viewport.w - body.w;
+    if (body.y + body.h > viewport.y + viewport.h)
+        body.y = viewport.y + viewport.h - body.h;
+    if (body.x < viewport.x)
+        body.x = viewport.x;
+    if (body.y < viewport.y)
+        body.y = viewport.y;
 
     /* start nonblocking contextual popup */
     ret = nk_nonblock_begin(ctx, flags|NK_WINDOW_NO_SCROLLBAR, body,
@@ -19603,12 +19600,14 @@ nk_scrollbar_behavior(nk_flags *state, struct nk_input *in,
             if (o == NK_VERTICAL)
                 scroll_offset = NK_CLAMP(0, scroll_offset, target - scroll->h);
             else scroll_offset = NK_CLAMP(0, scroll_offset, target - scroll->w);
+#if 0   //??? Home & End keys for scrolling interferes with edit control
         } else if (nk_input_is_key_pressed(in, NK_KEY_SCROLL_START)) {
             /* update cursor to the beginning  */
             if (o == NK_VERTICAL) scroll_offset = 0;
         } else if (nk_input_is_key_pressed(in, NK_KEY_SCROLL_END)) {
             /* update cursor to the end */
             if (o == NK_VERTICAL) scroll_offset = target - scroll->h;
+#endif
         }
     }
     if (*state & NK_WIDGET_STATE_HOVER && !nk_input_is_mouse_prev_hovering_rect(in, *scroll))
@@ -23499,12 +23498,12 @@ nk_combobox_callback(struct nk_context *ctx,
  *
  * ===============================================================*/
 NK_API nk_bool
-nk_tooltip_begin(struct nk_context *ctx, float width, const struct nk_rect *viewport)
+nk_tooltip_begin(struct nk_context *ctx, float width, float height)
 {
     int x,y,w,h;
     struct nk_window *win;
     const struct nk_input *in;
-    struct nk_rect bounds;
+    struct nk_rect bounds, viewport;
     int ret;
 
     NK_ASSERT(ctx);
@@ -23520,20 +23519,22 @@ nk_tooltip_begin(struct nk_context *ctx, float width, const struct nk_rect *view
         return 0;
 
     /* make sure the popup fits in the viewport */
-    x = in->mouse.pos.x;
-    y = in->mouse.pos.y;
-    if (viewport) {
-        if (x + width + 10 > viewport->x + viewport->w)
-            x = viewport->x + viewport->w - (width + 10);
-        if (x < viewport->x)
-            x = viewport->x;
-        //??? also handle y vs tooltip height
-    }
+    x = in->mouse.pos.x + NK_TOOLTIP_OFFSET_X;
+    y = in->mouse.pos.y + NK_TOOLTIP_OFFSET_Y;
+    viewport = nk_window_get_bounds(ctx);
+    if (x + width + 8 > viewport.x + viewport.w)
+        x = viewport.x + viewport.w - (width + 8);
+    if (x < viewport.x)
+        x = viewport.x;
+    if (y + height + 4 > viewport.y + viewport.h)
+        y = (viewport.y + viewport.h) - (height + 4);
+    if (y < viewport.y)
+        y = viewport.y;
 
     w = nk_iceilf(width + 10);
     h = nk_iceilf(nk_null_rect.h);
-    x = nk_ifloorf(x + 1) - (int)win->layout->clip.x;
-    y = nk_ifloorf(y + 1) - (int)win->layout->clip.y;
+    x = nk_ifloorf(x) - (int)win->layout->clip.x;
+    y = nk_ifloorf(y) - (int)win->layout->clip.y;
 
     bounds.x = (float)x;
     bounds.y = (float)y;
@@ -23559,13 +23560,14 @@ nk_tooltip_end(struct nk_context *ctx)
     nk_popup_end(ctx);
 }
 NK_API void
-nk_tooltip(struct nk_context *ctx, const char *text, const struct nk_rect *viewport)
+nk_tooltip(struct nk_context *ctx, const char *text)
 {
     const struct nk_style *style;
     struct nk_vec2 padding;
 
     float text_width;
     float line_height;
+    int num_lines;
     const char *head, *tail;
 
     NK_ASSERT(ctx);
@@ -23584,6 +23586,7 @@ nk_tooltip(struct nk_context *ctx, const char *text, const struct nk_rect *viewp
 
     /* calculate size of the text and tooltip */
     text_width = 0;
+    num_lines = 0;
     for (head = text; *head != '\0'; head = tail) {
         int width;
         tail = strchr(head, '\n');
@@ -23601,7 +23604,7 @@ nk_tooltip(struct nk_context *ctx, const char *text, const struct nk_rect *viewp
     text_width += (4 * padding.x);
 
     /* execute tooltip and fill with text */
-    if (nk_tooltip_begin(ctx, (float)text_width, viewport)) {
+    if (nk_tooltip_begin(ctx, text_width, num_lines * line_height)) {
         for (head = text; *head != '\0'; head = tail) {
             tail = strchr(head, '\n');
             if (!tail)
@@ -23619,19 +23622,19 @@ nk_tooltip(struct nk_context *ctx, const char *text, const struct nk_rect *viewp
 }
 #ifdef NK_INCLUDE_STANDARD_VARARGS
 NK_API void
-nk_tooltipf(struct nk_context *ctx, struct nk_rect *viewport, const char *fmt, ...)
+nk_tooltipf(struct nk_context *ctx, const char *fmt, ...)
 {
     va_list args;
     va_start(args, fmt);
-    nk_tooltipfv(ctx, viewport, fmt, args);
+    nk_tooltipfv(ctx, fmt, args);
     va_end(args);
 }
 NK_API void
-nk_tooltipfv(struct nk_context *ctx, struct nk_rect *viewport, const char *fmt, va_list args)
+nk_tooltipfv(struct nk_context *ctx, const char *fmt, va_list args)
 {
     char buf[256];
     nk_strfmt(buf, NK_LEN(buf), fmt, args);
-    nk_tooltip(ctx, buf, viewport);
+    nk_tooltip(ctx, buf);
 }
 #endif
 

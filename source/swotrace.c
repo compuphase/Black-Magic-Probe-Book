@@ -1262,7 +1262,7 @@ void tracelog_widget(struct nk_context *ctx, const char *id, float rowheight, in
       for (item = statusmessage_root.next; item != NULL; item = item->next) {
         struct nk_color clr;
         if (item->flags < 0)
-          clr = nk_rgb(255, 120, 135);
+          clr = nk_rgb(255, 80, 100);
         else if (item->channel == TRACESTATMSG_CTF)
           clr = nk_rgb(128, 224, 128);
         else

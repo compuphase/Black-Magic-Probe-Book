@@ -488,7 +488,7 @@ static void usage(void)
 static void unknown_option(const char *option)
 {
   fprintf(stderr, "Unknown option \"%s\"; use option -h for help.\n", option);
-  exit(1);
+  exit(EXIT_FAILURE);
 }
 
 int main(int argc, char *argv[])

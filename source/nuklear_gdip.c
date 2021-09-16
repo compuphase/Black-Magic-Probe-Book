@@ -761,10 +761,13 @@ nk_gdip_clipboard_paste(nk_handle usr, struct nk_text_edit *edit)
     char* utf8;
     (void)usr;
 
-    if (!IsClipboardFormatAvailable(CF_UNICODETEXT) && OpenClipboard(NULL))
+    if (!IsClipboardFormatAvailable(CF_UNICODETEXT))
         return;
 
-    mem = (HGLOBAL)GetClipboardData(CF_UNICODETEXT);
+    if (!OpenClipboard(NULL))
+        return;
+
+    mem =(HGLOBAL)GetClipboardData(CF_UNICODETEXT);
     if (!mem) {
         CloseClipboard();
         return;

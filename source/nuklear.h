@@ -324,6 +324,14 @@ extern "C" {
   #endif
 #endif
 
+/* Tooltip offset */
+#ifndef NK_TOOLTIP_OFFSET_X
+  #define NK_TOOLTIP_OFFSET_X 12
+#endif
+#ifndef NK_TOOLTIP_OFFSET_Y
+  #define NK_TOOLTIP_OFFSET_Y 6
+#endif
+
 /*
  * ===============================================================
  *
@@ -3120,7 +3128,7 @@ enum nk_widget_states {
     NK_WIDGET_STATE_INACTIVE    = NK_FLAG(2), /* widget is neither active nor hovered */
     NK_WIDGET_STATE_ENTERED     = NK_FLAG(3), /* widget has been hovered on the current frame */
     NK_WIDGET_STATE_HOVER       = NK_FLAG(4), /* widget is being hovered */
-    NK_WIDGET_STATE_ACTIVED     = NK_FLAG(5),/* widget is currently activated */
+    NK_WIDGET_STATE_ACTIVED     = NK_FLAG(5), /* widget is currently active */
     NK_WIDGET_STATE_LEFT        = NK_FLAG(6), /* widget is from this frame on not hovered anymore */
     NK_WIDGET_STATE_HOVERED     = NK_WIDGET_STATE_HOVER|NK_WIDGET_STATE_MODIFIED, /* widget is being hovered */
     NK_WIDGET_STATE_ACTIVE      = NK_WIDGET_STATE_ACTIVED|NK_WIDGET_STATE_MODIFIED /* widget is currently activated */
@@ -3586,7 +3594,6 @@ NK_API void nk_combo_end(struct nk_context*);
  *
  * ============================================================================= */
 NK_API nk_bool nk_contextual_begin(struct nk_context*, nk_flags, struct nk_vec2, struct nk_rect trigger_bounds);
-NK_API int nk_contextual_begin_fitview(struct nk_context *ctx, nk_flags flags, struct nk_vec2 size, struct nk_rect trigger_bounds, struct nk_rect *viewport);
 NK_API nk_bool nk_contextual_item_text(struct nk_context*, const char*, int,nk_flags align);
 NK_API nk_bool nk_contextual_item_label(struct nk_context*, const char*, nk_flags align);
 NK_API nk_bool nk_contextual_item_image_label(struct nk_context*, struct nk_image, const char*, nk_flags alignment);
@@ -3600,12 +3607,12 @@ NK_API void nk_contextual_end(struct nk_context*);
  *                                  TOOLTIP
  *
  * ============================================================================= */
-NK_API void nk_tooltip(struct nk_context *ctx, const char *text, const struct nk_rect *viewport);
+NK_API void nk_tooltip(struct nk_context *ctx, const char *text);
 #ifdef NK_INCLUDE_STANDARD_VARARGS
-NK_API void nk_tooltipf(struct nk_context*, struct nk_rect *viewport, NK_PRINTF_FORMAT_STRING const char*, ...) NK_PRINTF_VARARG_FUNC(3);
-NK_API void nk_tooltipfv(struct nk_context*, struct nk_rect *viewport, NK_PRINTF_FORMAT_STRING const char*, va_list) NK_PRINTF_VALIST_FUNC(3);
+NK_API void nk_tooltipf(struct nk_context*, NK_PRINTF_FORMAT_STRING const char*, ...) NK_PRINTF_VARARG_FUNC(2);
+NK_API void nk_tooltipfv(struct nk_context*, NK_PRINTF_FORMAT_STRING const char*, va_list) NK_PRINTF_VALIST_FUNC(2);
 #endif
-NK_API nk_bool nk_tooltip_begin(struct nk_context*, float width, const struct nk_rect *viewport);
+NK_API nk_bool nk_tooltip_begin(struct nk_context*, float width, float height);
 NK_API void nk_tooltip_end(struct nk_context*);
 /* =============================================================================
  *
@@ -3637,6 +3644,7 @@ NK_API void nk_menu_end(struct nk_context*);
  * ============================================================================= */
 enum nk_style_colors {
     NK_COLOR_TEXT,
+    NK_COLOR_TEXT_GRAY,
     NK_COLOR_WINDOW,
     NK_COLOR_HEADER,
     NK_COLOR_BORDER,
@@ -4916,6 +4924,7 @@ struct nk_style_button {
     struct nk_color text_normal;
     struct nk_color text_hover;
     struct nk_color text_active;
+    struct nk_color text_disabled;
     nk_flags text_alignment;
 
     /* properties */

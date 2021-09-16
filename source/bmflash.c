@@ -19,11 +19,14 @@
  */
 
 #if defined WIN32 || defined _WIN32
+  #define STRICT
   #define WIN32_LEAN_AND_MEAN
+  #define _WIN32_WINNT   0x0500 /* for AttachConsole() */
   #include <windows.h>
   #include <shellapi.h>
   #include <direct.h>
   #include <io.h>
+  #include <process.h>	/* for spawn() */
   #if defined __MINGW32__ || defined __MINGW64__
     #include "strlcpy.h"
   #elif defined _MSC_VER
@@ -36,11 +39,14 @@
   #include <unistd.h>
   #include <bsd/string.h>
   #include <sys/stat.h>
+  #include <sys/types.h>
+  #include <sys/wait.h>
 #endif
 #include <assert.h>
 #include <ctype.h>
 #include <limits.h>
 #include <stdio.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
@@ -55,6 +61,7 @@
 #include "elf.h"
 #include "gdb-rsp.h"
 #include "minIni.h"
+#include "picoro.h"
 #include "rs232.h"
 #include "tcpip.h"
 #include "specialfolder.h"
@@ -84,11 +91,12 @@
 
 
 #define FONT_HEIGHT     14              /* default font size */
-#define WINDOW_WIDTH    (30 * opt_fontsize)
-#define WINDOW_HEIGHT   (23 * opt_fontsize)
+#define WINDOW_WIDTH    (34 * opt_fontsize)
+#define WINDOW_HEIGHT   (25 * opt_fontsize)
 #define ROW_HEIGHT      (2 * opt_fontsize)
 #define COMBOROW_CY     (0.9 * opt_fontsize)
 #define BROWSEBTN_WIDTH (1.5 * opt_fontsize)
+#define LOGVIEW_ROWS    6
 
 
 /* log_addstring() adds a string to the log data; the parameter "text" may be NULL
@@ -134,7 +142,7 @@ static int log_widget(struct nk_context *ctx, const char *id, const char *conten
 
   /* black background on group */
   bkgnd = stwin->fixed_background;
-  stwin->fixed_background = nk_style_item_color(nk_rgba(20, 29, 38, 225));
+  stwin->fixed_background = nk_style_item_color(nk_rgb(20, 29, 38));
   if (nk_group_begin(ctx, id, NK_WINDOW_BORDER)) {
     float lineheight = 0;
     const char *head = content;
@@ -148,14 +156,26 @@ static int log_widget(struct nk_context *ctx, const char *id, const char *conten
         struct nk_rect rcline = nk_layout_widget_bounds(ctx);
         lineheight = rcline.h;
       }
-      if (*head == '^' && *(head + 1) == '1')
-        nk_text_colored(ctx, head + 2, (int)(tail - head - 2), NK_TEXT_LEFT, nk_rgb(255, 100, 128));
-      else if (*head == '^' && *(head + 1) == '2')
-        nk_text_colored(ctx, head + 2, (int)(tail - head - 2), NK_TEXT_LEFT, nk_rgb(100, 255, 100));
-      else if (*head == '^' && *(head + 1) == '3')
-        nk_text_colored(ctx, head + 2, (int)(tail - head - 2), NK_TEXT_LEFT, nk_rgb(255, 255, 100));
-      else
+      if (*head == '^' && isdigit(*(head + 1))) {
+        struct nk_color clr = nk_rgb(205, 201, 171);
+        switch (*(head + 1)) {
+        case '1': /* error (red) */
+          clr = nk_rgb(255, 80, 100);
+          break;
+        case '2': /* ok (green) */
+          clr = nk_rgb(100, 255, 100);
+          break;
+        case '3': /* warning (yellow) */
+          clr = nk_rgb(255, 240, 80);
+          break;
+        case '4': /* notice (white) */
+          clr = nk_rgb(255, 255, 255);
+          break;
+        }
+        nk_text_colored(ctx, head + 2, (int)(tail - head - 2), NK_TEXT_LEFT, clr);
+      } else {
         nk_text(ctx, head, (int)(tail - head), NK_TEXT_LEFT);
+      }
       lines++;
       head = (*tail != '\0') ? tail + 1 : tail;
     }
@@ -250,7 +270,7 @@ static int patch_vecttable(FILE *fp, const char *mcutype)
   return 1;
 }
 
-static int serialize_databuffer(unsigned char *buffer, int size, int serialnum, int format)
+static int serialize_fmtoutput(unsigned char *buffer, int size, int serialnum, int format)
 {
   int idx, len;
   char localbuf[50];
@@ -311,6 +331,73 @@ static int serialize_databuffer(unsigned char *buffer, int size, int serialnum, 
   return 1;
 }
 
+static size_t serialize_parsepattern(unsigned char *output, size_t output_size,
+                                     const char *input, const char *description)
+{
+  size_t buflength;
+  int widechars = 0;
+
+  assert(output != NULL);
+  assert(output_size >= 2);
+  assert(input != NULL);
+
+  buflength = 0;
+  while (*input != '\0' && buflength < output_size - 2) {
+    if (*input == '\\') {
+      if (*(input + 1) == '\\') {
+        input++;
+        output[buflength] = *input; /* '\\' is replaced by a single '\'*/
+      } else if (*(input + 1) == 'x' && isxdigit(*(input + 2))) {
+        int val = 0;
+        int len = 0;
+        input += 2;     /* skip '\x' */
+        while (len < 2 && isdigit(*input)) {
+          int ch = -1;
+          if (*input >= '0' && *input <= '9')
+            ch = *input - '0';
+          else if (*input >= 'A' && *input <= 'F')
+            ch = *input - 'A' + 10;
+          else if (*input >= 'a' && *input <= 'f')
+            ch = *input - 'a' + 10;
+          assert(ch >= 0 && ch <= 15);
+          val = (val << 4) | ch;
+          input++;
+          len++;
+        }
+      } else if (isdigit(*(input + 1))) {
+        int val = 0;
+        int len = 0;
+        input += 1;     /* skip '\' */
+        while (len < 3 && isdigit(*input)) {
+          val = 10 * val + (*input - '0');
+          input++;
+          len++;
+        }
+        output[buflength] = (unsigned char)val;
+      } else if ((*(input + 1) == 'A' || *(input + 1) == 'U') && *(input + 2) == '*') {
+        widechars = (*(input + 1) == 'U');
+        input += 3;
+        continue; /* skip storing some character in output */
+      } else {
+        /* nothing recognizable follows the '\', take it literally */
+        char msg[100];
+        sprintf(msg, "^1Invalid syntax for \"%s\" string\n", description);
+        log_addstring(msg);
+        output[buflength] = *input;
+        return ~0;  /* return failure, so do not proceed with match & replace */
+      }
+    } else {
+      output[buflength] = *input;
+    }
+    if (widechars)
+      output[++buflength] = '\0';
+    buflength++;
+    input++;
+  }
+
+  return buflength;
+}
+
 static int serialize_address(FILE *fp, const char *section, unsigned long address,
                              unsigned char *data, int datasize)
 {
@@ -341,73 +428,25 @@ static int serialize_address(FILE *fp, const char *section, unsigned long addres
   return 1;
 }
 
-static int serialize_match(FILE *fp, const char *match, unsigned long offset,
+static int serialize_match(FILE *fp, const char *match, const char *prefix,
                            unsigned char *data, int datasize)
 {
-  unsigned char matchbuf[100];
-  int buflength;
+  unsigned char matchbuf[100], prefixbuf[100];
+  size_t matchbuf_len, prefixbuf_len;
   unsigned char *buffer;
   size_t bytes;
   size_t fileoffs, filesize;
-  int widechars = 0;
 
   /* create buffer to match from the string */
   assert(match != NULL);
-  if (strlen(match) == 0) {
+  matchbuf_len = serialize_parsepattern(matchbuf, sizearray(matchbuf), match, "match");
+  assert(prefix != NULL);
+  prefixbuf_len = serialize_parsepattern(prefixbuf, sizearray(prefixbuf), prefix, "prefix");
+  if (matchbuf_len == ~0 || prefixbuf_len == ~0)
+    return 0; /* error message already given */
+  if (matchbuf_len == 0) {
     log_addstring("^1Serialization match text is empty\n");
     return 0;
-  }
-  buflength = 0;
-  while (*match != '\0' && buflength < sizearray(matchbuf) - 2) {
-    if (*match == '\\') {
-      if (*(match + 1) == '\\') {
-        match++;
-        matchbuf[buflength] = *match; /* '\\' is replaced by a single '\'*/
-      } else if (*(match + 1) == 'x' && isxdigit(*(match + 2))) {
-        int val = 0;
-        int len = 0;
-        match += 2;     /* skip '\x' */
-        while (len < 2 && isdigit(*match)) {
-          int ch = -1;
-          if (*match >= '0' && *match <= '9')
-            ch = *match - '0';
-          else if (*match >= 'A' && *match <= 'F')
-            ch = *match - 'A' + 10;
-          else if (*match >= 'a' && *match <= 'f')
-            ch = *match - 'a' + 10;
-          assert(ch >= 0 && ch <= 15);
-          val = (val << 4) | ch;
-          match++;
-          len++;
-        }
-      } else if (isdigit(*(match + 1))) {
-        int val = 0;
-        int len = 0;
-        match += 1;     /* skip '\' */
-        while (len < 3 && isdigit(*match)) {
-          val = 10 * val + (*match - '0');
-          match++;
-          len++;
-        }
-        matchbuf[buflength] = (unsigned char)val;
-      } else if (*(match + 1) == 'A' && *(match + 2) == '*') {
-        match += 2;
-        widechars = 0;
-      } else if (*(match + 1) == 'U' && *(match + 2) == '*') {
-        match += 2;
-        widechars = 1;
-      } else {
-        /* nothing recognizable follows the '\', take it literally */
-        log_addstring("^1Invalid syntax for match string\n");
-        matchbuf[buflength] = *match;
-      }
-    } else {
-      matchbuf[buflength] = *match;
-    }
-    if (widechars)
-      matchbuf[++buflength] = '\0';
-    buflength++;
-    match++;
   }
 
   /* find the buffer in the file */
@@ -421,79 +460,139 @@ static int serialize_match(FILE *fp, const char *match, unsigned long offset,
   }
   fseek(fp, 0, SEEK_SET);
   bytes = fread(buffer, 1, filesize, fp);
-  for (fileoffs = 0; fileoffs < bytes - buflength; fileoffs++) {
-    if (buffer[fileoffs] == matchbuf[0] && memcmp(buffer + fileoffs, matchbuf, buflength) == 0)
+  for (fileoffs = 0; fileoffs < bytes - matchbuf_len; fileoffs++) {
+    if (buffer[fileoffs] == matchbuf[0] && memcmp(buffer + fileoffs, matchbuf, matchbuf_len) == 0)
       break;
   }
   free(buffer);
-  if (fileoffs >= bytes - buflength) {
+  if (fileoffs >= bytes - matchbuf_len) {
     log_addstring("^1Match string not found\n");
     return 0;
   }
 
-  /* path the replacement data at the found file position */
-  fseek(fp, fileoffs + offset, SEEK_SET);
+  /* patch the prefix string and serial data at the position where the match was found */
+  fseek(fp, fileoffs, SEEK_SET);
+  fwrite(prefixbuf, 1, prefixbuf_len, fp);
   fwrite(data, 1, datasize, fp);
   fseek(fp, 0, SEEK_SET);
 
   return 1;
 }
 
-static void usage(void)
+static const char *skipwhite(const char *str)
 {
-  printf("bmflash - Firmware Programming utility for the Black Magic Probe.\n\n"
-         "Usage: bmflash [options] elf-file\n\n"
+  assert(str != NULL);
+  while (*str <= ' ' && *str != '\0')
+    str++;
+  return str;
+}
+
+static int serial_get(const char *field)
+{
+  FILE *fp;
+  int serial;
+  const char *ptr = skipwhite(field);
+  if (*ptr == '\0')
+    return 1;                           /* no serial number filled in, start at 1 */
+  if (isdigit(*ptr))
+    return (int)strtol(ptr, NULL, 10);  /* direct value filled in */
+  /* separate serial number file */
+  fp = fopen(ptr, "rt");
+  if (fp == NULL)
+    return 1;                           /* no file (yet), start at 1 */
+  if (fscanf(fp, "%d", &serial) == 0)
+    serial = 1;                         /* file exists, but has no valid value in it */
+  fclose(fp);
+  return serial;
+}
+
+static void serial_increment(char *field, int increment)
+{
+  int serial = serial_get(field) + increment;
+  const char *ptr = skipwhite(field);
+  if (*ptr == '\0' || isdigit(*ptr)) {
+    sprintf(field, "%d", serial);   /* store updated number in the field */
+  } else {
+    /* store updated number in the file */
+    FILE *fp = fopen(ptr, "r+t");
+    if (fp == NULL)
+      fp = fopen(ptr, "wt");
+    if (fp != NULL) {
+      fprintf(fp, "%d", serial);
+      fclose(fp);
+    }
+  }
+}
+
+static void usage(const char *invalid_option)
+{
+  #if defined _WIN32  /* fix console output on Windows */
+    if (AttachConsole(ATTACH_PARENT_PROCESS)) {
+      freopen("CONOUT$", "wb", stdout);
+      freopen("CONOUT$", "wb", stderr);
+    }
+    printf("\n");
+  #endif
+
+  if (invalid_option != NULL)
+    fprintf(stderr, "Unknown option %s; use -h for help.\n\n", invalid_option);
+  else
+    printf("BMFlash - Firmware Programming utility for the Black Magic Probe.\n\n");
+  printf("Usage: bmflash [options] elf-file\n\n"
          "Options:\n"
-         "-f=value\t Font size to use (value must be 8 or larger).\n"
-         "-h\t This help.\n");
+         "-f=value  Font size to use (value must be 8 or larger).\n"
+         "-h        This help.\n");
 }
 
 static int help_popup(struct nk_context *ctx, int opt_fontsize)
 {
   static const char helptext[] =
-    "This utility downloads firmware into a micro-controller\n"
-    "using the Black Magic Probe. It automatically handles\n"
-    "idiosyncrasies of MCU families, and supports setting a\n"
-    "serial number during the download (serialization).\n"
-    "It does not require GDB.\n\n"
+    "This utility downloads firmware into a micro-controller using the\n"
+    "Black Magic Probe. It automatically handles idiosyncrasies of\n"
+    "MCU families, and supports setting a serial number during the\n"
+    "download (serialization). It does not require GDB.\n\n"
     "^3Options\n"
-    "The MCU family must be set for post-processing the\n"
-    "ELF file or performing additional configurations before\n"
-    "the download. It is currently needed for the LPC family\n"
-    "by NXP. For other micro-controllers, this field should\n"
-    "be set to \"generic\"\n\n"
-    "The \"Power Target\" option can be set to drive the\n"
-    "power-sense pin with 3.3V (to power the target).\n\n"
+    "The MCU family must be set for post-processing the ELF file or\n"
+    "performing additional configurations before the download. It is\n"
+    "currently needed for the LPC family by NXP. For other micro-\n"
+    "controllers, this field should be set to \"generic\"\n\n"
+    "The \"Power Target\" option can be set to drive the power-sense\n"
+    "pin with 3.3V (to power the target).\n\n"
+    "The \"Full Flash Erase\" option erases all Flash sectors in the MCU\n"
+    "If not set, only the Flash sectors for which there is new data get\n"
+    "erased & overwritten.\n\n"
+    "The \"Reset during connect\" option may be needed on some MCUs,\n"
+    "especially if SWD pins get redefined.\n\n"
     "^3Serialization\n"
-    "The serialization method is either \"No serialization\",\n"
-    "or \"Address\" to store the serial number at a specific\n"
-    "address, or \"Match\" to search for a text or byte pattern\n"
-    "and replace it with the serial number.\n\n"
-    "For \"Address\" mode, you may optionally give the name\n"
-    "of a section in the ELF file. The address is relative to the\n"
-    "section, or relative to the beginning of the ELF file if no\n"
-    "section name is given. The address is interpreted as a\n"
-    "hexadecimal value.\n\n"
-    "For \"Match\" mode, you give a pattern to match and an\n"
-    "offset from the start of the pattern where to store the\n"
-    "serial number at. The offset is interpreted as a hexa-\n"
-    "decimal value. The match string may contain \\### and\n"
-    "\\x## specifications (where \"#\" represents a decimal or\n"
-    "hexadecimal digit) for non-ASCII byte values. It may\n"
-    "furthermore contain the sequence \\U* to interpret the\n"
-    "text that follows as Unicode, or \\A* to switch back to\n"
-    "ASCII. When a literal \\ is part of the pattern, it must\n"
-    "be doubled, as in \\\\.\n\n"
-    "The serial number is a decimal value. It is incremented\n"
-    "after each successful download. The size of the serial\n"
-    "number is in bytes. The format can be chosen as binary,\n"
-    "ASCII or Unicode. In the latter two cases, the serial\n"
-    "number is stored as readable text.\n\n";
+    "The serialization method is either \"No serialization\", \"Address\" (to\n"
+    "store the serial number at a specific address), or \"Match\" (to search\n"
+    "for a text or byte pattern and replace it with the serial number).\n\n"
+    "For \"Address\" mode, you may optionally give the name of a\n"
+    "section in the ELF file. The address is relative to the section, or\n"
+    "relative to the beginning of the ELF file if no section name is\n"
+    "given. The address is interpreted as a hexadecimal value.\n\n"
+    "For \"Match\" mode, you give a pattern to match and an optional\n"
+    "prefix. When the pattern is found, it is overwritten by the prefix,\n"
+    "immediately followed the serial number. The match and prefix strings\n"
+    "may contain \\### and \\x## specifications (where \"#\" represents\n"
+    "a decimal or hexadecimal digit) for non-ASCII byte values. It may\n"
+    "furthermore contain the sequence \\U* to interpret the text that\n"
+    "follows as Unicode, or \\A* to switch back to ASCII. When a literal \\\n"
+    "is part of the pattern, it must be doubled, as in \\\\.\n\n"
+    "The serial number is a decimal value. It is incremented after each\n"
+    "successful download. The size of the serial number is in bytes. The\n"
+    "format can be chosen as binary, ASCII or Unicode. In the latter two\n"
+    "cases, the serial number is stored as readable text.\n\n";
   int is_active = 1;
-  struct nk_rect rc = nk_rect(10, 10, WINDOW_WIDTH - 20, WINDOW_HEIGHT - 20);
+  struct nk_rect rc = nk_window_get_bounds(ctx);
+  #define MARGIN  10
+  rc.x += MARGIN;
+  rc.y += MARGIN;
+  rc.w -= 2*MARGIN;
+  rc.h -= 2*MARGIN;
+  #undef MARGIN
   if (nk_popup_begin(ctx, NK_POPUP_STATIC, "Help", NK_WINDOW_NO_SCROLLBAR, rc)) {
-    float viewrows = WINDOW_HEIGHT/(2.0 * opt_fontsize) - 2.3;
-    nk_layout_row_dynamic(ctx, viewrows*ROW_HEIGHT, 1);
+    nk_layout_row_dynamic(ctx, rc.h - ROW_HEIGHT - opt_fontsize, 1);
     log_widget(ctx, "help", helptext, opt_fontsize, NULL);
     nk_layout_row_dynamic(ctx, ROW_HEIGHT, 4);
     nk_spacing(ctx, 3);
@@ -510,12 +609,88 @@ static int help_popup(struct nk_context *ctx, int opt_fontsize)
 
 
 enum {
+  TOOL_OPEN = -1,
+  TOOL_CLOSE,
+  TOOL_RESCAN,
+  TOOL_FULLERASE,
+  TOOL_OPTIONERASE,
+  TOOL_STM32PROTECT,
+  TOOL_VERIFY,
+};
+
+static int tools_popup(struct nk_context *ctx, const struct nk_rect *anchor_button,
+                       int opt_fontsize)
+{
+  #define MENUROWHEIGHT (1.5 * opt_fontsize)
+  #define MARGIN        4
+  static int prev_active = TOOL_CLOSE;
+  int is_active = TOOL_OPEN;
+  struct nk_rect rc;
+  float height = 4 * MENUROWHEIGHT + 2 * MARGIN;
+  struct nk_style_button stbtn = ctx->style.button;
+  struct nk_style_window *stwin = &ctx->style.window;
+  struct nk_vec2 item_spacing;
+
+  rc.x = anchor_button->x - MARGIN;
+  rc.y = anchor_button->y - height;
+  rc.w = anchor_button->w;
+  rc.h = height;
+
+  /* change button style, to make it more like a menu item */
+  item_spacing = stwin->spacing;
+  stwin->spacing.y = 0;
+  stbtn.border = 0;
+  stbtn.rounding = 0;
+  stbtn.padding.y = 0;
+  stbtn.text_alignment = NK_TEXT_LEFT;
+
+  /* check whether the mouse was clicked outside this popup (this closes the
+     popup), but skip this check at the initial "open" */
+  if (prev_active == TOOL_OPEN) {
+    int i;
+    for (i = 0; i < NK_BUTTON_MAX; i++) {
+      if (nk_input_is_mouse_pressed(&ctx->input, (enum nk_buttons)i)
+          && !nk_input_is_mouse_click_in_rect(&ctx->input, (enum nk_buttons)i, rc))
+        is_active = TOOL_CLOSE;
+    }
+  }
+
+  if (nk_popup_begin(ctx, NK_POPUP_STATIC, "Tools", NK_WINDOW_NO_SCROLLBAR, rc)) {
+    nk_layout_row_dynamic(ctx, MENUROWHEIGHT, 1);
+    if (nk_button_label_styled(ctx, &stbtn, "Re-scan Probe List"))
+      is_active = TOOL_RESCAN;
+    if (nk_button_label_styled(ctx, &stbtn, "Full Flash Erase"))
+      is_active = TOOL_FULLERASE;
+    if (nk_button_label_styled(ctx, &stbtn, "Erase Option Bytes"))
+      is_active = TOOL_OPTIONERASE;
+    if (nk_button_label_styled(ctx, &stbtn, "Set CRP Option"))
+      is_active = TOOL_STM32PROTECT;
+    if (nk_button_label_styled(ctx, &stbtn, "Verify Download"))
+      is_active = TOOL_VERIFY;
+    //??? add "Blank Check" (or make that a special result of "Verify Download")
+    if (is_active != TOOL_OPEN)
+      nk_popup_close(ctx);
+    nk_popup_end(ctx);
+  } else {
+    is_active = TOOL_CLOSE;
+  }
+  #undef MENUROWHEIGHT
+  #undef MARGIN
+  stwin->spacing = item_spacing;
+  prev_active = is_active;
+  return is_active;
+}
+
+
+enum {
+  STATE_INIT,
   STATE_IDLE,
   STATE_SAVE,
   STATE_ATTACH,
   STATE_PRE_DOWNLOAD,
   STATE_PATCH_ELF,
   STATE_ERASE_OPTBYTES,
+  STATE_SET_CRP,
   STATE_FULLERASE,
   STATE_DOWNLOAD,
   STATE_VERIFY,
@@ -537,23 +712,26 @@ int main(int argc, char *argv[])
   enum nk_collapse_states tab_states[TAB_COUNT];
   int idx;
   int running = 1;
-  int curstate = STATE_IDLE;
+  int curstate = STATE_INIT;
   char txtFilename[_MAX_PATH] = "", txtParamFile[_MAX_PATH];
   char txtConfigFile[_MAX_PATH];
   char txtIPaddr[64] = "";
-  char txtSection[32] = "", txtAddress[32] = "", txtMatch[64] = "", txtOffset[32] = "";
-  char txtSerial[32] = "", txtSerialSize[32] = "";
+  char txtSection[32] = "", txtAddress[32] = "";
+  char txtMatch[64] = "", txtPrefix[64] = "";
+  char txtSerial[32] = "", txtSerialSize[32] = "", txtSerialIncr[32] = "";
+  char txtPostProcess[_MAX_PATH];
   FILE *fpTgt, *fpWork;
+  coro coro_download = NULL;
   int probe, usbprobes, netprobe;
   const char **probelist;
   nk_bool opt_tpwr = nk_false;
-  nk_bool opt_erase_optbytes = nk_false;
   nk_bool opt_fullerase = nk_false;
   nk_bool opt_connect_srst = nk_false;
   int opt_architecture = 0;
   int opt_serialize = SER_NONE;
   int opt_format = FMT_BIN;
   int help_active = 0;
+  int toolmenu_active = TOOL_CLOSE;
   int load_options = 0;
   int skip_download = 0;  /* perform all steps for a code download, except the actual download */
   int opt_fontsize = FONT_HEIGHT;
@@ -584,7 +762,7 @@ int main(int argc, char *argv[])
       switch (argv[idx][1]) {
       case '?':
       case 'h':
-        usage();
+        usage(NULL);
         return 0;
       case 'f':
         ptr = &argv[idx][2];
@@ -605,8 +783,8 @@ int main(int argc, char *argv[])
         }
         break;
       default:
-        fprintf(stderr, "Unknown option %s; use option -h for help.\n", argv[idx]);
-        return 1;
+        usage(argv[idx]);
+        return EXIT_FAILURE;
       }
     } else {
       if (access(argv[idx], 0) == 0) {
@@ -625,36 +803,14 @@ int main(int argc, char *argv[])
 
   strlcpy(txtParamFile, txtFilename, sizearray(txtParamFile));
   strlcat(txtParamFile, ".bmcfg", sizearray(txtParamFile));
+  strcpy(txtPostProcess, "");
   strcpy(txtSection, ".text");
   strcpy(txtAddress, "0");
   strcpy(txtMatch, "");
-  strcpy(txtOffset, "0");
+  strcpy(txtPrefix, "");
   strcpy(txtSerial, "1");
   strcpy(txtSerialSize, "4");
-
-  /* collect debug probes, connect to the selected one */
-  usbprobes = get_bmp_count();
-  netprobe = (usbprobes > 0) ? usbprobes : 1;
-  probelist = malloc((netprobe+1)*sizeof(char*));
-  if (probelist != NULL) {
-    if (usbprobes == 0) {
-      probelist[0] = strdup("-");
-    } else {
-      char portname[64];
-      for (idx = 0; idx < usbprobes; idx++) {
-        find_bmp(idx, BMP_IF_GDB, portname, sizearray(portname));
-        probelist[idx] = strdup(portname);
-      }
-    }
-    probelist[netprobe] = strdup("TCP/IP");
-  }
-  if (probe == 99)
-    probe = netprobe;
-  else if (probe > usbprobes)
-    probe = 0;
-  tcpip_init();
-  bmp_setcallback(bmp_callback);
-  bmp_connect(probe, (probe == netprobe) ? txtIPaddr : NULL);
+  strcpy(txtSerialIncr, "1");
 
   ctx = guidriver_init("BlackMagic Flash Programmer", WINDOW_WIDTH, WINDOW_HEIGHT, GUIDRV_TIMER,
                        opt_fontstd, opt_fontmono, opt_fontsize);
@@ -668,8 +824,35 @@ int main(int argc, char *argv[])
   while (running) {
     /* handle state */
     int waitidle = 1;
+    int is_attached = 0;
     int result;
     switch (curstate) {
+    case STATE_INIT:
+      /* collect debug probes, connect to the selected one */
+      usbprobes = get_bmp_count();
+      netprobe = (usbprobes > 0) ? usbprobes : 1;
+      probelist = malloc((netprobe+1)*sizeof(char*));
+      if (probelist != NULL) {
+        if (usbprobes == 0) {
+          probelist[0] = strdup("-");
+        } else {
+          char portname[64];
+          for (idx = 0; idx < usbprobes; idx++) {
+            find_bmp(idx, BMP_IF_GDB, portname, sizearray(portname));
+            probelist[idx] = strdup(portname);
+          }
+        }
+        probelist[netprobe] = strdup("TCP/IP");
+      }
+      if (probe == 99)
+        probe = netprobe;
+      else if (probe > usbprobes)
+        probe = 0;
+      tcpip_init();
+      bmp_setcallback(bmp_callback);
+      bmp_connect(probe, (probe == netprobe) ? txtIPaddr : NULL);
+      curstate = STATE_IDLE;
+      break;
     case STATE_IDLE:
       if (fpTgt != NULL) {
         fclose(fpTgt);
@@ -679,7 +862,11 @@ int main(int argc, char *argv[])
         fclose(fpWork);
         fpWork = NULL;
       }
-      bmp_detach(1);  /* if currently attached, detach */
+      if (is_attached) {
+        bmp_detach(1);  /* if currently attached, detach */
+        is_attached = 0;
+      }
+      gdbrsp_clear();
       skip_download = 0;
       break;
     case STATE_SAVE:
@@ -687,7 +874,7 @@ int main(int argc, char *argv[])
       tab_states[TAB_SERIALIZATION] = NK_MINIMIZED;
       tab_states[TAB_STATUS] = NK_MAXIMIZED;
       if (access(txtFilename, 0) == 0) {
-        char field[100];
+        char field[200];
         /* save settings in cache file */
         strlcpy(txtParamFile, txtFilename, sizearray(txtParamFile));
         strlcat(txtParamFile, ".bmcfg", sizearray(txtParamFile));
@@ -699,12 +886,13 @@ int main(int argc, char *argv[])
         ini_puts("Flash", "architecture", field, txtParamFile);
         ini_putl("Flash", "tpwr", opt_tpwr, txtParamFile);
         ini_putl("Flash", "full-erase", opt_fullerase, txtParamFile);
+        ini_puts("Flash", "postprocess", txtPostProcess, txtParamFile);
         ini_putl("Serialize", "option", opt_serialize, txtParamFile);
         sprintf(field, "%s:%s", txtSection, txtAddress);
         ini_puts("Serialize", "address", field, txtParamFile);
-        sprintf(field, "%s:%s", txtMatch, txtOffset);
+        sprintf(field, "%s:%s", txtMatch, txtPrefix);
         ini_puts("Serialize", "match", field, txtParamFile);
-        sprintf(field, "%s:%s:%d", txtSerial, txtSerialSize, opt_format);
+        sprintf(field, "%s:%s:%d:%s", txtSerial, txtSerialSize, opt_format, txtSerialIncr);
         ini_puts("Serialize", "serial", field, txtParamFile);
         curstate = STATE_ATTACH;
       } else {
@@ -717,8 +905,8 @@ int main(int argc, char *argv[])
       result = bmp_connect(probe, (probe == netprobe) ? txtIPaddr : NULL);
       if (result) {
         char mcufamily[32];
-        result = bmp_attach(opt_tpwr, opt_connect_srst, mcufamily, sizearray(mcufamily), NULL, 0);
-        if (result) {
+        is_attached = bmp_attach(opt_tpwr, opt_connect_srst, mcufamily, sizearray(mcufamily), NULL, 0);
+        if (is_attached) {
           int arch;
           /* try exact match first */
           for (arch = 0; arch < sizearray(architectures); arch++)
@@ -746,7 +934,7 @@ int main(int argc, char *argv[])
         if (bmp_flashtotal() == 0)
           result = 0; /* no use downloading firmware to a chip that has no Flash */
       }
-      curstate = result ? STATE_PRE_DOWNLOAD : STATE_IDLE;
+      curstate = (result && is_attached) ? STATE_PRE_DOWNLOAD : STATE_IDLE;
       waitidle = 0;
       break;
     case STATE_PRE_DOWNLOAD:
@@ -778,41 +966,18 @@ int main(int argc, char *argv[])
           /* create replacement buffer, depending on format */
           unsigned char data[50];
           int datasize = (int)strtol(txtSerialSize, NULL, 10);
-          serialize_databuffer(data, datasize, (int)strtol(txtSerial,NULL,10), opt_format);
+          serialize_fmtoutput(data, datasize, serial_get(txtSerial), opt_format);
+          //??? run a script, because the serial number may include a check digit
           if (opt_serialize == SER_ADDRESS)
             result = serialize_address(fpWork, txtSection, strtoul(txtAddress,NULL,16), data, datasize);
           else if (opt_serialize == SER_MATCH)
-            result = serialize_match(fpWork, txtMatch, strtoul(txtOffset,NULL,16), data, datasize);
+            result = serialize_match(fpWork, txtMatch, txtPrefix, data, datasize);
           if (result) {
             char msg[100];
-            sprintf(msg, "Serial adjusted to %d\n", (int)strtol(txtSerial, NULL, 10));
+            sprintf(msg, "^4Serial adjusted to %d\n", serial_get(txtSerial));
             log_addstring(msg);
           }
         }
-        curstate = result ? STATE_ERASE_OPTBYTES : STATE_IDLE;
-      } else {
-        curstate = STATE_ERASE_OPTBYTES;
-      }
-      waitidle = 0;
-      break;
-    case STATE_ERASE_OPTBYTES:
-      /* optionally erase all Flash memory */
-      if (opt_erase_optbytes && !skip_download) {
-        result = bmp_monitor("option erase");
-        if (!result)
-          log_addstring("^1Failed to erase the option bytes\n");
-        curstate = result ? STATE_FULLERASE : STATE_IDLE;
-        //??? if (opt_tpwr) -> move to state to detach/power-down and re-attach/power-up
-        //??? otherwise pop up a message box to tell the user to power-cycle before proceeding
-      } else {
-        curstate = STATE_FULLERASE;
-      }
-      waitidle = 0;
-      break;
-    case STATE_FULLERASE:
-      /* optionally erase all Flash memory */
-      if (opt_fullerase && !skip_download) {
-        result = bmp_fullerase();
         curstate = result ? STATE_DOWNLOAD : STATE_IDLE;
       } else {
         curstate = STATE_DOWNLOAD;
@@ -824,8 +989,23 @@ int main(int argc, char *argv[])
       if (!skip_download) {
         if (opt_architecture > 0)
           bmp_runscript("memremap", architectures[opt_architecture], NULL, NULL);
-        result = bmp_download((fpWork != NULL) ? fpWork : fpTgt);
-        curstate = result ? STATE_VERIFY : STATE_IDLE;
+        /* create a coroutine for the function that does the download, so that
+           this loop continues with updating the message log, while the download
+           is in progress */
+        if (coro_download == NULL) {
+          coro_download = coroutine((coro_proc)bmp_download);
+          result = 0; /* preset for the case that the resumable() fails */
+        }
+        if (coro_download != NULL && resumable(coro_download)) {
+          result = (intptr_t)resume(coro_download, (fpWork != NULL) ? fpWork : fpTgt);
+          if (result == 0) {
+            coro_download = NULL;
+            curstate = STATE_IDLE;
+          }
+        } else {
+          coro_download = NULL;
+          curstate = result ? STATE_VERIFY : STATE_IDLE;
+        }
       } else {
         curstate = STATE_VERIFY;
       }
@@ -835,24 +1015,14 @@ int main(int argc, char *argv[])
       if (opt_architecture > 0) {
         /* check whether CRP was set; if so, verification will always fail */
         assert(fpWork != NULL);
-        result=elf_check_crp(fpWork, &idx);
-        if (result==ELFERR_NONE && idx>0 && idx<4) {
-          /* CRP level set, which makes verification impossible */
+        result = elf_check_crp(fpWork, &idx);
+        if (result == ELFERR_NONE && idx > 0 && idx < 4) {
+          /* CRP level set on the ELF file; it may still be that the code in
+             the target does not have CRP set, but regardless, it won't match
+             the code in the file */
           char msg[100];
-          if (skip_download) {
-            /* it may still be that the code in the target does not have CRP set,
-               but regardless, it won't match the code in the file */
-            sprintf(msg, "^3Code Read Protection (CRP%d) is set on the file on disk\n", idx);
-            log_addstring(msg);
-          } else {
-            /* so we just downloaded a file with CRP -> skip the verification
-               step */
-            sprintf(msg, "^3Code Read Protection (CRP%d) is set, verification skipped\n", idx);
-            log_addstring(msg);
-            curstate = STATE_FINISH;
-            waitidle = 0;
-            break;
-          }
+          sprintf(msg, "^3Code Read Protection (CRP%d) is set\n", idx);
+          log_addstring(msg);
         }
       }
       /* compare the checksum of Flash memory to the file */
@@ -864,9 +1034,85 @@ int main(int argc, char *argv[])
       break;
     case STATE_FINISH:
       /* optionally increment the serial number */
-      if (opt_serialize != SER_NONE) {
-        int num = (int)strtol(txtSerial, NULL, 10);
-        sprintf(txtSerial, "%d", num + 1);
+      if (opt_serialize != SER_NONE && !skip_download) {
+        char field[200];
+        int incr = (int)strtol(txtSerialIncr, NULL, 100);
+        if (incr < 1)
+          incr = 1;
+        serial_increment(txtSerial, incr);
+        /* must update this in the cache file immediately (so that the cache is
+           up-to-date when the user aborts/quits the utility) */
+        sprintf(field, "%s:%s:%d:%s", txtSerial, txtSerialSize, opt_format, txtSerialIncr);
+        ini_puts("Serialize", "serial", field, txtParamFile);
+      }
+      if (strlen(txtPostProcess) > 0) {
+        #if defined WIN32 || defined _WIN32
+          if (opt_serialize != SER_NONE)
+            result = spawnlp(P_WAIT, txtPostProcess, txtPostProcess, txtFilename, txtSerial, NULL);
+          else
+            result = spawnlp(P_WAIT, txtPostProcess, txtPostProcess, txtFilename, NULL);
+        #elif defined __linux__
+          pid_t pid = fork();
+          if (pid > 0) {
+            int status; /* wait for prost-process to finish */
+            waitpid(pid, &status, 0);
+            if (WIFEXITED(status))
+              result = WEXITSTATUS(status);
+            else
+              result = -1;
+          } else {
+            if (pid == 0) {
+              if (opt_serialize != SER_NONE)
+                execlp(txtPostProcess, txtPostProcess, txtFilename, txtSerial, NULL);
+              else
+                execlp(txtPostProcess, txtPostProcess, txtFilename, NULL);
+            }
+            _exit(EXIT_FAILURE); /* this point is only reached on error, because execlp() does not return */
+          }
+        #endif
+        if (result < 0) {
+          log_addstring("^1Failed to run the postprocessing program\n");
+        } else if (result > 0) {
+          char msg[100];
+          sprintf(msg, "^3Postprocessing program retuns %d\n", result);
+          log_addstring(msg);
+        } else {
+          log_addstring("Postprocessing finished\n");
+        }
+      }
+      curstate = STATE_IDLE;
+      waitidle = 0;
+      break;
+    case STATE_ERASE_OPTBYTES:
+      if (bmp_connect(probe, (probe == netprobe) ? txtIPaddr : NULL)
+          && bmp_attach(opt_tpwr, opt_connect_srst, NULL, 0, NULL, 0))
+      {
+        is_attached = 1;
+        result = bmp_monitor("option erase");
+        if (!result)
+          log_addstring("^1Failed to erase the option bytes\n");
+      }
+      curstate = STATE_IDLE;
+      waitidle = 0;
+      break;
+    case STATE_SET_CRP:
+      if (bmp_connect(probe, (probe == netprobe) ? txtIPaddr : NULL)
+          && bmp_attach(opt_tpwr, opt_connect_srst, NULL, 0, NULL, 0))
+      {
+        is_attached = 1;
+        result = bmp_monitor("option option 0x1ffff800 0x00ff");
+        if (!result)
+          log_addstring("^1Failed to set the option byte for CRP\n");
+      }
+      curstate = STATE_IDLE;
+      waitidle = 0;
+      break;
+    case STATE_FULLERASE:
+      if (bmp_connect(probe, (probe == netprobe) ? txtIPaddr : NULL)
+          && bmp_attach(opt_tpwr, opt_connect_srst, NULL, 0, NULL, 0))
+      {
+        is_attached = 1;
+        bmp_fullerase();
       }
       curstate = STATE_IDLE;
       waitidle = 0;
@@ -881,9 +1127,11 @@ int main(int argc, char *argv[])
 
     /* GUI */
     if (nk_begin(ctx, "MainPanel", nk_rect(0, 0, WINDOW_WIDTH, WINDOW_HEIGHT), 0)) {
+      struct nk_rect rc_toolbutton;
       nk_layout_row_begin(ctx, NK_STATIC, ROW_HEIGHT, 2);
       nk_layout_row_push(ctx, WINDOW_WIDTH - 4 * opt_fontsize);
-      result = nk_edit_string_zero_terminated(ctx, NK_EDIT_FIELD | NK_EDIT_SIG_ENTER, txtFilename, sizearray(txtFilename), nk_filter_ascii);
+      result = nk_edit_string_zero_terminated(ctx, NK_EDIT_FIELD|NK_EDIT_SIG_ENTER|NK_EDIT_CLIPBOARD,
+                                              txtFilename, sizearray(txtFilename), nk_filter_ascii);
       if (result & NK_EDIT_COMMITED)
         load_options = 2;
       else if ((result & NK_EDIT_DEACTIVATED) != 0 && strncmp(txtFilename, txtParamFile, strlen(txtFilename)) != 0)
@@ -902,23 +1150,23 @@ int main(int argc, char *argv[])
       }
       nk_layout_row_end(ctx);
 
-      nk_layout_row_dynamic(ctx, 8.5*ROW_HEIGHT, 1);
+      nk_layout_row_dynamic(ctx, (LOGVIEW_ROWS+3.5)*ROW_HEIGHT, 1);
       if (nk_group_begin(ctx, "options", 0)) {
         if (nk_tree_state_push(ctx, NK_TREE_TAB, "Options", &tab_states[TAB_OPTIONS])) {
-          struct nk_rect rc_canvas = nk_rect(0, 0, WINDOW_WIDTH, WINDOW_HEIGHT);
           nk_layout_row(ctx, NK_DYNAMIC, ROW_HEIGHT * 0.8, 2, nk_ratio(2, 0.45, 0.55));
           nk_label(ctx, "Black Magic Probe", NK_TEXT_ALIGN_LEFT | NK_TEXT_ALIGN_MIDDLE);
           rcwidget = nk_widget_bounds(ctx);
           probe = nk_combo(ctx, probelist, netprobe+1, probe,(int)COMBOROW_CY, nk_vec2(rcwidget.w, 4.5*ROW_HEIGHT));
           if (probe == netprobe) {
             int reconnect = 0;
-            nk_layout_row(ctx, NK_DYNAMIC, ROW_HEIGHT, 4, nk_ratio(4, 0.05, 0.40, 0.40, 0.15));
+            nk_layout_row(ctx, NK_DYNAMIC, ROW_HEIGHT, 4, nk_ratio(4, 0.05, 0.40, 0.49, 0.06));
             nk_spacing(ctx, 1);
             nk_label(ctx, "IP Address", NK_TEXT_ALIGN_LEFT | NK_TEXT_ALIGN_MIDDLE);
-            result = nk_edit_string_zero_terminated(ctx, NK_EDIT_FIELD | NK_EDIT_SIG_ENTER, txtIPaddr, sizearray(txtIPaddr), nk_filter_ascii);
+            result = nk_edit_string_zero_terminated(ctx, NK_EDIT_FIELD|NK_EDIT_SIG_ENTER|NK_EDIT_CLIPBOARD,
+                                                    txtIPaddr, sizearray(txtIPaddr), nk_filter_ascii);
             if ((result & NK_EDIT_COMMITED) != 0 && bmp_is_ip_address(txtIPaddr))
               reconnect = 1;
-            if (nk_button_label(ctx, "scan")) {
+            if (button_symbol_tooltip(ctx, NK_SYMBOL_TRIPLE_DOT, NK_KEY_NONE, "Scan network for ctxLink probes.")) {
               #if defined WIN32 || defined _WIN32
                 HCURSOR hcur = SetCursor(LoadCursor(NULL, IDC_WAIT));
               #endif
@@ -947,16 +1195,32 @@ int main(int argc, char *argv[])
           rcwidget = nk_widget_bounds(ctx);
           opt_architecture = nk_combo(ctx, architectures, NK_LEN(architectures), opt_architecture, (int)COMBOROW_CY, nk_vec2(rcwidget.w, 4.5*ROW_HEIGHT));
 
+          nk_layout_row(ctx, NK_DYNAMIC, ROW_HEIGHT, 3, nk_ratio(3, 0.45, 0.497, 0.053));
+          nk_label(ctx, "Postprocess", NK_TEXT_ALIGN_LEFT | NK_TEXT_ALIGN_MIDDLE);
+          editctrl_tooltip(ctx, NK_EDIT_FIELD|NK_EDIT_CLIPBOARD, txtPostProcess, sizearray(txtPostProcess),
+                           nk_filter_ascii, "Program/script to run after successful download");
+          if (button_symbol_tooltip(ctx, NK_SYMBOL_TRIPLE_DOT, NK_KEY_NONE, "Browse...")) {
+            #if defined _WIN32
+              const char *filter = "Executables\0*.exe\0All files\0*.*\0";
+            #else
+              const char *filter = "Executables\0*\0All files\0*\0";
+            #endif
+            const char *s = noc_file_dialog_open(NOC_FILE_DIALOG_OPEN, filter,
+                                                 NULL, txtPostProcess, "Select Executable",
+                                                 guidriver_apphandle());
+            if (s != NULL && strlen(s) < sizearray(txtPostProcess)) {
+              strcpy(txtPostProcess, s);
+              free((void*)s);
+            }
+          }
+
           nk_layout_row_dynamic(ctx, ROW_HEIGHT, 1);
           checkbox_tooltip(ctx, "Power Target (3.3V)", &opt_tpwr,
-                           " Let the debug probe provide power to the target", &rc_canvas);
-          //??? erase option bytes requires power cycle -> some work is needed
-          //checkbox_tooltip(ctx, "Erase option bytes", &opt_erase_optbytes,
-          //                 " Required to remove code-protection on STM32-series MCUs", &rc_canvas);
+                           "Let the debug probe provide power to the target");
           checkbox_tooltip(ctx, "Full Flash erase before download", &opt_fullerase,
-                           " Required to remove code-protection on NXP LPC-series MCUs", &rc_canvas);
+                           "Required to remove code-protection on NXP LPC-series MCUs");
           checkbox_tooltip(ctx, "Reset target during connect", &opt_connect_srst,
-                           " Keep target MCU reset while debug probe attaches", &rc_canvas);
+                           "Keep target MCU reset while debug probe attaches");
 
           nk_tree_state_pop(ctx);
         }
@@ -965,25 +1229,31 @@ int main(int argc, char *argv[])
           nk_layout_row_dynamic(ctx, ROW_HEIGHT, 1);
           if (nk_option_label(ctx, "No serialization", opt_serialize == SER_NONE))
             opt_serialize = SER_NONE;
-          nk_layout_row(ctx, NK_DYNAMIC, ROW_HEIGHT, 4, nk_ratio(4, 0.3, 0.3, 0.1, 0.3));
+          nk_layout_row(ctx, NK_DYNAMIC, ROW_HEIGHT, 4, nk_ratio(4, 0.25, 0.3, 0.15, 0.3));
           if (nk_option_label(ctx, "Address", opt_serialize == SER_ADDRESS))
             opt_serialize = SER_ADDRESS;
-          nk_edit_string_zero_terminated(ctx, NK_EDIT_FIELD, txtSection, sizearray(txtSection), nk_filter_ascii);
-          nk_label(ctx, "+ 0x", NK_TEXT_ALIGN_RIGHT | NK_TEXT_ALIGN_MIDDLE);
-          nk_edit_string_zero_terminated(ctx, NK_EDIT_FIELD, txtAddress, sizearray(txtAddress), nk_filter_hex);
-          nk_layout_row(ctx, NK_DYNAMIC, ROW_HEIGHT, 4, nk_ratio(4, 0.3, 0.3, 0.1, 0.3));
+          editctrl_tooltip(ctx, NK_EDIT_FIELD|NK_EDIT_CLIPBOARD, txtSection, sizearray(txtSection), nk_filter_ascii,
+                           "The name of the section in the ELF file");
+          nk_label(ctx, "offset", NK_TEXT_ALIGN_RIGHT | NK_TEXT_ALIGN_MIDDLE);
+          editctrl_tooltip(ctx, NK_EDIT_FIELD|NK_EDIT_CLIPBOARD, txtAddress, sizearray(txtAddress), nk_filter_hex,
+                           "The offset in hexadecimal");
+          nk_layout_row(ctx, NK_DYNAMIC, ROW_HEIGHT, 4, nk_ratio(4, 0.25, 0.3, 0.15, 0.3));
           if (nk_option_label(ctx, "Match", opt_serialize == SER_MATCH))
             opt_serialize = SER_MATCH;
-          nk_edit_string_zero_terminated(ctx, NK_EDIT_FIELD, txtMatch, sizearray(txtMatch), nk_filter_ascii);
-          nk_label(ctx, "+ 0x", NK_TEXT_ALIGN_RIGHT | NK_TEXT_ALIGN_MIDDLE);
-          nk_edit_string_zero_terminated(ctx, NK_EDIT_FIELD, txtOffset, sizearray(txtOffset), nk_filter_hex);
-          nk_layout_row(ctx, NK_DYNAMIC, ROW_HEIGHT, 5, nk_ratio(5, 0.05, 0.24, 0.31, 0.1, 0.3));//??? needed to tweak 0.25:0.30 to 0.24:0.31
+          editctrl_tooltip(ctx, NK_EDIT_FIELD|NK_EDIT_CLIPBOARD, txtMatch, sizearray(txtMatch), nk_filter_ascii,
+                           "The text to match");
+          nk_label(ctx, "prefix", NK_TEXT_ALIGN_RIGHT | NK_TEXT_ALIGN_MIDDLE);
+          editctrl_tooltip(ctx, NK_EDIT_FIELD|NK_EDIT_CLIPBOARD, txtPrefix, sizearray(txtPrefix), nk_filter_ascii,
+                           "Text to write back at the matched position, prefixing the serial number");
+          nk_layout_row(ctx, NK_DYNAMIC, ROW_HEIGHT, 5, nk_ratio(5, 0.05, 0.193, 0.3, 0.155, 0.3));
           nk_spacing(ctx, 1);
           nk_label(ctx, "Serial", NK_TEXT_ALIGN_LEFT | NK_TEXT_ALIGN_MIDDLE);
-          nk_edit_string_zero_terminated(ctx, NK_EDIT_FIELD, txtSerial, sizearray(txtSerial), nk_filter_decimal);
+          editctrl_tooltip(ctx, NK_EDIT_FIELD|NK_EDIT_CLIPBOARD, txtSerial, sizearray(txtSerial), nk_filter_decimal,
+                           "The serial number to write (decimal value)");
           nk_label(ctx, "size", NK_TEXT_ALIGN_RIGHT | NK_TEXT_ALIGN_MIDDLE);
-          nk_edit_string_zero_terminated(ctx, NK_EDIT_FIELD, txtSerialSize, sizearray(txtSerialSize), nk_filter_decimal);
-          nk_layout_row(ctx, NK_DYNAMIC, ROW_HEIGHT, 5, nk_ratio(5, 0.05, 0.25, 0.23, 0.23, 0.23));
+          editctrl_tooltip(ctx, NK_EDIT_FIELD|NK_EDIT_CLIPBOARD, txtSerialSize, sizearray(txtSerialSize), nk_filter_decimal,
+                           "The size (in bytes) that the serial number is padded to");
+          nk_layout_row(ctx, NK_DYNAMIC, ROW_HEIGHT, 5, nk_ratio(5, 0.05, 0.20, 0.25, 0.25, 0.25));
           nk_spacing(ctx, 1);
           nk_label(ctx, "Format", NK_TEXT_ALIGN_LEFT | NK_TEXT_ALIGN_MIDDLE);
           if (nk_option_label(ctx, "Binary", opt_format == FMT_BIN))
@@ -992,11 +1262,16 @@ int main(int argc, char *argv[])
             opt_format = FMT_ASCII;
           if (nk_option_label(ctx, "Unicode", opt_format == FMT_UNICODE))
             opt_format = FMT_UNICODE;
+          nk_layout_row(ctx, NK_DYNAMIC, ROW_HEIGHT, 5, nk_ratio(5, 0.05, 0.193, 0.3, 0.45));
+          nk_spacing(ctx, 1);
+          nk_label(ctx, "Increment", NK_TEXT_ALIGN_LEFT | NK_TEXT_ALIGN_MIDDLE);
+          editctrl_tooltip(ctx, NK_EDIT_FIELD|NK_EDIT_CLIPBOARD, txtSerialIncr, sizearray(txtSerialIncr), nk_filter_decimal,
+                           "The increment for the serial number");
           nk_tree_state_pop(ctx);
         }
 
         if (nk_tree_state_push(ctx, NK_TREE_TAB, "Status", &tab_states[TAB_STATUS])) {
-          nk_layout_row_dynamic(ctx, 5*ROW_HEIGHT, 1);
+          nk_layout_row_dynamic(ctx, LOGVIEW_ROWS*ROW_HEIGHT, 1);
           log_widget(ctx, "status", logtext, opt_fontsize, &loglines);
           nk_tree_state_pop(ctx);
         }
@@ -1010,7 +1285,7 @@ int main(int argc, char *argv[])
         strlcpy(txtParamFile, txtFilename, sizearray(txtParamFile));
         strlcat(txtParamFile, ".bmcfg", sizearray(txtParamFile));
         if (access(txtParamFile, 0) == 0) {
-          char field[80], *ptr;
+          char field[200], *ptr;
           opt_connect_srst = ini_getl("Settings", "connect-srst", 0, txtParamFile);
           ini_gets("Flash", "architecture", "", field, sizearray(field), txtParamFile);
           for (opt_architecture = 0; opt_architecture < sizearray(architectures); opt_architecture++)
@@ -1020,34 +1295,54 @@ int main(int argc, char *argv[])
             opt_architecture = 0;
           opt_tpwr = (int)ini_getl("Flash", "tpwr", 0, txtParamFile);
           opt_fullerase = (int)ini_getl("Flash", "full-erase", 0, txtParamFile);
+          ini_gets("Flash", "postprocess", "", txtPostProcess, sizearray(txtPostProcess), txtParamFile);
           opt_serialize = (int)ini_getl("Serialize", "option", 0, txtParamFile);
           ini_gets("Serialize", "address", ".text:0", field, sizearray(field), txtParamFile);
           if ((ptr = strchr(field, ':')) != NULL) {
             *ptr++ = '\0';
-            strcpy(txtSection, field);
-            strcpy(txtAddress, ptr);
+            strlcpy(txtSection, field, sizearray(txtSection));
+            strlcpy(txtAddress, ptr, sizearray(txtAddress));
           }
           ini_gets("Serialize", "match", ":0", field, sizearray(field), txtParamFile);
           if ((ptr = strchr(field, ':')) != NULL) {
             *ptr++ = '\0';
-            strcpy(txtMatch, field);
-            strcpy(txtOffset, ptr);
+            strlcpy(txtMatch, field, sizearray(txtMatch));
+            strlcpy(txtPrefix, ptr, sizearray(txtPrefix));
           }
-          ini_gets("Serialize", "serial", "1:4:0", field, sizearray(field), txtParamFile);
-          if ((ptr = strchr(field, ':')) != NULL) {
+          ini_gets("Serialize", "serial", "1:4:0:1", field, sizearray(field), txtParamFile);
+          ptr = (char*)skipwhite(field);
+          if (isalpha(*ptr) && *(ptr + 1) == ':')
+            ptr += 2; /* looks like the start of a Windows path */
+          if ((ptr = strchr(ptr, ':'))!= NULL) {
             char *p2;
             *ptr++ = '\0';
-            strcpy(txtSerial, strlen(field) > 0 ? field : "0");
+            strlcpy(txtSerial, (strlen(field) > 0) ? field : "1", sizearray(txtSerial));
             if ((p2 = strchr(ptr, ':')) != NULL) {
               *p2++ = '\0';
-              strcpy(txtSerialSize, strlen(ptr) > 0 ? ptr : "1");
-              opt_format = (int)strtol(p2, NULL, 10);
+              strlcpy(txtSerialSize, (strlen(ptr) > 0) ? ptr : "4", sizearray(txtSerialSize));
+              opt_format = (int)strtol(p2, &p2, 10);
+              if ((p2 = strchr(p2, ':')) != NULL)
+                strlcpy(txtSerialIncr, p2 + 1, sizearray(txtSerialIncr));
             }
           }
           if (load_options == 2)
             log_addstring("Changed target, settings loaded\n");
           else
             log_addstring("Settings for target loaded\n");
+          /* for an LPC* target, check CRP */
+          if (opt_architecture > 0) {
+            fpTgt = fopen(txtFilename, "rb");
+            if (fpTgt != NULL) {
+              result = elf_check_crp(fpTgt, &idx);
+              fclose(fpTgt);
+              fpTgt = NULL;
+              if (result == ELFERR_NONE && idx > 0 && idx < 4) {
+                char msg[100];
+                sprintf(msg, "^3Code Read Protection (CRP%d) is set on the ELF file\n", idx);
+                log_addstring(msg);
+              }
+            }
+          }
         } else if (load_options == 2) {
           if (access(txtFilename, 0) != 0)
             log_addstring("^1Target not found\n");
@@ -1061,12 +1356,11 @@ int main(int argc, char *argv[])
       if (nk_button_label(ctx, "Help") || nk_input_is_key_pressed(&ctx->input, NK_KEY_F1))
         help_active = 1;
       nk_spacing(ctx, 1);
-      if (nk_button_label(ctx, "Verify")) {
-        skip_download = 1;
-        curstate = STATE_SAVE;  /* start the pseudo-download sequence */
-      }
+      rc_toolbutton = nk_widget_bounds(ctx);
+      if (button_tooltip(ctx, "Tools", NK_KEY_NONE, curstate == STATE_IDLE, "Other commands"))
+        toolmenu_active = TOOL_OPEN;
       nk_spacing(ctx, 1);
-      if (nk_button_label(ctx, "Download") || nk_input_is_key_pressed(&ctx->input, NK_KEY_F5)) {
+      if (button_tooltip(ctx, "Download", NK_KEY_F5, curstate == STATE_IDLE, "Download ELF file into target (F5)")) {
         skip_download = 0;      /* should already be 0 */
         curstate = STATE_SAVE;  /* start the real download sequence */
       }
@@ -1074,6 +1368,32 @@ int main(int argc, char *argv[])
       if (help_active)
         help_active = help_popup(ctx, opt_fontsize);
 
+      if (toolmenu_active != TOOL_CLOSE) {
+        toolmenu_active = tools_popup(ctx, &rc_toolbutton, opt_fontsize);
+        switch (toolmenu_active) {
+        case TOOL_RESCAN:
+          curstate = STATE_INIT;
+          toolmenu_active = TOOL_CLOSE;
+          break;
+        case TOOL_FULLERASE:
+          curstate = STATE_FULLERASE;
+          toolmenu_active = TOOL_CLOSE;
+          break;
+        case TOOL_OPTIONERASE:
+          curstate = STATE_ERASE_OPTBYTES;
+          toolmenu_active = TOOL_CLOSE;
+          break;
+        case TOOL_STM32PROTECT:
+          curstate = STATE_SET_CRP;
+          toolmenu_active = TOOL_CLOSE;
+          break;
+        case TOOL_VERIFY:
+          skip_download = 1;
+          curstate = STATE_SAVE;  /* start the pseudo-download sequence */
+          toolmenu_active = TOOL_CLOSE;
+          break;
+        }
+      }
     }
     nk_end(ctx);
 
@@ -1100,6 +1420,6 @@ int main(int argc, char *argv[])
   gdbrsp_packetsize(0);
   bmp_disconnect();
   tcpip_cleanup();
-  return 0;
+  return EXIT_SUCCESS;
 }
 

@@ -38,14 +38,22 @@ unsigned long timestamp(void)
   #endif
 }
 
-int tooltip(struct nk_context *ctx, struct nk_rect bounds, const char *text, const struct nk_rect *viewport)
+int tooltip(struct nk_context *ctx, struct nk_rect bounds, const char *text)
 {
   static struct nk_rect recent_bounds;
   static unsigned long start_tstamp;
   unsigned long tstamp = timestamp();
 
+  /* only a single popup may be active at the same time, but tooltips are also
+     pop-ups -> disable tooltips if a popup is active */
+  struct nk_window *win = ctx->current;
+  struct nk_panel *panel = win->layout;
+  if (panel->type & NK_PANEL_SET_POPUP)
+    return 0;
+
   if (!nk_input_is_mouse_hovering_rect(&ctx->input, bounds))
     return 0;           /* not hovering this control/area */
+
   if (memcmp(&bounds, &recent_bounds, sizeof(struct nk_rect)) != 0) {
     /* hovering this control/area, but it's a different one from the previous;
        restart timer */
@@ -53,47 +61,77 @@ int tooltip(struct nk_context *ctx, struct nk_rect bounds, const char *text, con
     start_tstamp = tstamp;
     return 0;
   }
+
   if (tstamp - start_tstamp < TOOLTIP_DELAY
       || tstamp - start_tstamp > TOOLTIP_TIMEOUT)
     return 0;           /* delay time has not reached its value yet */
+
   if (text != NULL)
-    nk_tooltip(ctx, text, viewport);
+    nk_tooltip(ctx, text);
+
   return 1;
 }
 
 nk_bool button_tooltip(struct nk_context *ctx, const char *title,
-                       const char *tiptext, struct nk_rect *viewport)
+                       enum nk_keys hotkey, nk_bool enabled,
+                       const char *tiptext)
 {
+  nk_bool result;
   struct nk_rect bounds = nk_widget_bounds(ctx);
-  nk_bool result = nk_button_label(ctx, title);
-  tooltip(ctx, bounds, tiptext, viewport);
+  struct nk_style_button *style = &ctx->style.button;
+  if (!enabled) {
+    nk_style_push_color(ctx, &style->text_normal, style->text_disabled);
+    nk_style_push_color(ctx, &style->text_hover, style->text_disabled);
+    nk_style_push_color(ctx, &style->text_active, style->text_disabled);
+    nk_style_push_color(ctx, &style->hover.data.color, style->normal.data.color);
+    nk_style_push_color(ctx, &style->active.data.color, style->normal.data.color);
+  }
+
+  result = nk_button_label(ctx, title);
+  if (tiptext != NULL)
+    tooltip(ctx, bounds, tiptext);
+  if (!result && hotkey != NK_KEY_NONE)
+    result = nk_input_is_key_pressed(&ctx->input, hotkey);
+
+  if (!enabled) {
+    nk_style_pop_color(ctx);
+    nk_style_pop_color(ctx);
+    nk_style_pop_color(ctx);
+    nk_style_pop_color(ctx);
+    nk_style_pop_color(ctx);
+    result = nk_false;  /* any input us to be ignored */
+  }
+
   return result;
 }
 
-nk_bool button_symbol_tooltip(struct nk_context *ctx, enum nk_symbol_type symbol,
-                              const char *tiptext, struct nk_rect *viewport)
+nk_bool button_symbol_tooltip(struct nk_context *ctx, enum nk_symbol_type symbol, enum nk_keys hotkey,
+                              const char *tiptext)
 {
   struct nk_rect bounds = nk_widget_bounds(ctx);
   nk_bool result = nk_button_symbol(ctx, symbol);
-  tooltip(ctx, bounds, tiptext, viewport);
+  if (tiptext != NULL)
+    tooltip(ctx, bounds, tiptext);
+  if (!result && hotkey != NK_KEY_NONE)
+    result = nk_input_is_key_pressed(&ctx->input, hotkey);
   return result;
 }
 
 nk_bool checkbox_tooltip(struct nk_context *ctx, const char *label, nk_bool *active,
-                         const char *tiptext, struct nk_rect *viewport)
+                         const char *tiptext)
 {
   struct nk_rect bounds = nk_widget_bounds(ctx);
   nk_bool result = nk_checkbox_label(ctx, label, active);
-  tooltip(ctx, bounds, tiptext, viewport);
+  tooltip(ctx, bounds, tiptext);
   return result;
 }
 
 nk_flags editctrl_tooltip(struct nk_context *ctx, nk_flags flags,
                           char *buffer, int max, nk_plugin_filter filter,
-                          const char *tiptext, struct nk_rect *viewport)
+                          const char *tiptext)
 {
   struct nk_rect bounds = nk_widget_bounds(ctx);
   nk_flags result = nk_edit_string_zero_terminated(ctx, flags, buffer, max, filter);
-  tooltip(ctx, bounds, tiptext, viewport);
+  tooltip(ctx, bounds, tiptext);
   return result;
 }

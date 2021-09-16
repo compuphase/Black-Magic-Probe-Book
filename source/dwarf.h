@@ -1,8 +1,8 @@
 /* Routines to get the line number and symbol tables from the DWARF debug
- * information * in an ELF file. For the symbol table, only the function
- * symbols are stored.
+ * information * in an ELF file. For the symbol table, only the function and
+ * variable symbols are stored.
  *
- * Copyright (c) 2015,2019-2020 CompuPhase
+ * Copyright (c) 2015,2019-2021 CompuPhase
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -28,13 +28,23 @@ typedef struct tagDWARF_PATHLIST {
   char *name;
 } DWARF_PATHLIST;
 
+enum {
+  SCOPE_UNKNOWN,
+  SCOPE_EXTERNAL,       /* global variable or function */
+  SCOPE_UNIT,           /* static variable/function declared at file scope (compilation unit) */
+  SCOPE_FUNCTION,       /* local variable (including static locals & function arguments) */
+};
+
 typedef struct tagDWARF_SYMBOLLIST {
   struct tagDWARF_SYMBOLLIST *next;
   char *name;
   unsigned code_addr;   /* function address, 0 for a variable */
-  unsigned data_addr;   /* variable address (globals only), 0 for a function */
+  unsigned code_range;  /* size of the code (functions only, 0 for variables) */
+  unsigned data_addr;   /* variable address (globals & statics only), 0 for a function or a local variable */
   int line;             /* line number of the declaration/definition */
-  int fileindex;        /* file where the declaration/definition appears in */
+  int line_limit;       /* last line of the definition takes (functions) or line at which the scope ends (variables) */
+  short fileindex;      /* file where the declaration/definition appears in */
+  short scope;
 } DWARF_SYMBOLLIST;
 
 typedef struct tagDWARF_LINELOOKUP {
@@ -44,14 +54,18 @@ typedef struct tagDWARF_LINELOOKUP {
   int fileindex;
 } DWARF_LINELOOKUP;
 
+#define DWARF_IS_FUNCTION(sym)  ((sym)->code_range>0)
+#define DWARF_IS_VARIABLE(sym)  ((sym)->code_range==0)
+
 int dwarf_read(FILE *fp,DWARF_LINELOOKUP *linetable,DWARF_SYMBOLLIST *symboltable,DWARF_PATHLIST *filetable,int *address_size);
 void dwarf_cleanup(DWARF_LINELOOKUP *linetable,DWARF_SYMBOLLIST *symboltable,DWARF_PATHLIST *filetable);
 
-const DWARF_SYMBOLLIST *dwarf_sym_from_name(const DWARF_SYMBOLLIST *symboltable,const char *name);
-const DWARF_SYMBOLLIST *dwarf_sym_from_address(const DWARF_SYMBOLLIST *symboltable,unsigned address,int exact);
-const DWARF_SYMBOLLIST *dwarf_sym_from_index(const DWARF_SYMBOLLIST *symboltable,unsigned index);
-const char *dwarf_path_from_index(const DWARF_PATHLIST *filetable,int fileindex);
-const DWARF_LINELOOKUP *dwarf_line_from_address(const DWARF_LINELOOKUP *linetable,unsigned address);
+const DWARF_SYMBOLLIST* dwarf_sym_from_name(const DWARF_SYMBOLLIST *symboltable,const char *name,int fileindex,int lineindex);
+const DWARF_SYMBOLLIST* dwarf_sym_from_address(const DWARF_SYMBOLLIST *symboltable,unsigned address,int exact);
+const DWARF_SYMBOLLIST* dwarf_sym_from_index(const DWARF_SYMBOLLIST *symboltable,unsigned index);
+const char*             dwarf_path_from_index(const DWARF_PATHLIST *filetable,int fileindex);
+int                     dwarf_fileindex_from_path(const DWARF_PATHLIST *filetable,const char *path);
+const DWARF_LINELOOKUP* dwarf_line_from_address(const DWARF_LINELOOKUP *linetable,unsigned address);
 
 #if defined __cplusplus
   }

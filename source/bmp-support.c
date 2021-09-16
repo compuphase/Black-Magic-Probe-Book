@@ -30,6 +30,7 @@
 #include <ctype.h>
 #include <stdarg.h>
 #include <stdio.h>
+#include <stdint.h>
 #include <stdlib.h>
 
 #include "bmp-scan.h"
@@ -38,6 +39,7 @@
 #include "crc32.h"
 #include "elf.h"
 #include "gdb-rsp.h"
+#include "picoro.h"
 #include "tcpip.h"
 #include "xmltractor.h"
 
@@ -498,7 +500,7 @@ int bmp_monitor(const char *command)
   do {
     size = gdbrsp_recv(buffer, sizearray(buffer), 1000);
   } while (size > 0 && buffer[0] == 'o'); /* ignore console output */
-  return (size == 2 || memcmp(buffer, "OK", size) == 0);
+  return (size == 2 && memcmp(buffer, "OK", size) == 0);
 }
 
 int bmp_fullerase(void)
@@ -590,6 +592,9 @@ int bmp_download(FILE *fp)
     assert(topaddr <= FlashRgn[rgn].address + FlashRgn[rgn].size);
     flashsectors = ((topaddr - FlashRgn[rgn].address + (FlashRgn[rgn].blocksize - 1)) / FlashRgn[rgn].blocksize);
     assert(flashsectors * FlashRgn[rgn].blocksize <= FlashRgn[rgn].address + FlashRgn[rgn].size);
+    notice(BMPSTAT_NOTICE, "Erase Flash at 0x%x length 0x%x",
+           (unsigned)FlashRgn[rgn].address, (unsigned)(flashsectors * FlashRgn[rgn].blocksize));
+    yield((void*)(intptr_t)1);
     sprintf(cmd, "vFlashErase:%x,%x", (unsigned)FlashRgn[rgn].address, (unsigned)(flashsectors * FlashRgn[rgn].blocksize));
     gdbrsp_xmit(cmd, -1);
     rcvd = gdbrsp_recv(cmd, pktsize, 500);
@@ -611,6 +616,7 @@ int bmp_download(FILE *fp)
         free(cmd);
         return 0;
       }
+      yield((void*)(intptr_t)1);
       fseek(fp, fileoffs, SEEK_SET);
       fread(data, 1, filesize, fp);
       for (pos = 0; pos < filesize; pos += numbytes) {

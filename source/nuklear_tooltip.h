@@ -26,18 +26,17 @@
 #define TOOLTIP_TIMEOUT 6000  /* in ms, time that the tooltip stays visible */
 
 unsigned long timestamp(void);
-int tooltip(struct nk_context *ctx, struct nk_rect bounds, const char *text,
-            const struct nk_rect *viewport);
+int tooltip(struct nk_context *ctx, struct nk_rect bounds, const char *text);
 
 nk_bool button_tooltip(struct nk_context *ctx, const char *title,
-                       const char *tiptext, struct nk_rect *viewport);
+                       enum nk_keys hotkey, nk_bool enabled,
+                       const char *tiptext);
 nk_bool button_symbol_tooltip(struct nk_context *ctx, enum nk_symbol_type symbol,
-                                   const char *tiptext, struct nk_rect *viewport);
+                              enum nk_keys hotkey, const char *tiptext);
 nk_bool checkbox_tooltip(struct nk_context *ctx, const char *label,
-                              nk_bool *active, const char *tiptext,
-                              struct nk_rect *viewport);
+                         nk_bool *active, const char *tiptext);
 nk_flags editctrl_tooltip(struct nk_context *ctx, nk_flags flags,
-                               char *buffer, int max, nk_plugin_filter filter,
-                               const char *tiptext, struct nk_rect *viewport);
+                          char *buffer, int max, nk_plugin_filter filter,
+                          const char *tiptext);
 
 #endif /* _NK_TOOLTIP_H */

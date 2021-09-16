@@ -1,6 +1,7 @@
 /* Routines to get the line number and symbol tables from the DWARF debug
- * information * in an ELF file. For the symbol table, only the function
- * symbols are stored.
+ * information (in an ELF file). For the symbol table, only the function and
+ * variable symbols are stored.
+ * For the moment, only 32-bit Little-Endian executables are supported.
  *
  * Copyright (c) 2015,2019-2021 CompuPhase
  *
@@ -49,67 +50,6 @@
   #define _MAX_PATH 260
 #endif
 
-typedef struct tagELF32HDR {
-  uint8_t  magic[4];    /* 0x7f + "ELF" */
-  uint8_t  wordsize;    /* 1 = 32-bit, 2 = 64-bit */
-  uint8_t  endian;      /* 1 = little endian, 2 = big endian */
-  uint8_t  elfversion;  /* 1 for the original ELF format version */
-  uint8_t  abi;         /* target OS or ABI, 3 = Linux */
-  uint8_t  abiversion;  /* ABI version */
-  uint8_t  unused[7];
-  /* ----- */
-  uint16_t type;        /* 1 = relocatable, 2 = executable, 3 = shared, 4 = core */
-  uint16_t machine;     /* 0x03 = x86, 0x28 = ARM, 0x32 = IA-64, 0x3e = x86-64 */
-  uint32_t version;     /* 1 for the original ELF format */
-  uint32_t entry;       /* memory address of the entry point */
-  uint32_t phoff;       /* file offset to the start of the program header table */
-  uint32_t shoff;       /* file offset to the start of the section header table */
-  uint32_t flags;
-  uint16_t ehsize;      /* the size of this header (52 bytes) */
-  uint16_t phentsize;   /* the size of an entry in the program header table */
-  uint16_t phnum;       /* the number of entries in the program header table */
-  uint16_t shentsize;   /* the size of an entry in the section header table */
-  uint16_t shnum;       /* the number of entries in the section header table */
-  uint16_t shtrndx;     /* the index of the entry in the section header table that holds the section names */
-} PACKED ELF32HDR;
-
-typedef struct tagELF64HDR {
-  uint8_t  magic[4];    /* 0x7f + "ELF" */
-  uint8_t  wordsize;    /* 1 = 32-bit, 2 = 64-bit */
-  uint8_t  endian;      /* 1 = little endian, 2 = big endian */
-  uint8_t  elfversion;  /* 1 for the original ELF format version */
-  uint8_t  abi;         /* target OS or ABI, 3 = Linux */
-  uint8_t  abiversion;  /* ABI version */
-  uint8_t  unused[7];
-  /* ----- */
-  uint32_t type;        /* 1 = relocatable, 2 = executable, 3 = shared, 4 = core */
-  uint32_t machine;     /* 0x03 = x86, 0x28 = ARM, 0x32 = IA-64, 0x3e = x86-64 */
-  uint64_t version;     /* 1 for the original ELF format */
-  uint64_t entry;       /* memory address of the entry point */
-  uint64_t phoff;       /* file offset to the start of the program header table */
-  uint64_t shoff;       /* file offset to the start of the section header table */
-  uint64_t flags;
-  uint32_t ehsize;      /* the size of this header (52 bytes) */
-  uint32_t phentsize;   /* the size of an entry in the program header table */
-  uint32_t phnum;       /* the number of entries in the program header table */
-  uint32_t shentsize;   /* the size of an entry in the section header table */
-  uint32_t shnum;       /* the number of entries in the section header table */
-  uint32_t shtrndx;     /* the index of the entry in the section header table that holds the string table */
-} PACKED ELF64HDR;
-
-typedef struct tagELF32SECTION {
-  uint32_t name;        /* index in the string table */
-  uint32_t type;
-  uint32_t flags;
-  uint32_t addr;        /* memory address */
-  uint32_t offset;      /* file offset to the start of the section */
-  uint32_t size;        /* size of the section */
-  uint32_t link;
-  uint32_t info;
-  uint32_t addralign;
-  uint32_t entsize;     /* entry size, for sections that have fixed-length entries */
-} PACKED ELF32SECTION;
-
 typedef struct tagDWARFTABLE {
   unsigned long offset;
   unsigned long size;
@@ -121,41 +61,55 @@ enum {
   TABLE_STR,
   TABLE_LINE,
   TABLE_PUBNAME,
+  TABLE_LINE_STR,
   /* ----- */
   TABLE_COUNT
 };
 
-typedef struct tagINFO_HDR32 {
-  uint32_t unit_length; /* total length of this block, excluding this field */
-  uint16_t version;
-  uint32_t abbrev_offs; /* offset into the .debug_abbrev table */
-  uint8_t  address_size;/* size in bytes of an address */
-} PACKED INFO_HDR32;
+typedef struct tagUNIT_HDR32 {
+  uint32_t unit_length;     /* total length of this block, excluding this field */
+  uint16_t version;         /* table format version */
+  uint8_t  unit_type;       /* DWARF 5+, type of the compilation unit */
+  uint8_t  address_size;    /* size in bytes of an address */
+  uint32_t abbrev_offs;     /* offset into the .debug_abbrev table */
+  /* more fields may follow, depending on unit_type */
+} PACKED UNIT_HDR32;
 
-typedef struct tagINFO_HDR64 {
-  uint32_t reserved;    /* must be 0xffffffff */
-  uint64_t unit_length; /* total length of this block, excluding this field */
-  uint16_t version;
-  uint64_t abbrev_offs; /* offset into the .debug_abbrev table */
-  uint8_t  address_size;/* size in bytes of an address */
-} PACKED INFO_HDR64;
+typedef struct tagUNIT_HDR64 {
+  uint32_t reserved;        /* must be 0xffffffff */
+  uint64_t unit_length;     /* total length of this block, excluding this field */
+  uint16_t version;         /* table format version */
+  uint8_t  unit_type;       /* DWARF 5+, type of the compilation unit */
+  uint8_t  address_size;    /* size in bytes of an address */
+  uint64_t abbrev_offs;     /* offset into the .debug_abbrev table */
+  /* more fields may follow, depending on unit_type */
+} PACKED UNIT_HDR64;
 
-typedef struct tagDWARF_FIXEDPROLOGUE {
+typedef struct tagDWARF_PROLOGUE32 {  /* fixed part of the header */
   uint32_t total_length;    /* length of the line number table, minus the 4 bytes for this total_length field */
-  uint16_t version;
+  uint16_t version;         /* prologue format version */
+  uint8_t  address_size;    /* DWARF 5+, size in bytes of an address */
+  uint8_t  segment_sel_size;/* DWARF 5+, size in bytes of a segment selector on the target system */
   uint32_t prologue_length; /* offset to the first opcode of the line number program (relative to this prologue_length field) */
   uint8_t  min_instruction_size;
+  uint8_t  max_oper_per_instruction;  /* DWARF 4+, for VLIW architectures */
   uint8_t  default_is_stmt; /* default value to initialize the state machine with */
   int8_t   line_base;
   uint8_t  line_range;
-  uint8_t  opcode_base;      /* number of the first special opcode */
-  /* standard opcode lengths (array of length "opcode_base") */
-  /* include directories, a sequence of zero-terminated strings (and the sequence itself ends with a zero-byte) */
-  /* file names, */
-} PACKED DWARF_FIXEDPROLOGUE;
+  uint8_t  opcode_base;     /* number of the first special opcode */
+  /* standard opcode lengths (array of length "opcode_base" - 1) */
+
+  /* DWARF 2..4, include directories, a sequence of zero-terminated strings (and
+     the sequence itself ends with a zero-byte) */
+  /* DWARF 2..4, file names: base name, location, modification date, size */
+
+  /* DWARF 5+, directory entry formats (length-prefixed array of ULEB128 pairs) */
+  /* DWARF 5+, include directories, a length-prefixed sequence of entries in a format described in the earier table */
+  /* DWARF 5+, filename entry formats (length-prefixed array of ULEB128 pairs) */
+  /* DWARF 5+, filenames, a length-prefixed sequence of entries in a format described in the earier table */
+} PACKED DWARF_PROLOGUE32;
 
 typedef struct tagSTATE {
-  /* fields for DWARF 2 */
   uint32_t address;
   int file;
   int line;
@@ -163,12 +117,11 @@ typedef struct tagSTATE {
   int is_stmt;          /* whether the address is the start of a statement */
   int basic_block;      /* whether the address is the start of a basic block */
   int end_seq;
-  /* added fields for DWARF 3 */
-  int prologue_end;     /* function prologue end */
-  int epiloge_begin;    /* function epilogue start */
-  int isa;              /* instruction set architecture */
-  /* added fields for DWARF 4 */
-  int discriminator;    /* compiler-assigned id for a "block" to which the instruction belongs */
+  int prologue_end;     /* DWARF 3+, function prologue end */
+  int epiloge_begin;    /* DWARF 3+, function epilogue start */
+  int isa;              /* DWARF 3+, instruction set architecture */
+  unsigned op_index;    /* DWARF 4+, index within a "Very-Long-Instruction-Word" (VLIW) */
+  int discriminator;    /* DWARF 4+, compiler-assigned id for a "block" to which the instruction belongs */
 } STATE;
 
 typedef struct tagPUBNAME_HDR32 {
@@ -177,6 +130,16 @@ typedef struct tagPUBNAME_HDR32 {
   uint32_t info_offs;   /* offset into the comprehensive debug table */
   uint32_t info_size;   /* size of this symbol in the comprehensive debug table */
 } PACKED PUBNAME_HDR32;
+
+/* unit headers (DWARF 5+) */
+#define DW_UT_compile                 0x01
+#define DW_UT_type                    0x02
+#define DW_UT_partial                 0x03
+#define DW_UT_skeleton                0x04
+#define DW_UT_split_compile           0x05
+#define DW_UT_split_type              0x06
+#define DW_UT_lo_user                 0x80
+#define DW_UT_hi_user                 0xff
 
 /* tags */
 #define DW_TAG_array_type             0x01
@@ -226,6 +189,28 @@ typedef struct tagPUBNAME_HDR32 {
 #define DW_TAG_variant_part           0x33
 #define DW_TAG_variable               0x34
 #define DW_TAG_volatile_type          0x35
+#define DW_TAG_dwarf_procedure        0x36
+#define DW_TAG_restrict_type          0x37
+#define DW_TAG_interface_type         0x38
+#define DW_TAG_namespace              0x39
+#define DW_TAG_imported_module        0x3a
+#define DW_TAG_unspecified_type       0x3b
+#define DW_TAG_partial_unit           0x3c
+#define DW_TAG_imported_unit          0x3d
+#define DW_TAG_condition              0x3f
+#define DW_TAG_shared_type            0x40
+#define DW_TAG_type_unit              0x41
+#define DW_TAG_rvalue_reference_type  0x42
+#define DW_TAG_template_alias         0x43
+    /* DWARF 5+ */
+#define DW_TAG_coarray_type           0x44
+#define DW_TAG_generic_subrange       0x45
+#define DW_TAG_dynamic_type           0x46
+#define DW_TAG_atomic_type            0x47
+#define DW_TAG_call_site              0x48
+#define DW_TAG_call_site_parameter    0x49
+#define DW_TAG_skeleton_unit          0x4a
+#define DW_TAG_immutable_type         0x4b
 #define DW_TAG_lo_user                0x4080
 #define DW_TAG_hi_user                0xffff
 
@@ -287,7 +272,70 @@ typedef struct tagPUBNAME_HDR32 {
 #define DW_AT_use_location            0x4a  /* block, constant */
 #define DW_AT_variable_parameter      0x4b  /* flag */
 #define DW_AT_virtuality              0x4c  /* constant */
-#define DW_AT_vtable_elem_location    0x4d  /* block, reference */
+#define DW_AT_vtable_elem_location    0x4d  /* exprloc, loclist */
+#define DW_AT_allocated               0x4e  /* constant, exprloc, reference */
+#define DW_AT_associated              0x4f  /* constant, exprloc, reference */
+#define DW_AT_data_location           0x50  /* exprloc */
+#define DW_AT_byte_stride             0x51  /* constant, exprloc, reference */
+#define DW_AT_entry_pc                0x52  /* address, constant */
+#define DW_AT_use_UTF8                0x53  /* flag */
+#define DW_AT_extension               0x54  /* reference */
+#define DW_AT_ranges                  0x55  /* rnglist */
+#define DW_AT_trampoline              0x56  /* address, flag, reference, string */
+#define DW_AT_call_column             0x57  /* constant */
+#define DW_AT_call_file               0x58  /* constant */
+#define DW_AT_call_line               0x59  /* constant */
+#define DW_AT_description             0x5a  /* string */
+#define DW_AT_binary_scale            0x5b  /* constant */
+#define DW_AT_decimal_scale           0x5c  /* constant */
+#define DW_AT_small                   0x5d  /* reference */
+#define DW_AT_decimal_sign            0x5e  /* constant */
+#define DW_AT_digit_count             0x5f  /* constant */
+#define DW_AT_picture_string          0x60  /* string */
+#define DW_AT_mutable                 0x61  /* flag */
+#define DW_AT_threads_scaled          0x62  /* flag */
+#define DW_AT_explicit                0x63  /* flag */
+#define DW_AT_object_pointer          0x64  /* reference */
+#define DW_AT_endianity               0x65  /* constant */
+#define DW_AT_elemental               0x66  /* flag */
+#define DW_AT_pure                    0x67  /* flag */
+#define DW_AT_recursive               0x68  /* flag */
+#define DW_AT_signature               0x69  /* reference */
+#define DW_AT_main_subprogram         0x6a  /* flag */
+#define DW_AT_data_bit_offset         0x6b  /* constant */
+#define DW_AT_const_expr              0x6c  /* flag */
+#define DW_AT_enum_class              0x6d  /* flag */
+#define DW_AT_linkage_name            0x6e  /* string */
+    /* DWARF 5+ */
+#define DW_AT_string_length_bit_size  0x6f  /* constant */
+#define DW_AT_string_length_byte_size 0x70  /* constant */
+#define DW_AT_rank                    0x71  /* constant, exprloc */
+#define DW_AT_str_offsets_base        0x72  /* stroffsetsptr */
+#define DW_AT_addr_base               0x73  /* addrptr */
+#define DW_AT_rnglists_base           0x74  /* rnglistsptr */
+#define DW_AT_dwo_name                0x76  /* string */
+#define DW_AT_reference               0x77  /* flag */
+#define DW_AT_rvalue_reference        0x78  /* flag */
+#define DW_AT_macros                  0x79  /* macptr */
+#define DW_AT_call_all_calls          0x7a  /* flag */
+#define DW_AT_call_all_source_calls   0x7b  /* flag */
+#define DW_AT_call_all_tail_calls     0x7c  /* flag */
+#define DW_AT_call_return_pc          0x7d  /* address */
+#define DW_AT_call_value              0x7e  /* exprloc */
+#define DW_AT_call_origin             0x7f  /* exprloc */
+#define DW_AT_call_parameter          0x80  /* reference */
+#define DW_AT_call_pc                 0x81  /* address */
+#define DW_AT_call_tail_call          0x82  /* flag */
+#define DW_AT_call_target             0x83  /* exprloc */
+#define DW_AT_call_target_clobbered   0x84  /* exprloc */
+#define DW_AT_call_data_location      0x85  /* exprloc */
+#define DW_AT_call_data_value         0x86  /* exprloc */
+#define DW_AT_noreturn                0x87  /* flag */
+#define DW_AT_alignment               0x88  /* constant */
+#define DW_AT_export_symbols          0x89  /* flag */
+#define DW_AT_deleted                 0x8a  /* flag */
+#define DW_AT_defaulted               0x8b  /* constant */
+#define DW_AT_loclists_base           0x8c  /* loclistsptr */
 #define DW_AT_lo_user                 0x2000
 #define DW_AT_hi_user                 0x3fff
 
@@ -316,32 +364,124 @@ typedef struct tagPUBNAME_HDR32 {
 #define DW_FORM_sec_offset            0x17  /* offset into the .debug_line section (4 bytes on 32-bit, 8 bytes on 64-bit) */
 #define DW_FORM_exprloc               0x18  /* block for expression/location, unsigned LEB128-encoded length + data bytes */
 #define DW_FORM_flag_present          0x19  /* implicit flag (no data) */
-#define DW_FORM_ref_sig8              0x20  /* 64-bit signature for a type defined in a different unit */
+    /* DWARF 5+ */
+#define DW_FORM_strx                  0x1a  /* string */
+#define DW_FORM_addrx                 0x1b  /* address */
+#define DW_FORM_ref_sup4              0x1c  /* reference relative to .debug_info of a supplementaty object file, 4 bytes */
+#define DW_FORM_strp_sup              0x1d  /* string, 4-byte offset into the .debug_str section of a supplementary object file */
+#define DW_FORM_data16                0x1e  /* constant, 16 bytes (MD5) */
+#define DW_FORM_line_strp             0x1f  /* string, 4-byte offset into the .debug_line_str section */
+#define DW_FORM_ref_sig8              0x20  /* 64-bit signature for a type defined in a different unit (already present in DWARF 4) */
+#define DW_FORM_implicit_const        0x21  /* constant whose value is in the abbreviation's attribute, not in the .debug_info data */
+#define DW_FORM_loclistx              0x22  /* loclist */
+#define DW_FORM_rnglistx              0x23  /* rnglist */
+#define DW_FORM_ref_sup8              0x24  /* reference relative to .debug_info of a supplementaty object file, 8 bytes */
+#define DW_FORM_strx1                 0x25  /* string */
+#define DW_FORM_strx2                 0x26  /* string */
+#define DW_FORM_strx3                 0x27  /* string */
+#define DW_FORM_strx4                 0x28  /* string */
+#define DW_FORM_addrx1                0x29  /* address */
+#define DW_FORM_addrx2                0x2a  /* address */
+#define DW_FORM_addrx3                0x2b  /* address */
+#define DW_FORM_addrx4                0x2c  /* address */
 
 /* line number opcodes */
-#define DW_LNS_extended_op        0   /* version 2+ */
-#define DW_LNS_copy               1
-#define DW_LNS_advance_pc         2
-#define DW_LNS_advance_line       3
-#define DW_LNS_set_file           4
-#define DW_LNS_set_column         5
-#define DW_LNS_negate_stmt        6
-#define DW_LNS_set_basic_block    7
-#define DW_LNS_const_add_pc       8
-#define DW_LNS_fixed_advance_pc   9
-#define DW_LNS_set_prologue_end   10  /* version 3+ */
-#define DW_LNS_set_epilogue_begin 11
-#define DW_LNS_set_isa            12
+#define DW_LNS_extended_op            0     /* version 2+ */
+#define DW_LNS_copy                   1
+#define DW_LNS_advance_pc             2
+#define DW_LNS_advance_line           3
+#define DW_LNS_set_file               4
+#define DW_LNS_set_column             5
+#define DW_LNS_negate_stmt            6
+#define DW_LNS_set_basic_block        7
+#define DW_LNS_const_add_pc           8
+#define DW_LNS_fixed_advance_pc       9
+#define DW_LNS_set_prologue_end       10    /* version 3+ */
+#define DW_LNS_set_epilogue_begin     11
+#define DW_LNS_set_isa                12
 /* line number extended opcodes */
-#define DW_LNE_end_sequence       1   /* version 2+ */
-#define DW_LNE_set_address        2
-#define DW_LNE_define_file        3
-#define DW_LNE_set_discriminator  4   /* version 4+ */
+#define DW_LNE_end_sequence           1     /* version 2+ */
+#define DW_LNE_set_address            2
+#define DW_LNE_define_file            3     /* deprecated in version 5+ */
+#define DW_LNE_set_discriminator      4     /* version 4+ */
+#define DW_LNE_lo_user                0x80
+#define DW_LNE_hi_user                0xff
 
-/* location expression opcodes (very incomplete) */
-#define 	DW_OP_addr              0x03
-#define 	DW_OP_deref             0x06
-
+/* location expression opcodes */
+#define DW_OP_addr                    0x03  /* constant address (32-bit or 64-bit) */
+#define DW_OP_deref                   0x06
+#define DW_OP_const1u                 0x08  /* 1-byte constant */
+#define DW_OP_const1s                 0x09  /* 1-byte constant */
+#define DW_OP_const2u                 0x0a  /* 2-byte constant */
+#define DW_OP_const2s                 0x0b  /* 2-byte constant */
+#define DW_OP_const4u                 0x0c  /* 4-byte constant */
+#define DW_OP_const4s                 0x0d  /* 4-byte constant */
+#define DW_OP_const8u                 0x0e  /* 8-byte constant */
+#define DW_OP_const8s                 0x0f  /* 8-byte constant */
+#define DW_OP_constu                  0x10  /* ULEB128 constant */
+#define DW_OP_consts                  0x11  /* SLEB128 constant */
+#define DW_OP_dup                     0x12
+#define DW_OP_drop                    0x13
+#define DW_OP_over                    0x14
+#define DW_OP_pick                    0x15  /* 1-byte stack index */
+#define DW_OP_swap                    0x16
+#define DW_OP_rot                     0x17
+#define DW_OP_xderef                  0x18
+#define DW_OP_abs                     0x19
+#define DW_OP_and                     0x1a
+#define DW_OP_div                     0x1b
+#define DW_OP_minus                   0x1c
+#define DW_OP_mod                     0x1d
+#define DW_OP_mul                     0x1e
+#define DW_OP_neg                     0x1f
+#define DW_OP_not                     0x20
+#define DW_OP_or                      0x21
+#define DW_OP_plus                    0x22
+#define DW_OP_plus_uconst             0x23  /* ULEB128 addend */
+#define DW_OP_shl                     0x24
+#define DW_OP_shr                     0x25
+#define DW_OP_shra                    0x26
+#define DW_OP_xor                     0x27
+#define DW_OP_bra                     0x28  /* signed 2-byte constant */
+#define DW_OP_eq                      0x29
+#define DW_OP_ge                      0x2a
+#define DW_OP_gt                      0x2b
+#define DW_OP_le                      0x2c
+#define DW_OP_lt                      0x2d
+#define DW_OP_ne                      0x2e
+#define DW_OP_skip                    0x2f  /* signed 2-byte constant */
+#define DW_OP_lit0                    0x30  /* literals 0..31 = DW_OP_lit0 + literal */
+#define DW_OP_reg0                    0x50  /* registers 0..31 = DW_OP_reg0 + regnum */
+#define DW_OP_breg0                   0x70  /* SLEB128 offset, base registers 0..31 = DW_OP_breg0 + regnum */
+#define DW_OP_regx                    0x90  /* ULEB128 register */
+#define DW_OP_fbreg                   0x91  /* SLEB128 offset */
+#define DW_OP_bregx                   0x92  /* ULEB128 register, SLEB128 offset */
+#define DW_OP_piece                   0x93  /* ULEB128 size of piece */
+#define DW_OP_deref_size              0x94  /* 1-byte size of data retrieved */
+#define DW_OP_xderef_size             0x95  /* 1-byte size of data retrieved */
+#define DW_OP_nop                     0x96
+#define DW_OP_push_object_address     0x97
+#define DW_OP_call2                   0x98  /* 2-byte offset of DIE */
+#define DW_OP_call4                   0x99  /* 4-byte offset of DIE */
+#define DW_OP_call_ref                0x9a  /* 4- or 8-byte offset of DIE */
+#define DW_OP_form_tls_address        0x9b
+#define DW_OP_call_frame_cfa          0x9c
+#define DW_OP_bit_piece               0x9d  /* ULEB128 size, ULEB128 offset */
+#define DW_OP_implicit_value          0x9e  /* ULEB128 size, block of that size */
+#define DW_OP_stack_value             0x9f
+    /* DWARF 5+ */
+#define DW_OP_implicit_pointer        0xa0  /* 4- or 8-byte offset of DIE, SLEB128 constant offset */
+#define DW_OP_addrx                   0xa1  /* ULEB128 indirect address */
+#define DW_OP_constx                  0xa2  /* ULEB128 indirect constant */
+#define DW_OP_entry_value             0xa3  /* ULEB128 size, block of that size */
+#define DW_OP_const_type              0xa4  /* ULEB128 type entry offset, 1-byte size, constant value */
+#define DW_OP_regval_type             0xa5  /* ULEB128 register number, ULEB128 constant offset */
+#define DW_OP_deref_type              0xa6  /* 1-byte size, ULEB128 type entry offset */
+#define DW_OP_xderef_type             0xa7  /* 1-byte size, ULEB128 type entry offset */
+#define DW_OP_convert                 0xa8  /* ULEB128 type entry offset */
+#define DW_OP_reinterpret             0xa9  /* ULEB128 type entry offset */
+#define DW_OP_lo_user                 0xe0
+#define DW_OP_hi_user                 0xff
 
 #if defined __LINUX__ || defined __FreeBSD__ || defined __APPLE__
   #pragma pack()      /* reset default packing */
@@ -359,6 +499,7 @@ typedef struct tagPUBNAME_HDR32 {
 typedef struct tagATTRIBUTE {
   int tag;
   int format;
+  long value;   /* value for implicit constant */
 } ATTRIBUTE;
 
 typedef struct tagABBREVLIST {
@@ -400,6 +541,7 @@ static ABBREVLIST *abbrev_insert(ABBREVLIST *root,int unit,int id,int tag,int ha
     for (idx=0; idx<num_attributes; idx++) {
       cur->attributes[idx].tag=attributes[idx].tag;
       cur->attributes[idx].format=attributes[idx].format;
+      cur->attributes[idx].value=attributes[idx].value;
     }
   } else {
     cur->attributes=NULL;
@@ -577,15 +719,15 @@ static DWARF_LINELOOKUP *line_insert(DWARF_LINELOOKUP *root,int line,unsigned ad
   assert(root!=NULL);
   /* first try to find an item with that line number, if it exists, keep the
      lowest address in the item;
-	 then try to find an item with the same address, if it exists, keep the
-	 highest line number */
+     then try to find an item with the same address, if it exists, keep the
+     highest line number */
   if ((cur=line_findline(root,line,fileindex))!=NULL) {
     if (address<cur->address)
       cur->address=address;
   } else if ((cur=line_findaddress(root,address,fileindex))!=NULL) {
     if (line>cur->line)
       cur->line=line;
-	assert(fileindex==cur->fileindex);
+    assert(fileindex==cur->fileindex);
   } else {
     DWARF_LINELOOKUP *pred;
     if ((cur=(DWARF_LINELOOKUP*)malloc(sizeof(DWARF_LINELOOKUP)))==NULL)
@@ -619,8 +761,9 @@ static void line_deletetable(DWARF_LINELOOKUP *root)
 }
 
 static DWARF_SYMBOLLIST *symname_insert(DWARF_SYMBOLLIST *root,const char *name,
-                                        unsigned code_addr,unsigned data_addr,
-                                        int file,int line)
+                                        unsigned code_addr,unsigned code_range,
+                                        unsigned data_addr,int fileindex,int line,
+                                        int external)
 {
   DWARF_SYMBOLLIST *cur,*pred;
 
@@ -633,9 +776,17 @@ static DWARF_SYMBOLLIST *symname_insert(DWARF_SYMBOLLIST *root,const char *name,
     return NULL;      /* insufficient memory */
   }
   cur->code_addr=code_addr;
+  cur->code_range=code_range;
   cur->data_addr=data_addr;
-  cur->fileindex=file;
+  cur->fileindex=fileindex;
   cur->line=line;
+  cur->line_limit=0;  /* updated later */
+  if (external)
+    cur->scope=SCOPE_EXTERNAL;
+  else if (code_range>0)
+    cur->scope=SCOPE_UNIT;
+  else
+    cur->scope=SCOPE_UNKNOWN;
   /* insert sorted on name */
   for (pred=root; pred->next!=NULL && strcmp(name,pred->next->name)>0; pred=pred->next)
     /* nothing */;
@@ -731,6 +882,19 @@ static int64_t read_value(FILE *fp,int format,int *size)
     fread(&value,8,1,fp);
     sz=8;
     break;
+  case DW_FORM_data16:            /* constant, 16 bytes */
+    fread(&value,8,1,fp);
+    fread(&value,8,1,fp);
+    sz=16;
+    break;
+  case DW_FORM_ref_sup4:          /* reference relative to .debug_info of a supplementaty object file, 4 bytes */
+    fread(&value,4,1,fp);
+    sz=4;
+    break;
+  case DW_FORM_ref_sup8:          /* reference relative to .debug_info of a supplementaty object file, 8 bytes */
+    fread(&value,8,1,fp);
+    sz=8;
+    break;
   case DW_FORM_sdata:             /* constant, signed LEB128 */
     value=read_leb128(fp,1,&sz);
     break;
@@ -787,6 +951,8 @@ static void read_string(FILE *fp,int format,int stringtable,char *string,int max
     sz=idx;
     break;
   case DW_FORM_strp:              /* string, 4-byte offset into the .debug_str section */
+  case DW_FORM_strp_sup:          /* string, 4-byte offset into the .debug_str section of a supplementary object file */
+  case DW_FORM_line_strp:         /* string, 4-byte offset into the .debug_line_str section */
     fread(&offs,4,1,fp);
     sz=4;
     /* look up the string */
@@ -841,7 +1007,7 @@ static void read_string(FILE *fp,int format,int stringtable,char *string,int max
 
 static void dwarf_abbrev(FILE *fp,const DWARFTABLE tables[],ABBREVLIST *abbrevlist)
 {
-  #define MAX_ATTRIBUTES  25  /* max. number of attributes for a single tag (in practice, no more than 11 attributes have been observed) */
+  #define MAX_ATTRIBUTES  50  /* max. number of attributes for a single tag */
   int unit,tag,attrib,format;
   int size,count;
   unsigned char flag;
@@ -859,7 +1025,7 @@ static void dwarf_abbrev(FILE *fp,const DWARFTABLE tables[],ABBREVLIST *abbrevli
 
   unit=0;
   while (tablesize > 0) {
-    /* get and chech the abbreviation id (a sequence number relative to its unit) */
+    /* get and check the abbreviation id (a sequence number relative to its unit) */
     int idx=(int)read_leb128(fp,0,&size);
     tablesize-=size;
     if (idx==0) {
@@ -874,15 +1040,21 @@ static void dwarf_abbrev(FILE *fp,const DWARFTABLE tables[],ABBREVLIST *abbrevli
     /* get the list of attributes */
     count=0;
     for ( ;; ) {
+      long value=0;
       attrib=(int)read_leb128(fp,0,&size);
       tablesize-=size;
       format=(int)read_leb128(fp,0,&size);
       tablesize-=size;
       if (attrib==0 && format==0)
         break;
+      if (format==DW_FORM_implicit_const) {
+        value=read_leb128(fp,0,&size);
+        tablesize-=size;
+      }
       assert(count<MAX_ATTRIBUTES);
       attributes[count].tag=attrib;
       attributes[count].format=format;
+      attributes[count].value=value;
       count++;
     }
     /* store the abbreviation */
@@ -890,10 +1062,135 @@ static void dwarf_abbrev(FILE *fp,const DWARFTABLE tables[],ABBREVLIST *abbrevli
   }
 }
 
+static int read_unitheader(FILE *fp,UNIT_HDR32 *header,int *size)
+{
+  long mark;
+
+  assert(fp!=NULL);
+  assert(header!=NULL);
+  assert(size!=NULL);
+  mark=ftell(fp); /* may need to "un-read" */
+  if (fread(header,sizeof(UNIT_HDR32),1,fp)==0)
+    return 0;     /* read failed */
+  assert(header->unit_length!=0xffffffff);  /* otherwise, should read 64-bit header */
+  //??? on big_endian, swap version field before testing it
+  if (header->version>=5) {
+    *size=sizeof(UNIT_HDR32);
+  } else {
+    /* un-read v5 structure, then read & copy the v2..v4 structure
+        uint32_t unit_length;    total length of this block, excluding this field
+        uint16_t version;        DWARF version, up to version 4
+        uint32_t abbrev_offs;    offset into the .debug_abbrev table
+        uint8_t  address_size;   size in bytes of an address
+     */
+    #define HDRSIZE 11
+    unsigned char hdr[HDRSIZE];
+    fseek(fp,mark,SEEK_SET);
+    fread(&hdr,1,HDRSIZE,fp);
+    memcpy(&header->unit_length,hdr+0,4); /* redundant, identical to v5 */
+    memcpy(&header->version,hdr+4,2);     /* redundant, identical to v5 */
+    memcpy(&header->abbrev_offs,hdr+6,4);
+    memcpy(&header->address_size,hdr+10,1);
+    header->unit_type=DW_UT_compile;
+    *size=HDRSIZE;
+    #undef HDRSIZE
+  }
+  //??? on big_endian, swap fields
+  return 1;
+}
+
+static int read_prologue(FILE *fp,DWARF_PROLOGUE32 *prologue,int *size)
+{
+  long mark;
+
+  assert(fp!=NULL);
+  assert(prologue!=NULL);
+  assert(size!=NULL);
+  mark=ftell(fp); /* may need to "un-read" */
+  if (fread(prologue,sizeof(DWARF_PROLOGUE32),1,fp)==0)
+    return 0;     /* read failed */
+  assert(prologue->total_length!=0xffffffff);  /* otherwise, should read 64-bit prologue */
+  //??? on big_endian, swap version field before testing it
+  if (prologue->version>=5) {
+    *size=sizeof(DWARF_PROLOGUE32);
+  } else if (prologue->version==2 || prologue->version==3) {
+    /* un-read v5 structure, then read & copy the v2/3 structure
+        uint32_t total_length;     length of the line number table, minus the 4 bytes for this total_length field
+        uint16_t version;          this prologue is for versions 2 & 3
+        uint32_t prologue_length;  offset to the first opcode of the line number program (relative to this prologue_length field)
+        uint8_t  min_instruction_size;
+        uint8_t  default_is_stmt;  default value to initialize the state machine with
+        int8_t   line_base;
+        uint8_t  line_range;
+        uint8_t  opcode_base;      number of the first special opcode
+        standard opcode lengths (array of length "opcode_base" - 1)
+        include directories, a sequence of zero-terminated strings (and the
+           sequence itself ends with a zero-byte)
+        file names: base name, location, modification date, size
+     */
+    #define HDRSIZE 15
+    unsigned char hdr[HDRSIZE];
+    fseek(fp,mark,SEEK_SET);
+    fread(&hdr,1,HDRSIZE,fp);
+    memcpy(&prologue->total_length,hdr+0,4);  /* redundant, identical to v5 */
+    memcpy(&prologue->version,hdr+4,2);       /* redundant, identical to v5 */
+    memcpy(&prologue->prologue_length,hdr+6,4);
+    memcpy(&prologue->min_instruction_size,hdr+10,1);
+    memcpy(&prologue->default_is_stmt,hdr+11,1);
+    memcpy(&prologue->line_base,hdr+12,1);
+    memcpy(&prologue->line_range,hdr+13,1);
+    memcpy(&prologue->opcode_base,hdr+14,1);
+    prologue->address_size=4; /* assume 32-bit, 64-bit not yet supported */
+    prologue->segment_sel_size=0;
+    prologue->max_oper_per_instruction=1;
+    *size=HDRSIZE;
+    #undef HDRSIZE
+  } else if (prologue->version==4) {
+    /* un-read v5 structure, then read & copy the v4 structure
+        uint32_t total_length;     length of the line number table, minus the 4 bytes for this total_length field
+        uint16_t version;          this prologue is for versions 2 & 3
+        uint32_t prologue_length;  offset to the first opcode of the line number program (relative to this prologue_length field)
+        uint8_t  min_instruction_size;
+        uint8_t  max_oper_per_instruction;
+        uint8_t  default_is_stmt;  default value to initialize the state machine with
+        int8_t   line_base;
+        uint8_t  line_range;
+        uint8_t  opcode_base;      number of the first special opcode
+        standard opcode lengths (array of length "opcode_base" - 1)
+        include directories, a sequence of zero-terminated strings (and the
+           sequence itself ends with a zero-byte)
+        file names: base name, location, modification date, size
+     */
+    #define HDRSIZE 16
+    unsigned char hdr[HDRSIZE];
+    fseek(fp,mark,SEEK_SET);
+    fread(&hdr,sizeof(hdr),1,fp);
+    memcpy(&prologue->total_length,hdr+0,4);  /* redundant, identical to v5 */
+    memcpy(&prologue->version,hdr+4,2);       /* redundant, identical to v5 */
+    memcpy(&prologue->prologue_length,hdr+6,4);
+    memcpy(&prologue->min_instruction_size,hdr+10,1);
+    memcpy(&prologue->max_oper_per_instruction,hdr+11,1);
+    memcpy(&prologue->default_is_stmt,hdr+12,1);
+    memcpy(&prologue->line_base,hdr+13,1);
+    memcpy(&prologue->line_range,hdr+14,1);
+    memcpy(&prologue->opcode_base,hdr+15,1);
+    prologue->address_size=4; /* assume 32-bit, 64-bit not yet supported */
+    prologue->segment_sel_size=0;
+    *size=HDRSIZE;
+    #undef HDRSIZE
+  } else {
+    assert(0);  /* DWARF 1 is not supported */
+    return 0;
+  }
+  //??? on big_endian, swap fields
+  return 1;
+}
+
 static void clear_state(STATE *state,int default_is_stmt)
 {
   /* set default state (see DWARF documentation, DWARF 2.0 pp. 52 / DWARF 3.0 pp. 94) */
   state->address=0;
+  state->op_index=0;
   state->file=1;
   state->line=1;
   state->column=0;
@@ -918,9 +1215,9 @@ static int dwarf_linetable(FILE *fp,const DWARFTABLE tables[],
                            DWARF_LINELOOKUP *linetable,DWARF_PATHLIST *filetable,
                            PATHXREF *xreftable)
 {
-  DWARF_FIXEDPROLOGUE prologue;
+  DWARF_PROLOGUE32 prologue;
   STATE state;
-  int dirpos,opcode,lebsize;
+  int dirpos,opcode,lebsize,prologue_size;
   int unit,idx;
   long value;
   unsigned tableoffset,tablesize;
@@ -946,19 +1243,20 @@ static int dwarf_linetable(FILE *fp,const DWARFTABLE tables[],
   fseek(fp,tableoffset,SEEK_SET);
 
   unit=0;
-  while (tablesize > sizeof(prologue)) {
+  prologue_size=sizeof(prologue); /* initial assumption */
+  while (tablesize>prologue_size) {
     uint8_t *std_argcnt;  /* array with argument counts for standard opcodes */
     long count;
     int byte;
     /* check the prologue */
-    fread(&prologue,sizeof(prologue),1,fp);
-    //??? on big_endian, swap fields
+    read_prologue(fp,&prologue,&prologue_size);
     /* read the argument counts for the standard opcodes */
     std_argcnt=(uint8_t*)malloc(prologue.opcode_base-1*sizeof(uint8_t));
     if (std_argcnt==NULL)
       return 0;
     fread(std_argcnt,1,prologue.opcode_base-1,fp);
-    /* read the includes table */
+    assert(prologue.version<5); //??? for DWARF 5+, the format for the include-paths and filenames tables is different
+    /* read the include-paths table */
     while ((byte=fgetc(fp))!=EOF && byte!='\0') {
       for (idx=0; byte!=EOF && byte!='\0'; idx++) {
         path[idx]=(char)byte;
@@ -967,7 +1265,7 @@ static int dwarf_linetable(FILE *fp,const DWARFTABLE tables[],
       path[idx]='\0';
       path_insert(&include_list,path);
     }
-    /* read the filename table */
+    /* read the filenames table */
     while ((byte=fgetc(fp))!=EOF && byte!='\0') {
       for (idx=0; byte!=EOF && byte!='\0'; idx++) {
         path[idx]=(char)byte;
@@ -1099,6 +1397,7 @@ static int dwarf_linetable(FILE *fp,const DWARFTABLE tables[],
       } else {
         /* special opcode */
         opcode-=prologue.opcode_base;
+        assert(prologue.max_oper_per_instruction==1); /* for VLIW architecture, the calculation below must be adjusted */
         state.address+=(opcode/prologue.line_range)*prologue.min_instruction_size;
         state.line+=prologue.line_base+opcode%prologue.line_range;
         line_insert(&line_list,state.line,state.address,state.file-1);
@@ -1158,7 +1457,7 @@ static int dwarf_infotable(FILE *fp,const DWARFTABLE tables[],
                            DWARF_SYMBOLLIST *symboltable,int *address_size,
                            const PATHXREF *xreftable)
 {
-  INFO_HDR32 header;
+  UNIT_HDR32 header;
   ABBREVLIST abbrev_root = { NULL };
   const ABBREVLIST *abbrev;
   int unit,idx,size;
@@ -1184,15 +1483,17 @@ static int dwarf_infotable(FILE *fp,const DWARFTABLE tables[],
   tablesize=tables[TABLE_INFO].size;
   while (tablesize>sizeof(header)) {
     unsigned long unitsize;
-    uint32_t code_addr=0;
+    uint32_t code_addr=0, code_addr_end=0;
     uint32_t data_addr=0;
     int external=0;
+    int declaration=0;
     int level=0;
-    fread(&header,sizeof(header),1,fp);
-    unitsize=header.unit_length-(sizeof(header)-4);
+    int hdrsize;
+    read_unitheader(fp,&header,&hdrsize);
+    unitsize=header.unit_length-(hdrsize-4);
     assert(unitsize<0xfffffff0);  /* if larger, should read the 64-bit version of the structure */
     *address_size=header.address_size;
-    tablesize-=unitsize+sizeof(header);
+    tablesize-=unitsize+hdrsize;
     name[0]='\0';
     level=0;
     /* browse through the tags */
@@ -1208,7 +1509,13 @@ static int dwarf_infotable(FILE *fp,const DWARFTABLE tables[],
       assert(abbrev!=NULL);
       /* run through the attributes */
       for (idx=0; idx<abbrev->count; idx++) {
-        switch (abbrev->attributes[idx].format) {
+        int format=abbrev->attributes[idx].format;
+        if (format==DW_FORM_indirect) {
+          /* format is specified in the .debug_info data (not in the abbreviation) */
+          format=read_leb128(fp,1,&size);
+          unitsize-=size;
+        }
+        switch (format) {
         case DW_FORM_data1:             /* constant, 1 byte */
         case DW_FORM_data2:             /* constant, 2 bytes */
         case DW_FORM_data4:             /* constant, 4 bytes */
@@ -1224,6 +1531,8 @@ static int dwarf_infotable(FILE *fp,const DWARFTABLE tables[],
         case DW_FORM_flag_present:      /* flag, no data */
         case DW_FORM_ref_sig8:          /* type signature, 8 bytes */
         case DW_FORM_exprloc:           /* block, unsigned LEB128-encoded length + data bytes */
+        case DW_FORM_ref_sup4:
+        case DW_FORM_ref_sup8:
           value=read_value(fp,abbrev->attributes[idx].format,&size);
           break;
         case DW_FORM_addr:              /* address, 4 bytes for 32-bit, 8 bytes for 64-bit */
@@ -1235,18 +1544,26 @@ static int dwarf_infotable(FILE *fp,const DWARFTABLE tables[],
           break;
         case DW_FORM_string:            /* string, zero-terminated */
         case DW_FORM_strp:              /* string, 4-byte offset into the .debug_str section */
+        case DW_FORM_strp_sup:
         case DW_FORM_block:             /* block, unsigned LEB128-encoded length + data bytes */
         case DW_FORM_block1:            /* block, 1-byte length + up to 255 data bytes */
         case DW_FORM_block2:            /* block, 2-byte length + up to 64K data bytes */
         case DW_FORM_block4:            /* block, 4-byte length + up to 4G data bytes */
           read_string(fp,abbrev->attributes[idx].format,tables[TABLE_STR].offset,str,sizeof(str),&size);
           break;
-        case DW_FORM_indirect:          /* format is specified in the .debug_info data (not in the abbreviation) */
+        case DW_FORM_line_strp:
+          read_string(fp,abbrev->attributes[idx].format,tables[TABLE_LINE_STR].offset,str,sizeof(str),&size);
+          break;
+        case DW_FORM_implicit_const:
+          value=abbrev->attributes[idx].value;
+          size=0;
+          break;
         default:
           assert(0);
         }
         unitsize-=size;
-        if (abbrev->tag==DW_TAG_subprogram || abbrev->tag==DW_TAG_variable) {
+        if (abbrev->tag==DW_TAG_subprogram || abbrev->tag==DW_TAG_variable || abbrev->tag==DW_TAG_formal_parameter) {
+          //??? also handle DW_TAG_lexical_block for the scope of local variables
           /* store selected fields */
           switch (abbrev->attributes[idx].tag) {
           case DW_AT_name:
@@ -1256,33 +1573,52 @@ static int dwarf_infotable(FILE *fp,const DWARFTABLE tables[],
             if (abbrev->tag==DW_TAG_subprogram)
               code_addr=(uint32_t)value;
             break;
+          case DW_AT_high_pc:
+            if (abbrev->tag==DW_TAG_subprogram) {
+              code_addr_end=(uint32_t)value;
+              /* depending on the format, the "high pc" value is an offset
+                 instead of an address */
+              if (abbrev->attributes[idx].format!=DW_FORM_addr)
+                code_addr_end+=code_addr;
+            }
+            break;
           case DW_AT_decl_file:
             file=pathxref_find(xreftable,unit,(int)value-1);
             break;
           case DW_AT_decl_line:
             line=(int)value;
             break;
+          case DW_AT_location:
+            if (abbrev->tag==DW_TAG_variable)
+              data_addr=(uint32_t)value;  /* global / static variable */
+            break;
           case DW_AT_external:
             if (abbrev->tag==DW_TAG_variable)
               external=(int)value;
             break;
-          case DW_AT_location:
-            if (abbrev->tag==DW_TAG_variable)
-              data_addr=(uint32_t)value;
+          case DW_AT_declaration:
+            declaration=(int)value;
             break;
           }
         }
       } /* for (idx<abbrev->count) */
-      if (abbrev->tag==DW_TAG_subprogram || abbrev->tag==DW_TAG_variable) {
+      if ((abbrev->tag==DW_TAG_subprogram && code_addr_end>code_addr)
+          || (abbrev->tag==DW_TAG_variable && data_addr!=0))
+        declaration=0;
+      if ((abbrev->tag==DW_TAG_subprogram || abbrev->tag==DW_TAG_variable || abbrev->tag==DW_TAG_formal_parameter)
+          && !declaration) {
         /* inlined functions are added as if they have address 0; when inline
            functions get instantiated, these are added as "references" to
            functions; these are not handled */
-        if (name[0]!='\0' && file>=0 && (code_addr>0 || external))
-          symname_insert(symboltable,name,code_addr,data_addr,file,line);
+        assert(code_addr_end>=code_addr);
+        if (name[0]!='\0' && file>=0)
+          symname_insert(symboltable,name,code_addr,code_addr_end-code_addr,
+                         data_addr,file,line,external);
         name[0]='\0';
-        code_addr=0;
+        code_addr=code_addr_end=0;
         data_addr=0;
         external=0;
+        declaration=0;
         file=-1;
       }
       if (abbrev->has_children)
@@ -1290,14 +1626,47 @@ static int dwarf_infotable(FILE *fp,const DWARFTABLE tables[],
     }
     unit+=1;
   }
-
   abbrev_deletetable(&abbrev_root);
   return 1;
 }
 
+static void dwarf_postprocess(DWARF_SYMBOLLIST *symboltable,const DWARF_LINELOOKUP *linetable)
+{
+  DWARF_SYMBOLLIST *sym;
+
+  assert(symboltable!=NULL);
+  for (sym=symboltable->next; sym!=NULL; sym=sym->next) {
+    if (DWARF_IS_FUNCTION(sym)) {
+      /* go through the line table to find the line range for the function */
+      uint32_t addr=sym->code_addr+sym->code_range;
+      const DWARF_LINELOOKUP *line;
+      DWARF_SYMBOLLIST *lcl;
+      assert(linetable!=NULL);
+      for (line=linetable->next; line!=NULL && sym->line_limit==0; line=line->next) {
+        if (line->address<addr && (line->next==NULL || line->next->address>=addr)
+            && line->line>=sym->line_limit)
+          sym->line_limit=line->line+1; /* +1 for consistency with DWARF address range */
+      }
+      /* collect all local variables that are declared within this line range */
+      for (lcl=symboltable->next; lcl!=NULL; lcl=lcl->next) {
+        if (lcl->fileindex==sym->fileindex
+            && lcl->line>=sym->line && lcl->line<sym->line_limit
+            && lcl->scope==SCOPE_UNKNOWN)
+        {
+          assert(lcl->code_addr==0);  /* nested functions don't occur */
+          lcl->scope=SCOPE_FUNCTION;
+          lcl->line_limit=sym->line_limit;
+          assert(lcl->line_limit>lcl->line);
+        }
+      }
+    }
+  }
+}
+
 /* dwarf_read() returns three lists: a list with source code line numbers,
-   a list with functions and a list with the file paths (referred to by the
-   other two lists) */
+ * a list with functions and a list with the file paths (referred to by the
+ * other two lists)
+ */
 int dwarf_read(FILE *fp,DWARF_LINELOOKUP *linetable,DWARF_SYMBOLLIST *symboltable,
                DWARF_PATHLIST *filetable,int *address_size)
 {
@@ -1327,11 +1696,12 @@ int dwarf_read(FILE *fp,DWARF_LINELOOKUP *linetable,DWARF_SYMBOLLIST *symboltabl
   elf_section_by_name(fp,".debug_str",&tables[TABLE_STR].offset,NULL,&tables[TABLE_STR].size);
   elf_section_by_name(fp,".debug_line",&tables[TABLE_LINE].offset,NULL,&tables[TABLE_LINE].size);
   elf_section_by_name(fp,".debug_pubnames",&tables[TABLE_PUBNAME].offset,NULL,&tables[TABLE_PUBNAME].size);
+  elf_section_by_name(fp,".debug_line_str",&tables[TABLE_LINE_STR].offset,NULL,&tables[TABLE_LINE_STR].size);
 
   result=1;
-  /* the line table also fills in the file path table and the path
-     cross-reference; the table is therefore mandatory in the DWARF format
-     and it is the first one to parse */
+  /* the line table also holds information for the file path table and the path
+     cross-reference; the table is therefore mandatory in the DWARF format and
+     it is the first one to parse */
   if (tables[TABLE_LINE].offset!=0)
     result=dwarf_linetable(fp,tables,linetable,filetable,&xreftable);
   /* the information table implicitly parses the abbreviations table, but it
@@ -1340,6 +1710,10 @@ int dwarf_read(FILE *fp,DWARF_LINELOOKUP *linetable,DWARF_SYMBOLLIST *symboltabl
     result=dwarf_infotable(fp,tables,symboltable,address_size,&xreftable);
 
   pathxref_deletetable(&xreftable);
+
+  /* now that we have seen all functions, we can update the scope of local
+     variables */
+  dwarf_postprocess(symboltable,linetable);
 
   return result;
 }
@@ -1351,15 +1725,48 @@ void dwarf_cleanup(DWARF_LINELOOKUP *linetable,DWARF_SYMBOLLIST *symboltable,DWA
   path_deletetable(filetable);
 }
 
-const DWARF_SYMBOLLIST *dwarf_sym_from_name(const DWARF_SYMBOLLIST *symboltable,const char *name)
+/** dwarf_sym_from_name() returns a function or variable that matches the name,
+ *  and that is in scope.
+ *  - Functions and variables with function scope (locals & arguments) are
+ *    matched if the fileindex matches and the lineindex is in range. This test
+ *    is skipped in fileindex or lineindex is -1.
+ *  - Functions and variables with unit scope are found if the fileindex
+ *    matches. This test is skipped if fileindex is -1.
+ *  - External functions and variables are always matched, but are matched last.
+ */
+const DWARF_SYMBOLLIST *dwarf_sym_from_name(const DWARF_SYMBOLLIST *symboltable,
+                                            const char *name,int fileindex,int lineindex)
 {
   const DWARF_SYMBOLLIST *sym;
 
   assert(symboltable!=NULL);
   assert(name!=NULL);
+  /* check local variables */
+  if (fileindex>=0 && lineindex>=0) {
+    for (sym=symboltable->next; sym!=NULL; sym=sym->next) {
+      assert(sym->name!=NULL);
+      if (sym->scope==SCOPE_FUNCTION
+          && sym->fileindex==fileindex
+          && sym->line<=lineindex && lineindex<sym->line_limit
+          && strcmp(sym->name,name)==0)
+        return sym;
+    }
+  }
+  /* check static globals */
+  if (fileindex>=0) {
+    for (sym=symboltable->next; sym!=NULL; sym=sym->next) {
+      assert(sym->name!=NULL);
+      if (sym->scope==SCOPE_UNIT
+          && sym->fileindex==fileindex
+          && strcmp(sym->name,name)==0)
+        return sym;
+    }
+  }
+  /* check external symbols */
   for (sym=symboltable->next; sym!=NULL; sym=sym->next) {
     assert(sym->name!=NULL);
-    if (strcmp(sym->name,name)==0)
+    if (sym->scope==SCOPE_EXTERNAL
+        && strcmp(sym->name,name)==0)
       return sym;
   }
   return NULL;
@@ -1371,7 +1778,7 @@ const DWARF_SYMBOLLIST *dwarf_sym_from_address(const DWARF_SYMBOLLIST *symboltab
 
   assert(symboltable!=NULL);
   for (sym=symboltable->next; sym!=NULL; sym=sym->next) {
-    if (sym->data_addr!=0 && sym->code_addr==0) {
+    if (sym->code_range==0) {
       /* check variable */
       if (sym->data_addr==address)
         return sym;   /* always return the variable on an exact address match */
@@ -1407,6 +1814,37 @@ const char *dwarf_path_from_index(const DWARF_PATHLIST *filetable,int fileindex)
   for (file=filetable->next; file!=NULL && fileindex>0; file=file->next)
     fileindex--;
   return (file!=NULL) ? file->name : NULL;
+}
+
+int dwarf_fileindex_from_path(const DWARF_PATHLIST *filetable,const char *path)
+{
+  const DWARF_PATHLIST *file;
+  int fileindex=0;
+
+  assert(filetable!=NULL);
+  assert(path!=NULL);
+  /* try full path first */
+  for (file=filetable->next; file!=NULL; file=file->next) {
+    if (strcmp(path,file->name)==0)
+      return fileindex;
+    fileindex++;
+  }
+  /* re-try, comparing only base names */
+  fileindex=0;
+  for (file=filetable->next; file!=NULL; file=file->next) {
+    const char *filename=file->name;
+    const char *base;
+    if ((base = strrchr(filename, '/')) != NULL)
+      filename = base + 1;
+    #if defined _WIN32
+      if ((base = strrchr(filename, '\\')) != NULL)
+        filename = base + 1;
+    #endif
+    if (strcmp(path,filename)==0)
+      return fileindex;
+    fileindex++;
+  }
+  return -1;
 }
 
 const DWARF_LINELOOKUP *dwarf_line_from_address(const DWARF_LINELOOKUP *linetable,unsigned address)

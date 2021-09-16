@@ -146,7 +146,7 @@ size_t gdbrsp_recv(char *buffer, size_t size, int timeout)
         }
       }
       /* check whether we have an end mark and a checksum */
-      for (tail = head + 1; tail < cache_idx && cache[tail] != '#'; tail++)
+      for (tail = head; tail < cache_idx && cache[tail] != '#'; tail++)
         /* nothing */;
       if (tail + 2 < cache_idx) {
         /* '#' found and 2 characters follow, verify the checksum */
@@ -179,6 +179,8 @@ size_t gdbrsp_recv(char *buffer, size_t size, int timeout)
                 buffer[c] = cache[idx] ^ 0x20;
               } else {
                 buffer[c] = cache[idx];
+                /* the Black Magic Probe does currently not support run-length
+                   encoding, so we currently do not check for it */
               }
             }
           }
@@ -195,7 +197,6 @@ size_t gdbrsp_recv(char *buffer, size_t size, int timeout)
             rs232_xmit(bmp_comport(), (const unsigned char*)"-", 1);
           else
             tcpip_xmit((const unsigned char*)"-", 1);
-          head = tail = 0;
         }
         /* remove the packet from the cache */
         tail += 3;
@@ -203,6 +204,7 @@ size_t gdbrsp_recv(char *buffer, size_t size, int timeout)
         if (tail < cache_idx)
           memmove(cache, cache + tail, cache_idx - tail);
         cache_idx -= tail;
+        head = 0;
       }
     }
     if (cycles > 0 && --cycles == 0)
@@ -325,5 +327,13 @@ int gdbrsp_xmit(const char *buffer, int size)
 
   free(fullbuffer);
   return 0;
+}
+
+/** gdbrsp_clear() clears the cache, to remove any superfluous OK or error
+ *  codes that GDB sent.
+ */
+void gdbrsp_clear(void)
+{
+  cache_idx = 0;
 }
 

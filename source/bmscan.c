@@ -7,7 +7,7 @@
  * Build this file with the macro STANDALONE defined on the command line to
  * create a self-contained executable.
  *
- * Copyright 2019-2020 CompuPhase
+ * Copyright 2019-2021 CompuPhase
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -26,6 +26,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#if !defined _WIN32
+  #include <fcntl.h>
+  #include <unistd.h>
+#endif
 #include "bmp-scan.h"
 #include "tcpip.h"
 
@@ -44,10 +48,46 @@
 static void print_port(const char *portname)
 {
   #if defined WIN32 || defined _WIN32
-    if (strncmp(portname, "COM", 3) == 0 && strlen(portname) >= 5)
+    if (strncmp(portname, "COM", 3) == 0
+        && strlen(portname) >= 5
+        && isdigit(*(portname + 3)))
       printf("\\\\.\\");
   #endif
   printf("%s", portname);
+}
+
+static int test_port(const char *portname)
+{
+  #if defined _WIN32
+    char localname[20];
+    HANDLE hcom;
+    if (strnicmp(portname, "COM", 3) == 0
+        && strlen(portname) >= 5
+        && strlen(portname) + 5 < sizearray(localname)
+        && isdigit(*(portname + 3)))
+    {
+      sprintf(localname, "\\\\.\\%s", portname);
+      portname = localname;
+    }
+    hcom = CreateFileA(portname, GENERIC_READ | GENERIC_WRITE, 0, NULL,
+                       OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (hcom != INVALID_HANDLE_VALUE)
+      CloseHandle(hcom);
+    return hcom != INVALID_HANDLE_VALUE;
+  #else
+    char localname[50];
+    int hcom;
+    if (strncmp(portname, "/dev/", 5) != 0
+        && strlen(portname) + 6 < sizearray(localname))
+    {
+      sprintf(localname, "/dev/%s", portname);
+      portname = localname;
+    }
+    hcom = open(portname, O_RDWR | O_NOCTTY | O_NONBLOCK | O_NDELAY);
+    if (hcom >= 0)
+      close(hcom);
+    return hcom >= 0;
+  #endif
 }
 
 int main(int argc, char *argv[])
@@ -165,10 +205,14 @@ int main(int argc, char *argv[])
       printf("Unknown interface \"%s\"\n", iface);
     }
   } else {
+    char access_gdb[64] = "", access_term[64] = "";
     assert(!print_all || seqnr == 0); /* if seqnr were set, print_all is false */
     do {
       /* print both ports of each Black Magic Probe */
-      if (!find_bmp(seqnr, BMP_IF_GDB, port_gdb, sizearray(port_gdb))) {
+      if (find_bmp(seqnr, BMP_IF_GDB, port_gdb, sizearray(port_gdb))) {
+        if (!test_port(port_gdb))
+          strcpy(access_gdb, "[no access]");
+      } else {
         if (print_all && seqnr > 0)
           break;  /* simply exit the do..while loop without giving a further message */
         switch (seqnr) {
@@ -187,16 +231,20 @@ int main(int argc, char *argv[])
         return 1;
       }
 
-      if (!find_bmp(seqnr, BMP_IF_UART, port_term, sizearray(port_term)))
+      if (find_bmp(seqnr, BMP_IF_UART, port_term, sizearray(port_term))) {
+        if (!test_port(port_term))
+          strcpy(access_term, "[no access]");
+      } else {
         strcpy(port_term, "not detected");
+      }
       if (!find_bmp(seqnr, BMP_IF_TRACE, port_swo, sizearray(port_swo)))
         strcpy(port_swo, "not detected");
       if (!find_bmp(seqnr, BMP_IF_SERIAL, serial, sizearray(serial)))
         strcpy(serial, "(unknown)");
 
       printf("\nBlack Magic Probe found, serial %s:\n", serial);
-      printf("  gdbserver port: %s\n", port_gdb);
-      printf("  TTL UART port:  %s\n", port_term);
+      printf("  gdbserver port: %s %s\n", port_gdb, access_gdb);
+      printf("  TTL UART port:  %s %s\n", port_term, access_term);
       printf("  SWO interface:  %s\n", port_swo);
       seqnr += 1;
     } while (print_all);

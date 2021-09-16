@@ -25,6 +25,7 @@
 void   gdbrsp_packetsize(size_t size);
 size_t gdbrsp_recv(char *buffer, size_t size, int timeout);
 int    gdbrsp_xmit(const char *buffer, int size);
+void   gdbrsp_clear(void);
 
 #if defined __cplusplus
   }

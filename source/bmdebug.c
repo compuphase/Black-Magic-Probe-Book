@@ -18,7 +18,9 @@
  */
 
 #if defined _WIN32
+  #define STRICT
   #define WIN32_LEAN_AND_MEAN
+  #define _WIN32_WINNT   0x0500 /* for AttachConsole() */
   #include <windows.h>
   #include <shellapi.h>
   #include <direct.h>
@@ -152,6 +154,7 @@ enum { SWOMODE_NONE, SWOMODE_MANCHESTER, SWOMODE_ASYNC };
 static const char *gdbmi_leader(char *buffer, int *flags, char **next_segment);
 static void trace_info_mode(const SWOSETTINGS *swo, int showchannels, STRINGLIST *textroot);
 static void serial_info_mode(STRINGLIST *textroot);
+static void source_getcursorpos(int *fileindex, int *linenumber);
 
 
 /** stringlist_add() adds a string to the tail of the list. */
@@ -611,7 +614,7 @@ static void console_growbuffer(size_t extra)
   }
   if (console_buffer == NULL) {
     fprintf(stderr, "Memory allocation error.\n");
-    exit(1);
+    exit(EXIT_FAILURE);
   }
 }
 
@@ -727,7 +730,7 @@ static int console_autocomplete(char *text, size_t textsize, const DWARF_SYMBOLL
     { "display", NULL, "%var %reg" },
     { "down", NULL, NULL },
     { "enable", NULL, NULL },
-    { "file", NULL, NULL },
+    { "file", NULL, "%path" },
     { "find", NULL, NULL },
     { "finish", "fin", NULL },
     { "frame", "f", NULL },
@@ -867,10 +870,30 @@ static int console_autocomplete(char *text, size_t textsize, const DWARF_SYMBOLL
               }
             } else if (strcmp(ptr, "%var") == 0 || strcmp(ptr, "%func") == 0) {
               const DWARF_SYMBOLLIST *sym;
+              int match_var = (strcmp(ptr, "%var") == 0);
+              int curfile, curline;
+              const char *path;
+              source_getcursorpos(&curfile, &curline);
+              /* translate the file index from the list returned by GDB to the
+                 list collected from DWARF */
+              path = source_getname(curfile);
+              assert(path != NULL);
+              curfile = dwarf_fileindex_from_path(&dwarf_filetable, path);
               for (idx = 0; !result && (sym = dwarf_sym_from_index(symboltable, idx)) != 0; idx++) {
                 assert(sym->name != NULL);
                 if (strncmp(word, sym->name, len) == 0) {
-                  if ((strcmp(ptr, "%var") == 0 && sym->code_addr == 0) || (strcmp(ptr, "%func") == 0 && sym->code_addr != 0)) {
+                  int match = 0;
+                  if (match_var && DWARF_IS_VARIABLE(sym)) {
+                    if (sym->scope == SCOPE_EXTERNAL
+                        || (sym->scope == SCOPE_UNIT && sym->fileindex == curfile)
+                        || (sym->scope == SCOPE_FUNCTION && sym->fileindex == curfile && sym->line <= curline && curline < sym->line_limit))
+                      match = 1;
+                  } else if (!match_var && DWARF_IS_FUNCTION(sym)) {
+                    if (sym->scope == SCOPE_EXTERNAL
+                        || (sym->scope == SCOPE_UNIT && sym->fileindex == curfile))
+                      match = 1;
+                  }
+                  if (match) {
                     if (first == NULL)
                       first = sym->name;
                     if (skip == 0) {
@@ -1170,7 +1193,7 @@ static void sources_add(const char *filename, const char *filepath)
   }
   if (sources == NULL) {
     fprintf(stderr, "Memory allocation error.\n");
-    exit(1);
+    exit(EXIT_FAILURE);
   }
   assert(filename != NULL && strlen(filename) > 0);
   sources[sources_count].basename = strdup(filename);
@@ -1706,9 +1729,18 @@ static int watch_update(const char *gdbresult)
             watch->value = NULL;
           }
           if ((start = fieldfind(line, "value")) != NULL) {
+            #define WATCH_MAX 32
             start = fieldvalue(start, &len);
             assert(start != NULL);
-            watch->value = strdup_len(start, len);
+            if (len <= WATCH_MAX) {
+              watch->value = strdup_len(start, len);
+            } else {
+              char tmpstr[WATCH_MAX + 4]; /* +3 for "...", +1 for '\0' */
+              strncpy(tmpstr, start, WATCH_MAX);
+              tmpstr[WATCH_MAX] = '\0';
+              strcat(tmpstr, "...");
+              watch->value = strdup(tmpstr);
+            }
           }
           if ((start = fieldfind(line, "in_scope")) != NULL) {
             start = fieldvalue(start, NULL);
@@ -1884,10 +1916,12 @@ static int check_stopped(int *filenr, int *linenr)
             len = sizearray(filename) - 1;
           strncpy(filename, head, len);
           filename[len] = '\0';
-          /* look up the file */
-          assert(sources != NULL);
-          assert(filenr != NULL);
-          *filenr = source_lookup(filename);
+          /* look up the file (but there is the possibility that no source files
+             were yet loaded) */
+          if (sources != NULL) {
+            assert(filenr != NULL);
+            *filenr = source_lookup(filename);
+          }
         }
         if ((head = strstr(item->text, "line=")) != 0) {
           assert(head[5] == '"');
@@ -2038,20 +2072,6 @@ int task_stdin(TASK *task, const char *text)
   return WriteFile(task->pwStdIn, text, strlen(text), &dwWritten, NULL) ? (int)dwWritten : -1;
 }
 
-//void task_break(TASK *task)
-//{
-//  assert(task != NULL);
-//  if (task->hProcess != INVALID_HANDLE_VALUE) {
-//    HINSTANCE hinstKrnl = LoadLibrary("kernel32.dll");
-//    BOOL WINAPI (*AttachConsole)(DWORD dwProcessId) = GetProcAddress(hinstKrnl, "AttachConsole");
-//    DWORD id = GetProcessId(task->hProcess);
-//    AttachConsole(id);
-//    SetConsoleCtrlHandler(NULL, FALSE);
-//    GenerateConsoleCtrlEvent(CTRL_C_EVENT, 0);
-//    FreeLibrary(hinstKrnl);
-//  }
-//}
-
 int task_stdout(TASK *task, char *text, size_t maxlength)
 {
   DWORD dwRead, dwAvail;
@@ -2161,7 +2181,7 @@ int task_launch(const char *program, const char *options, TASK *task)
     close(task->pStdErr[1]);
 
     execvp(program, (char**)argv);
-    exit(0);  /* if execv() returns, there was an error */
+    exit(EXIT_FAILURE);  /* if execv() returns, there was an error */
   } else {
     /* parent: close the pipe handles not required (by the parent) */
     assert(task->pid != 0);
@@ -2214,10 +2234,6 @@ int task_stdin(TASK *task, const char *text)
     return 0;
   return write(task->pStdIn[1], text, strlen(text));
 }
-
-//void task_break(TASK *task)
-//{
-//}
 
 static int peekpipe(int fd)
 {
@@ -2386,7 +2402,7 @@ static void console_widget(struct nk_context *ctx, const char *id, float rowheig
       if (item->flags & (STRFLG_INPUT | STRFLG_MI_INPUT))
         nk_label_colored(ctx, item->text, NK_TEXT_LEFT, nk_rgb(204, 199, 141));
       else if (item->flags & STRFLG_ERROR)
-        nk_label_colored(ctx, item->text, NK_TEXT_LEFT, nk_rgb(255, 100, 128));
+        nk_label_colored(ctx, item->text, NK_TEXT_LEFT, nk_rgb(255, 80, 100));
       else if (item->flags & STRFLG_RESULT)
         nk_label_colored(ctx, item->text, NK_TEXT_LEFT, nk_rgb(64, 220, 255));
       else if (item->flags & STRFLG_NOTICE)
@@ -2437,7 +2453,8 @@ static float source_charwidth = 0;
 static int source_vp_rows = 0;
 
 /* source_widget() draws the text of a source file */
-static void source_widget(struct nk_context *ctx, const char *id, float rowheight)
+static void source_widget(struct nk_context *ctx, const char *id, float rowheight,
+                          int grayed)
 {
   int fonttype;
   STRINGLIST *item;
@@ -2475,8 +2492,10 @@ static void source_widget(struct nk_context *ctx, const char *id, float rowheigh
         char str[20];
         nk_layout_row_push(ctx, 2 * rowheight);
         sprintf(str, "%4d", lines);
-        if (lines == source_cursorline)
-          nk_label_colored(ctx, str, NK_TEXT_LEFT, nk_rgb(255, 250, 150));
+        if (grayed)
+          nk_label_colored(ctx, str, NK_TEXT_LEFT, nk_rgb(128, 128, 128));
+        else if (lines == source_cursorline)
+          nk_label_colored(ctx, str, NK_TEXT_LEFT, nk_rgb(250, 250, 128));
         else
           nk_label(ctx, str, NK_TEXT_LEFT);
       } else {
@@ -2500,7 +2519,7 @@ static void source_widget(struct nk_context *ctx, const char *id, float rowheigh
         stbtn.normal.data.color = stbtn.hover.data.color
           = stbtn.active.data.color = stbtn.text_background
           = nk_rgba(20, 29, 38, 225);
-        stbtn.text_normal = stbtn.text_active = stbtn.text_hover = nk_rgb(255, 250, 150);
+        stbtn.text_normal = stbtn.text_active = stbtn.text_hover = nk_rgb(250, 250, 128);
         nk_button_symbol_styled(ctx, &stbtn, NK_SYMBOL_TRIANGLE_RIGHT);
       } else {
         nk_spacing(ctx, 1);
@@ -2513,8 +2532,10 @@ static void source_widget(struct nk_context *ctx, const char *id, float rowheigh
         maxlen = strlen(item->text);
       }
       nk_layout_row_push(ctx, textwidth + 10);
-      if (lines == source_cursorline)
-        nk_label_colored(ctx, item->text, NK_TEXT_LEFT, nk_rgb(255, 250, 150));
+      if (grayed)
+        nk_label_colored(ctx, item->text, NK_TEXT_LEFT, nk_rgb(128, 128, 128));
+      else if (lines == source_cursorline)
+        nk_label_colored(ctx, item->text, NK_TEXT_LEFT, nk_rgb(250, 250, 128));
       else
         nk_label(ctx, item->text, NK_TEXT_LEFT);
       nk_layout_row_end(ctx);
@@ -2679,6 +2700,14 @@ static int source_getsymbol(char *symname, size_t symlen, int row, int col)
   return 1;
 }
 
+static void source_getcursorpos(int *fileindex, int *linenumber)
+{
+  assert(fileindex != NULL);
+  *fileindex = source_cursorfile;
+  assert(linenumber != NULL);
+  *linenumber = source_cursorline;
+}
+
 static int is_ip_address(const char *address)
 {
   int a, b, c, d;
@@ -2691,14 +2720,14 @@ enum {
   STATE_INIT,
   STATE_GDB_TASK,
   STATE_SCAN_BMP,
+  STATE_FILE,
   STATE_TARGET_EXT,
   STATE_MON_VERSION,
   STATE_MON_TPWR,
   STATE_MON_SCAN,
   STATE_ASYNC_MODE,
   STATE_ATTACH,
-  STATE_FILE,
-  STATE_FILE_TEST,
+  STATE_GET_SOURCES,
   STATE_MEMACCESS_1,
   STATE_MEMACCESS_2,
   STATE_VERIFY,
@@ -2998,7 +3027,7 @@ static int handle_list_cmd(const char *command, const DWARF_SYMBOLLIST *symbolta
     } else {
       const DWARF_SYMBOLLIST *sym;              /* "list filename", "list filename:#" or "list function" */
       unsigned line = 0, idx = UINT_MAX;
-      sym = dwarf_sym_from_name(symboltable, p1);
+      sym = dwarf_sym_from_name(symboltable, p1, source_cursorfile, source_cursorline);
       if (sym != NULL) {
         const char *path = dwarf_path_from_index(filetable, sym->fileindex);
         if (path != NULL)
@@ -3123,6 +3152,26 @@ static int handle_file_load_reset(const char *command, char *filename, size_t na
   return 0;
 }
 
+static int find_substring(const char *text, const char *pattern)
+{
+  int idx, txtlen, patlen;
+
+  assert(text != NULL && pattern != NULL);
+  txtlen = strlen(text);
+  patlen = strlen(pattern);
+  idx = 0;
+  while (idx < txtlen) {
+    while (idx < txtlen && toupper(text[idx]) != toupper(pattern[0]))
+      idx++;
+    if (idx + patlen > txtlen)
+      break;      /* not found on this line */
+    if (memicmp((const unsigned char*)text + idx, (const unsigned char*)pattern, patlen) == 0)
+      break;      /* found on this line */
+    idx++;
+  }
+  return (idx + patlen <= txtlen);
+}
+
 static int handle_find_cmd(const char *command)
 {
   assert(command != NULL);
@@ -3130,15 +3179,14 @@ static int handle_find_cmd(const char *command)
   if (TERM_EQU(command, "find", 4)) {
     static char pattern[50] = "";
     STRINGLIST *item = source_firstline(source_cursorfile);
-    int linenr, patlen;
+    int linenr, found_on_curline;
     const char *ptr;
     if ((ptr = strchr(command, ' ')) != NULL) {
       ptr = skipwhite(ptr);
       if (*ptr != '\0')
         strlcpy(pattern, ptr, sizearray(pattern));
     }
-    patlen = strlen(pattern);
-    if (patlen == 0)
+    if (strlen(pattern) == 0)
       return 1; /* invalid pattern, but command syntax is ok */
     /* find pattern, starting from source_cursorline */
     linenr = 1;
@@ -3147,27 +3195,17 @@ static int handle_find_cmd(const char *command)
       item = item->next;
     }
     if (item == NULL || source_cursorline <= 0) {
+      found_on_curline = 0;
       item = source_firstline(source_cursorfile);
       linenr = 1;
     } else {
+      found_on_curline = find_substring(item->text, pattern);
       item = item->next;
       linenr++;
     }
     while (linenr != source_cursorline) {
-      int idx, txtlen;
       assert(item != NULL && item->text != NULL);
-      txtlen = strlen(item->text);
-      idx = 0;
-      while (idx < txtlen) {
-        while (idx < txtlen && toupper(item->text[idx]) != toupper(pattern[0]))
-          idx++;
-        if (idx + patlen > txtlen)
-          break;      /* not found on this line */
-        if (memicmp((const unsigned char*)item->text + idx, (const unsigned char*)pattern, patlen) == 0)
-          break;      /* found on this line */
-        idx++;
-      }
-      if (idx + patlen <= txtlen) {
+      if (find_substring(item->text, pattern)) {
         source_cursorline = linenr;
         return 1;     /* found, stop search */
       }
@@ -3181,7 +3219,10 @@ static int handle_find_cmd(const char *command)
       }
     } /* while (linenr != source_cursorline) */
     /* pattern not found */
-    console_add("Text not found\n", STRFLG_ERROR);
+    if (found_on_curline)
+      console_add("No further matches found\n", STRFLG_ERROR);
+    else
+      console_add("Text not found\n", STRFLG_ERROR);
     return 1;
   }
   return 0;
@@ -3778,14 +3819,25 @@ static int handle_serial_cmd(const char *command, char *port, int *baud,
   return 1;
 }
 
-static void usage(void)
+static void usage(const char *invalid_option)
 {
-  printf("bmdebug - GDB front-end for the Black Magic Probe.\n\n"
-         "Usage: bmdebug [options] elf-file\n\n"
+  #if defined _WIN32  /* fix console output on Windows */
+    if (AttachConsole(ATTACH_PARENT_PROCESS)) {
+      freopen("CONOUT$", "wb", stdout);
+      freopen("CONOUT$", "wb", stderr);
+    }
+    printf("\n");
+  #endif
+
+  if (invalid_option != NULL)
+    fprintf(stderr, "Unknown option %s; use -h for help.\n\n", invalid_option);
+  else
+    printf("BMDebug - GDB front-end for the Black Magic Probe.\n\n");
+  printf("Usage: bmdebug [options] elf-file\n\n"
          "Options:\n"
-         "-f=value\t Font size to use (value must be 8 or larger).\n"
-         "-g=path\t path to the GDB executable to use.\n"
-         "-h\t This help.\n");
+         "-f=value  Font size to use (value must be 8 or larger).\n"
+         "-g=path   Path to the GDB executable to use.\n"
+         "-h        This help.\n");
 }
 
 int main(int argc, char *argv[])
@@ -3811,10 +3863,10 @@ int main(int argc, char *argv[])
   int canvas_width, canvas_height;
   enum nk_collapse_states tab_states[TAB_COUNT];
   float tab_heights[TAB_COUNT];
-  int opt_tpwr = nk_false;
-  int opt_allmsg = nk_false;
-  int opt_connect_srst = nk_false;
-  int opt_autodownload = nk_true;
+  nk_bool opt_tpwr = nk_false;
+  nk_bool opt_allmsg = nk_false;
+  nk_bool opt_connect_srst = nk_false;
+  nk_bool opt_autodownload = nk_true;
   int opt_fontsize = FONT_HEIGHT;
   char opt_fontstd[64] = "", opt_fontmono[64] = "";
   SWOSETTINGS opt_swo;
@@ -3830,7 +3882,7 @@ int main(int argc, char *argv[])
   int curstate, prevstate, nextstate, stateparam[3];
   int refreshflags, trace_status, warn_source_tstamps;
   int atprompt, insplitter, console_activate, console_isactive, exitcode;
-  int cont_is_run, force_download;
+  int cont_is_run, force_download, is_attached;
   int monitor_cmd_active = 0, popup_active = POPUP_NONE;
   int idx, result, highlight;
   unsigned char trace_endpoint = BMP_EP_TRACE;
@@ -3907,7 +3959,7 @@ int main(int argc, char *argv[])
       switch (argv[idx][1]) {
       case '?':
       case 'h':
-        usage();
+        usage(NULL);
         return 0;
       case 'f':
         ptr = &argv[idx][2];
@@ -3934,8 +3986,8 @@ int main(int argc, char *argv[])
         strlcpy(txtGDBpath, ptr, sizearray(txtGDBpath));
         break;
       default:
-        fprintf(stderr, "Unknown option %s; use option -h for help.\n", argv[idx]);
-        return 1;
+        usage(argv[idx]);
+        return EXIT_FAILURE;
       }
     } else {
       /* filename on the command line must be in native format (using backslashes
@@ -4042,6 +4094,10 @@ int main(int argc, char *argv[])
         if (task_isrunning(&task))
           task_close(&task);
         curstate = STATE_GDB_TASK;
+        refreshflags = 0;
+        is_attached = 0;
+        atprompt = 0;
+        cont_is_run = 0;
         break;
       case STATE_GDB_TASK:
         if (task_launch(txtGDBpath, "--interpreter=mi2", &task)) {
@@ -4087,7 +4143,7 @@ int main(int argc, char *argv[])
           }
         }
         if (port_gdb[0] != '\0') {
-          curstate = STATE_TARGET_EXT;
+          curstate = STATE_FILE;
         } else if (atprompt) {
           if (prevstate != curstate) {
             if (probe == netprobe)
@@ -4099,6 +4155,53 @@ int main(int argc, char *argv[])
           set_idle_time(1000); /* repeat scan on timeout (but don't sleep the GUI thread) */
         }
         gdbmi_sethandled(0);
+        break;
+      case STATE_FILE:
+        if (!atprompt)
+          break;
+        if (prevstate != curstate) {
+          char temp[_MAX_PATH];
+          dwarf_cleanup(&dwarf_linetable, &dwarf_symboltable, &dwarf_filetable);
+          svd_clear();
+          /* create parameter filename from target filename, then read target-specific settings */
+          strlcpy(txtParamFile, txtFilename, sizearray(txtParamFile));
+          strlcat(txtParamFile, ".bmcfg", sizearray(txtParamFile));
+          load_settings(txtParamFile, txtEntryPoint, sizearray(txtEntryPoint),
+                        &opt_tpwr, &opt_connect_srst, &opt_autodownload,
+                        txtSVDfile, sizearray(txtSVDfile), &opt_swo);
+          /* load target filename in GDB */
+          snprintf(cmdline, CMD_BUFSIZE, "-file-exec-and-symbols %s\n", enquote(temp, txtFilename, sizeof(temp)));
+          if (task_stdin(&task, cmdline))
+            console_input(cmdline);
+          atprompt = 0;
+          prevstate = curstate;
+        } else if (gdbmi_isresult() != NULL) {
+          if (strncmp(gdbmi_isresult(), "done", 4) == 0) {
+            /* read the DWARF information (for function and variable lookup) */
+            FILE *fp = fopen(txtFilename, "rb");
+            if (fp != NULL) {
+              int address_size;
+              if (!dwarf_read(fp, &dwarf_linetable, &dwarf_symboltable, &dwarf_filetable, &address_size))
+                console_add("No DWARF debug information\n", STRFLG_ERROR);
+              fclose(fp);
+            }
+            /* read a CMSIS "SVD" file if any was provided */
+            if (strlen(txtSVDfile) > 0)
+              svd_load(txtSVDfile);
+            source_cursorfile = source_cursorline = 0;
+            source_execfile = source_execline = 0;
+            /* if already attached, skip a to re-loading the sources */
+            curstate = is_attached ? STATE_GET_SOURCES : STATE_TARGET_EXT;
+          } else {
+            if (strncmp(gdbmi_isresult(), "error", 5) == 0) {
+              strlcpy(cmdline, gdbmi_isresult(), CMD_BUFSIZE);
+              strlcat(cmdline, "\n", CMD_BUFSIZE);
+              console_add(cmdline, STRFLG_ERROR);
+            }
+            set_idle_time(1000); /* stay in file state */
+          }
+          gdbmi_sethandled(0);
+        }
         break;
       case STATE_TARGET_EXT:
         if (!atprompt)
@@ -4139,8 +4242,14 @@ int main(int argc, char *argv[])
             while (console_mark != NULL && (console_mark->flags & STRFLG_RESULT) == 0
                    && (type = check_versionstring(console_mark->text)) == PROBE_UNKNOWN)
               console_mark = console_mark->next;
-            if (type != PROBE_UNKNOWN)
+            if (type != PROBE_UNKNOWN) {
               probe_type = type;
+              /* overrule defaults, if we know the probe */
+              if (probe_type == PROBE_ORG_BMP)
+                opt_swo.mode = SWOMODE_MANCHESTER;
+              else if (probe_type == PROBE_CTXLINK)
+                opt_swo.mode = SWOMODE_ASYNC;
+            }
             curstate = STATE_MON_TPWR;
             console_mark = NULL;
           }
@@ -4228,7 +4337,11 @@ int main(int argc, char *argv[])
         }
         break;
       case STATE_ATTACH:
-        check_stopped(&source_execfile, &source_execline);
+        if (check_stopped(&source_execfile, &source_execline)) {
+          source_cursorfile = source_execfile;
+          source_cursorline = source_execline;
+          atprompt = 1; /* in GDB 10, no prompt follows on error, so force it */
+        }
         if (!atprompt)
           break;
         if (prevstate != curstate) {
@@ -4238,66 +4351,19 @@ int main(int argc, char *argv[])
           atprompt = 0;
           prevstate = curstate;
         } else if (gdbmi_isresult() != NULL) {
-          curstate = (strncmp(gdbmi_isresult(), "done", 4) == 0) ? STATE_FILE : STATE_STOPPED;
-          gdbmi_sethandled(0);
-        }
-        break;
-      case STATE_FILE:
-        if (!atprompt)
-          break;
-        if (prevstate != curstate) {
-          int prev_opt_tpwr = opt_tpwr;
-          char temp[_MAX_PATH];
-          dwarf_cleanup(&dwarf_linetable, &dwarf_symboltable, &dwarf_filetable);
-          svd_clear();
-          /* create parameter filename from target filename, then read target-specific settings */
-          strlcpy(txtParamFile, txtFilename, sizearray(txtParamFile));
-          strlcat(txtParamFile, ".bmcfg", sizearray(txtParamFile));
-          load_settings(txtParamFile, txtEntryPoint, sizearray(txtEntryPoint),
-                        &opt_tpwr, &opt_connect_srst, &opt_autodownload,
-                        txtSVDfile, sizearray(txtSVDfile), &opt_swo);
-          if (opt_tpwr && !prev_opt_tpwr)       /* set power and (re-)attach */
-            curstate = STATE_MON_TPWR;
-          if (probe_type == PROBE_ORG_BMP)
-            opt_swo.mode = SWOMODE_MANCHESTER;  /* overrule defaults, if we know the probe */
-          else if (probe_type == PROBE_CTXLINK)
-            opt_swo.mode = SWOMODE_ASYNC;
-          /* load target filename in GDB */
-          snprintf(cmdline, CMD_BUFSIZE, "-file-exec-and-symbols %s\n", enquote(temp, txtFilename, sizeof(temp)));
-          if (task_stdin(&task, cmdline))
-            console_input(cmdline);
-          atprompt = 0;
-          prevstate = curstate;
-        } else if (gdbmi_isresult() != NULL) {
           if (strncmp(gdbmi_isresult(), "done", 4) == 0) {
-            curstate = STATE_FILE_TEST;
-            source_cursorfile = source_cursorline = 0;
-            source_execfile = source_execline = 0;
+            is_attached = 1;
+            curstate = STATE_GET_SOURCES;
           } else {
-            if (strncmp(gdbmi_isresult(), "error", 5) == 0) {
-              strlcpy(cmdline, gdbmi_isresult(), CMD_BUFSIZE);
-              strlcat(cmdline, "\n", CMD_BUFSIZE);
-              console_add(cmdline, STRFLG_ERROR);
-            }
-            set_idle_time(1000); /* stay in file state */
+            curstate = STATE_STOPPED;
           }
           gdbmi_sethandled(0);
         }
         break;
-      case STATE_FILE_TEST:
+      case STATE_GET_SOURCES:
         if (!atprompt)
           break;
         if (prevstate != curstate) {
-          /* read the DWARF information (for function and variable lookup) */
-          FILE *fp = fopen(txtFilename, "rb");
-          if (fp != NULL) {
-            int address_size;
-            dwarf_read(fp, &dwarf_linetable, &dwarf_symboltable, &dwarf_filetable, &address_size);
-            fclose(fp);
-          }
-          /* read a CMSIS "SVD" file if any was provided */
-          if (strlen(txtSVDfile) > 0)
-            svd_load(txtSVDfile);
           /* clear source files (if any were loaded); these will be reloaded
              after the list of source files is refreshed */
           sources_clear(0);
@@ -4373,10 +4439,6 @@ int main(int argc, char *argv[])
         }
         break;
       case STATE_VERIFY:
-        if (!opt_autodownload) {
-          curstate = STATE_CHECK_MAIN;  /* skip the verification step if download is disabled */
-          break;
-        }
         if (!atprompt)
           break;
         if (prevstate != curstate) {
@@ -4386,18 +4448,25 @@ int main(int argc, char *argv[])
           atprompt = 0;
           prevstate = curstate;
         } else if (gdbmi_isresult() != NULL) {
-          STRINGLIST *item;
+          STRINGLIST *item1, *item2 = NULL;
           gdbmi_sethandled(0); /* first flag the result message as handled, to find the line preceding it */
-          item = stringlist_getlast(&consolestring_root, 0, STRFLG_HANDLED);
-          assert(item != NULL && item->text != NULL);
-          if (strncmp(item->text, "the loaded file", 15) == 0) {
-            item->flags |= STRFLG_HANDLED;
-            item = stringlist_getlast(&consolestring_root, 0, STRFLG_HANDLED);
+          item1 = stringlist_getlast(&consolestring_root, 0, STRFLG_HANDLED);
+          assert(item1 != NULL && item1->text != NULL);
+          if (strncmp(item1->text, "the loaded file", 15) == 0) {
+            item1->flags |= STRFLG_HANDLED;
+            item2 = stringlist_getlast(&consolestring_root, 0, STRFLG_HANDLED);
+            assert(item2 != NULL && item2->text != NULL);
           }
-          if (strncmp(item->text, "warning:", 8) == 0)
+          if (item2 != NULL && strncmp(item2->text, "warning:", 8) == 0) {
             curstate = STATE_DOWNLOAD;
-          else
+            if (!opt_autodownload) {
+              /* make the mismatch stand out */
+              item1->flags =(item1->flags & ~STRFLG_LOG) | STRFLG_ERROR;
+              item2->flags =(item2->flags & ~STRFLG_LOG) | STRFLG_ERROR;
+            }
+          } else {
             curstate = STATE_CHECK_MAIN;
+          }
         }
         break;
       case STATE_DOWNLOAD:
@@ -4426,7 +4495,7 @@ int main(int argc, char *argv[])
            we have for some reason failed to load/parse the DWARF information) */
         if (strlen(txtEntryPoint) == 0)
           strcpy(txtEntryPoint, "main");
-        if (prevstate != curstate && dwarf_sym_from_name(&dwarf_symboltable, txtEntryPoint)!= NULL) {
+        if (prevstate != curstate && dwarf_sym_from_name(&dwarf_symboltable, txtEntryPoint, -1, -1) != NULL) {
           //??? also check whether "main" (or the chosen entry point) is a function
           curstate = STATE_START;     /* main() found, restart program at main */
           break;
@@ -4507,7 +4576,10 @@ int main(int argc, char *argv[])
           atprompt = 0;
           prevstate = curstate;
         } else if (gdbmi_isresult() != NULL) {
-          if (strncmp(gdbmi_isresult(), "running", 7) == 0)
+          /* after "interrupt" command, still switch to state "running" so that
+             "check_stopped()" is called to update the source file and line */
+          if ((stateparam[0] == STATEPARAM_EXEC_STOP && strncmp(gdbmi_isresult(), "done", 4) == 0)
+              || strncmp(gdbmi_isresult(), "running", 7) == 0)
             curstate = STATE_RUNNING;
           gdbmi_sethandled(0);
         }
@@ -4536,8 +4608,9 @@ int main(int argc, char *argv[])
           source_cursorline = source_execline;
           curstate = STATE_STOPPED;
           refreshflags = REFRESH_LOCALS | REFRESH_WATCHES;
+          /* only refresh memory if format & count is set, and if memory view is open */
           if (memdump.count > 0 && memdump.size > 0 && tab_states[TAB_MEMORY] == NK_MAXIMIZED)
-            refreshflags |= REFRESH_MEMORY; /* only refresh memory format & count is set and if memory view is open */
+            refreshflags |= REFRESH_MEMORY;
         }
         break;
       case STATE_STOPPED:
@@ -4828,7 +4901,7 @@ int main(int argc, char *argv[])
         if (!atprompt)
           break;
         if (prevstate != curstate) {
-          const DWARF_SYMBOLLIST *symbol = dwarf_sym_from_name(&dwarf_symboltable, "TRACESWO_BPS");
+          const DWARF_SYMBOLLIST *symbol = dwarf_sym_from_name(&dwarf_symboltable, "TRACESWO_BPS", -1, -1);
           assert(opt_swo.bitrate > 0 && opt_swo.clock > 0);
           scriptparams[0] = (opt_swo.mode == SWOMODE_MANCHESTER) ? 1 : 2;
           scriptparams[1] = opt_swo.clock / opt_swo.bitrate - 1;
@@ -4862,7 +4935,7 @@ int main(int argc, char *argv[])
         if (!atprompt)
           break;
         if (prevstate != curstate) {
-          const DWARF_SYMBOLLIST *symbol = dwarf_sym_from_name(&dwarf_symboltable, "TRACESWO_TER");
+          const DWARF_SYMBOLLIST *symbol = dwarf_sym_from_name(&dwarf_symboltable, "TRACESWO_TER", -1, -1);
           scriptparams[0] = 0;
           scriptparams[1] = (symbol != NULL) ? (unsigned long)symbol->data_addr : ~0;
           if (opt_swo.mode != SWOMODE_NONE && opt_swo.enabled) {
@@ -4946,7 +5019,11 @@ int main(int argc, char *argv[])
     /* parse GDB output (stderr first, because the prompt is given in stdout) */
     waitidle = 1;
     while (task_stderr(&task, cmdline, CMD_BUFSIZE) > 0) {
-      console_add(cmdline, STRFLG_ERROR);
+      int flag = STRFLG_ERROR;
+      /* silence a meaningless error (downgrade it to "notice") */
+      if (strstr(cmdline,"path for the index cache") != NULL)
+        flag = STRFLG_NOTICE;
+      console_add(cmdline, flag);
       waitidle = 0;
     }
     while (task_stdout(&task, cmdline, CMD_BUFSIZE) > 0) {
@@ -4977,7 +5054,6 @@ int main(int argc, char *argv[])
       #define SEPARATOR_HOR 4
       #define SEPARATOR_VER 4
       #define SPACING       8
-      struct nk_rect rc_canvas = nk_rect(0, 0, canvas_width, canvas_height);
       float splitter_columns[3];
       struct nk_rect bounds;
       int mouse_hover = 0;
@@ -4993,7 +5069,7 @@ int main(int argc, char *argv[])
 
       /* left column */
       if (nk_group_begin(ctx, "left", NK_WINDOW_NO_SCROLLBAR)) {
-        float splitter_rows[2];
+        float splitter_rows[2]; /* splitter between source view & GDB console */
 
         splitter_rows[0] = (canvas_height - SEPARATOR_VER - 4 * SPACING) * splitter_ver;
         splitter_rows[1] = (canvas_height - SEPARATOR_VER - 4 * SPACING) - splitter_rows[0];
@@ -5004,9 +5080,8 @@ int main(int argc, char *argv[])
           float combo_width;
           nk_layout_row_begin(ctx, NK_STATIC, ROW_HEIGHT, 7);
           nk_layout_row_push(ctx, BUTTON_WIDTH);
-          if (button_tooltip(ctx, "reset", " Reload and restart the program (Ctrl+F2)", &rc_canvas)
-              || nk_input_is_key_pressed(&ctx->input, NK_KEY_CTRL_F2))
-          {
+          if (button_tooltip(ctx, "reset", NK_KEY_CTRL_F2, (curstate != STATE_RUNNING),
+                             "Reload and restart the program (Ctrl+F2)")) {
             if (strlen(txtFilename) > 0 && access(txtFilename, 0) == 0)
               save_settings(txtParamFile, txtEntryPoint, opt_tpwr, opt_connect_srst,
                             opt_autodownload, txtSVDfile, &opt_swo);
@@ -5014,44 +5089,39 @@ int main(int argc, char *argv[])
           }
           nk_layout_row_push(ctx, BUTTON_WIDTH);
           if (curstate == STATE_RUNNING) {
-            if (button_tooltip(ctx, "stop", " Interrupt the program (Ctrl+F5)", &rc_canvas)
-                || nk_input_is_key_pressed(&ctx->input, NK_KEY_CTRL_F5))
+            if (button_tooltip(ctx, "stop", NK_KEY_CTRL_F5, nk_true, "Interrupt the program (Ctrl+F5)")
+                || nk_input_is_key_pressed(&ctx->input, NK_KEY_COPY)) /* Ctrl+C = break (plus "copy to clipboard") */
             {
               RESETSTATE(STATE_EXEC_CMD);
               stateparam[0] = STATEPARAM_EXEC_STOP;
             }
           } else {
-            if (button_tooltip(ctx, "cont", " Continue running (F5)", &rc_canvas)
-                || nk_input_is_key_pressed(&ctx->input, NK_KEY_F5))
+            if (button_tooltip(ctx, "cont", NK_KEY_F5, (curstate != STATE_RUNNING), "Continue running (F5)"))
             {
               RESETSTATE(STATE_EXEC_CMD);
               stateparam[0] = STATEPARAM_EXEC_CONTINUE;
             }
           }
           nk_layout_row_push(ctx, BUTTON_WIDTH);
-          if (button_tooltip(ctx, "next", " Step over (F10)", &rc_canvas)
-              || nk_input_is_key_pressed(&ctx->input, NK_KEY_F10))
+          if (button_tooltip(ctx, "next", NK_KEY_F10, (curstate != STATE_RUNNING), "Step over (F10)"))
           {
             RESETSTATE(STATE_EXEC_CMD);
             stateparam[0] = STATEPARAM_EXEC_NEXT;
           }
           nk_layout_row_push(ctx, BUTTON_WIDTH);
-          if (button_tooltip(ctx, "step", " Step into (F11)", &rc_canvas)
-              || nk_input_is_key_pressed(&ctx->input, NK_KEY_F11))
+          if (button_tooltip(ctx, "step", NK_KEY_F11, (curstate != STATE_RUNNING), "Step into (F11)"))
           {
             RESETSTATE(STATE_EXEC_CMD);
             stateparam[0] = STATEPARAM_EXEC_STEP;
           }
           nk_layout_row_push(ctx, BUTTON_WIDTH);
-          if (button_tooltip(ctx, "finish", " Step out of function (Shift+F11)", &rc_canvas)
-              || nk_input_is_key_pressed(&ctx->input, NK_KEY_SHIFT_F11))
+          if (button_tooltip(ctx, "finish", NK_KEY_SHIFT_F11, (curstate != STATE_RUNNING), "Step out of function (Shift+F11)"))
           {
             RESETSTATE(STATE_EXEC_CMD);
             stateparam[0] = STATEPARAM_EXEC_FINISH;
           }
           nk_layout_row_push(ctx, BUTTON_WIDTH);
-          if (button_tooltip(ctx, "until", " Run until cursor (F7)", &rc_canvas)
-              || nk_input_is_key_pressed(&ctx->input, NK_KEY_F7))
+          if (button_tooltip(ctx, "until", NK_KEY_F7, (curstate != STATE_RUNNING), "Run until cursor (F7)"))
           {
             RESETSTATE(STATE_EXEC_CMD);
             stateparam[0] = STATEPARAM_EXEC_UNTIL;
@@ -5064,7 +5134,8 @@ int main(int argc, char *argv[])
             if (curfile < 0 || (unsigned)curfile >= sources_count)
               curfile = 0;
             assert(sourcefiles != NULL);
-            source_cursorfile = nk_combo(ctx, sourcefiles, sources_count, curfile, (int)COMBOROW_CY, nk_vec2(combo_width, 10*ROW_HEIGHT));
+            source_cursorfile = nk_combo(ctx, sourcefiles, sources_count, curfile,
+                                         (int)COMBOROW_CY, nk_vec2(combo_width, 10*ROW_HEIGHT));
             if (source_cursorfile != curfile)
               source_cursorline = 1;  /* reset scroll */
           }
@@ -5076,77 +5147,80 @@ int main(int argc, char *argv[])
           }
           nk_layout_row_dynamic(ctx, splitter_rows[0] - ROW_HEIGHT - 4, 1);
           bounds = nk_widget_bounds(ctx);
-          source_widget(ctx, "source", opt_fontsize);
-          if (nk_input_mouse_clicked(&ctx->input, NK_BUTTON_LEFT, bounds)) {
-            int row, col;
-            source_mouse2char(ctx, "source", opt_fontsize, bounds, &row, &col);
-            if (col == 0) {
-              /* click in the margin: set/clear/enable/disable breakpoint
-                 - if there is no breakpoint on this line -> add a breakpoint
-                 - if there is an enabled breakpoint on this line -> disable it
-                 - if there is a disabled breakpoint on this line -> check
-                   whether the current line is the same as the one previously
-                   clicked on; if yes -> delete; if no: -> enable */
-              BREAKPOINT *bp = breakpoint_lookup(source_cursorfile, row);
-              if (bp == NULL) {
-                /* no breakpoint yet -> add (bu check first whether that can
-                   be done) */
-                if (source_cursorfile < sources_count) {
+          source_widget(ctx, "source", opt_fontsize, curstate == STATE_RUNNING);
+          if (curstate == STATE_STOPPED) {
+            /* handle input for the source view only when not running */
+            if (nk_input_mouse_clicked(&ctx->input, NK_BUTTON_LEFT, bounds)) {
+              int row, col;
+              source_mouse2char(ctx, "source", opt_fontsize, bounds, &row, &col);
+              if (col == 0) {
+                /* click in the margin: set/clear/enable/disable breakpoint
+                   - if there is no breakpoint on this line -> add a breakpoint
+                   - if there is an enabled breakpoint on this line -> disable it
+                   - if there is a disabled breakpoint on this line -> check
+                     whether the current line is the same as the one previously
+                     clicked on; if yes -> delete; if no: -> enable */
+                BREAKPOINT *bp = breakpoint_lookup(source_cursorfile, row);
+                if (bp == NULL) {
+                  /* no breakpoint yet -> add (but check first whether that can
+                     be done) */
+                  if (source_cursorfile < sources_count) {
+                    RESETSTATE(STATE_BREAK_TOGGLE);
+                    stateparam[0] = STATEPARAM_BP_ADD;
+                    stateparam[1] = source_cursorfile;
+                    stateparam[2] = row;
+                  }
+                } else if (bp->enabled) {
+                  /* enabled breakpoint -> disable */
                   RESETSTATE(STATE_BREAK_TOGGLE);
-                  stateparam[0] = STATEPARAM_BP_ADD;
-                  stateparam[1] = source_cursorfile;
-                  stateparam[2] = row;
+                  stateparam[0] = STATEPARAM_BP_DISABLE;
+                  stateparam[1] = bp->number;
+                } else if (prev_clicked_line != row) {
+                  /* disabled breakpoint & not a double click -> enable */
+                  RESETSTATE(STATE_BREAK_TOGGLE);
+                  stateparam[0] = STATEPARAM_BP_ENABLE;
+                  stateparam[1] = bp->number;
+                } else {
+                  /* disabled breakpoint & double click -> enable */
+                  RESETSTATE(STATE_BREAK_TOGGLE);
+                  stateparam[0] = STATEPARAM_BP_DELETE;
+                  stateparam[1] = bp->number;
                 }
-              } else if (bp->enabled) {
-                /* enabled breakpoint -> disable */
-                RESETSTATE(STATE_BREAK_TOGGLE);
-                stateparam[0] = STATEPARAM_BP_DISABLE;
-                stateparam[1] = bp->number;
-              } else if (prev_clicked_line != row) {
-                /* disabled breakpoint & not a double click -> enable */
-                RESETSTATE(STATE_BREAK_TOGGLE);
-                stateparam[0] = STATEPARAM_BP_ENABLE;
-                stateparam[1] = bp->number;
               } else {
-                /* disabled breakpoint & double click -> enable */
-                RESETSTATE(STATE_BREAK_TOGGLE);
-                stateparam[0] = STATEPARAM_BP_DELETE;
-                stateparam[1] = bp->number;
+                /* set the cursor line */
+                if (row > 0 && row <= source_linecount(source_cursorfile))
+                  source_cursorline = row;
               }
-            } else {
-              /* set the cursor line */
-              if (row > 0 && row <= source_linecount(source_cursorfile))
-                source_cursorline = row;
-            }
-            prev_clicked_line = row;
-          } else if (nk_input_is_mouse_hovering_rect(&ctx->input, bounds)) {
-            int row, col;
-            char sym[64];
-            source_mouse2char(ctx, "source", opt_fontsize, bounds, &row, &col);
-            if (row != prev_clicked_line)
-              prev_clicked_line = -1; /* mouse leaves the line clicked on, erase "repeat click" */
-            if (source_getsymbol(sym, sizearray(sym), row, col)) {
-              /* we are hovering over a symbol; if the symbol hovered over is
-                 different from the previous one -> clear the tooltip value */
-              if (strcmp(sym, statesymbol) != 0) {
-                ttipvalue[0] = '\0';
-                tooltip_tstamp = 0;
-                strlcpy(statesymbol, sym, sizearray(statesymbol));
-                /* if the new symbol is valid -> start timeout for hovering tooltip */
-                if (statesymbol[0] != '\0' && curstate == STATE_STOPPED)
-                  tooltip_tstamp = timestamp();
-              } else if (tooltip_tstamp != 0) {
-                unsigned long tstamp = timestamp();
-                if (tstamp - tooltip_tstamp >= TOOLTIP_DELAY) {
-                  RESETSTATE(STATE_HOVER_SYMBOL);
-                  tooltip_tstamp = 0; /* reset, to this case is only dropped into once */
+              prev_clicked_line = row;
+            } else if (nk_input_is_mouse_hovering_rect(&ctx->input, bounds)) {
+              int row, col;
+              char sym[64];
+              source_mouse2char(ctx, "source", opt_fontsize, bounds, &row, &col);
+              if (row != prev_clicked_line)
+                prev_clicked_line = -1; /* mouse leaves the line clicked on, erase "repeat click" */
+              if (source_getsymbol(sym, sizearray(sym), row, col)) {
+                /* we are hovering over a symbol; if the symbol hovered over is
+                   different from the previous one -> clear the tooltip value */
+                if (strcmp(sym, statesymbol) != 0) {
+                  ttipvalue[0] = '\0';
+                  tooltip_tstamp = 0;
+                  strlcpy(statesymbol, sym, sizearray(statesymbol));
+                  /* if the new symbol is valid -> start timeout for hovering tooltip */
+                  if (statesymbol[0] != '\0' && curstate == STATE_STOPPED)
+                    tooltip_tstamp = timestamp();
+                } else if (tooltip_tstamp != 0) {
+                  unsigned long tstamp = timestamp();
+                  if (tstamp - tooltip_tstamp >= TOOLTIP_DELAY) {
+                    RESETSTATE(STATE_HOVER_SYMBOL);
+                    tooltip_tstamp = 0; /* reset, to this case is only dropped into once */
+                  }
                 }
+                /* if the tooltip value is valid, show it */
+                if (ttipvalue[0] != '\0')
+                  nk_tooltip(ctx, ttipvalue);
+              } else {
+                ttipvalue[0] = '\0';
               }
-              /* if the tooltip value is valid, show it */
-              if (ttipvalue[0] != '\0')
-                nk_tooltip(ctx, ttipvalue, NULL);
-            } else {
-              ttipvalue[0] = '\0';
             }
           }
           nk_group_end(ctx);
@@ -5171,10 +5245,14 @@ int main(int argc, char *argv[])
           nk_layout_row_dynamic(ctx, splitter_rows[1] - ROW_HEIGHT - SPACING, 1);
           console_widget(ctx, "console-out", opt_fontsize);
           nk_layout_row_dynamic(ctx, ROW_HEIGHT, 1);
-          if (curstate < STATE_START && !atprompt) {
-            /* while initializing, say "please wait" */
-            strlcpy(console_edit, "Please wait...", sizearray(console_edit));
-            nk_edit_string_zero_terminated(ctx, NK_EDIT_FIELD | NK_EDIT_READ_ONLY, console_edit, sizearray(console_edit), nk_filter_ascii);
+          if ((curstate < STATE_START && !atprompt) || curstate == STATE_RUNNING) {
+            /* while initializing (or running), say "please wait" and disable entering a command */
+            if (curstate < STATE_START)
+              strlcpy(console_edit, "Initializing. Please wait...", sizearray(console_edit));
+            else if (curstate == STATE_RUNNING)
+              strlcpy(console_edit, "Running... (Press Ctrl+C to interrupt)", sizearray(console_edit));
+            nk_edit_string_zero_terminated(ctx, NK_EDIT_FIELD|NK_EDIT_READ_ONLY|NK_EDIT_NO_CURSOR,
+                                           console_edit, sizearray(console_edit), nk_filter_ascii);
             console_edit[0] = '\0';
           } else {
             /* true edit line */
@@ -5182,7 +5260,8 @@ int main(int argc, char *argv[])
               nk_edit_focus(ctx, (console_activate == 2) ? NK_EDIT_GOTO_END_ON_ACTIVATE : 0);
               console_activate = 1;
             }
-            result = nk_edit_string_zero_terminated(ctx, NK_EDIT_FIELD | NK_EDIT_SIG_ENTER, console_edit, sizearray(console_edit), nk_filter_ascii);
+            result = nk_edit_string_zero_terminated(ctx, NK_EDIT_FIELD|NK_EDIT_SIG_ENTER|NK_EDIT_CLIPBOARD,
+                                                    console_edit, sizearray(console_edit), nk_filter_ascii);
             console_isactive = ((result & NK_EDIT_ACTIVE) != 0);
             if (result & NK_EDIT_COMMITED) {
               char *ptr;
@@ -5330,13 +5409,13 @@ int main(int argc, char *argv[])
             nk_layout_row_push(ctx, LABEL_WIDTH);
             nk_label(ctx, "IP", NK_TEXT_ALIGN_LEFT | NK_TEXT_ALIGN_MIDDLE);
             nk_layout_row_push(ctx, edtwidth);
-            result = editctrl_tooltip(ctx, NK_EDIT_FIELD | NK_EDIT_SIG_ENTER,
+            result = editctrl_tooltip(ctx, NK_EDIT_FIELD|NK_EDIT_SIG_ENTER|NK_EDIT_CLIPBOARD,
                                       txtIPaddr, sizearray(txtIPaddr), nk_filter_ascii,
-                                      "IP address of the ctxLink", &rc_canvas);
+                                      "IP address of the ctxLink");
             if ((result & NK_EDIT_COMMITED) != 0 && is_ip_address(txtIPaddr))
               reconnect = 1;
             nk_layout_row_push(ctx, BROWSEBTN_WIDTH);
-            if (button_symbol_tooltip(ctx, NK_SYMBOL_TRIPLE_DOT, "Scan network for ctxLink probes.", &rc_canvas)) {
+            if (button_symbol_tooltip(ctx, NK_SYMBOL_TRIPLE_DOT, NK_KEY_NONE, "Scan network for ctxLink probes.")) {
               #if defined WIN32 || defined _WIN32
                 HCURSOR hcur = SetCursor(LoadCursor(NULL, IDC_WAIT));
               #endif
@@ -5368,8 +5447,7 @@ int main(int argc, char *argv[])
           nk_label(ctx, "GDB", NK_TEXT_LEFT);
           nk_layout_row_push(ctx, edtwidth);
           editctrl_tooltip(ctx, NK_EDIT_FIELD | NK_EDIT_READ_ONLY,
-                           basename, sizearray(basename), nk_filter_ascii,
-                           txtGDBpath, &rc_canvas);
+                           basename, sizearray(basename), nk_filter_ascii, txtGDBpath);
           nk_layout_row_push(ctx, BROWSEBTN_WIDTH);
           if (nk_button_symbol(ctx, NK_SYMBOL_TRIPLE_DOT)) {
             const char *s;
@@ -5393,8 +5471,7 @@ int main(int argc, char *argv[])
           nk_label(ctx, "File", NK_TEXT_LEFT);
           nk_layout_row_push(ctx, edtwidth);
           editctrl_tooltip(ctx, NK_EDIT_FIELD | NK_EDIT_READ_ONLY,
-                           basename, sizearray(basename), nk_filter_ascii,
-                           txtFilename, &rc_canvas);
+                           basename, sizearray(basename), nk_filter_ascii, txtFilename);
           nk_layout_row_push(ctx, BROWSEBTN_WIDTH);
           if (nk_button_symbol(ctx, NK_SYMBOL_TRIPLE_DOT)) {
             const char *s;
@@ -5417,9 +5494,9 @@ int main(int argc, char *argv[])
           nk_layout_row_push(ctx, LABEL_WIDTH);
           nk_label(ctx, "Entry point", NK_TEXT_LEFT);
           nk_layout_row_push(ctx, edtwidth + BROWSEBTN_WIDTH);
-          result = editctrl_tooltip(ctx, NK_EDIT_FIELD | NK_EDIT_SIG_ENTER,
+          result = editctrl_tooltip(ctx, NK_EDIT_FIELD|NK_EDIT_SIG_ENTER|NK_EDIT_CLIPBOARD,
                                     txtEntryPoint, sizearray(txtEntryPoint), nk_filter_ascii,
-                                    "The name of the entry point function (if not \"main\")", &rc_canvas);
+                                    "The name of the entry point function (if not \"main\")");
           nk_layout_row_end(ctx);
           if (result & NK_EDIT_ACTIVATED)
             console_activate = 0;
@@ -5431,8 +5508,7 @@ int main(int argc, char *argv[])
           nk_label(ctx, "SVD", NK_TEXT_LEFT);
           nk_layout_row_push(ctx, edtwidth);
           editctrl_tooltip(ctx, NK_EDIT_FIELD | NK_EDIT_READ_ONLY,
-                           basename, sizearray(basename), nk_filter_ascii,
-                           txtSVDfile, &rc_canvas);
+                           basename, sizearray(basename), nk_filter_ascii, txtSVDfile);
           nk_layout_row_push(ctx, BROWSEBTN_WIDTH);
           if (nk_button_symbol(ctx, NK_SYMBOL_TRIPLE_DOT)) {
             const char *s;
@@ -5444,7 +5520,7 @@ int main(int argc, char *argv[])
             if (s != NULL && strlen(s) < sizearray(txtSVDfile)) {
               strcpy(txtSVDfile, s);
               free((void*)s);
-              if (curstate > STATE_FILE_TEST) {
+              if (curstate > STATE_GET_SOURCES) {
                 svd_clear();
                 if (strlen(txtSVDfile) >0)
                   svd_load(txtSVDfile);
@@ -5457,7 +5533,7 @@ int main(int argc, char *argv[])
           //??? -environment-directory -r path "path" ...
           /* TPWR option */
           nk_layout_row_dynamic(ctx, ROW_HEIGHT, 1);
-          if (checkbox_tooltip(ctx, "Power Target (3.3V)", &opt_tpwr, "Let the debug probe provide power to the target", &rc_canvas)) {
+          if (checkbox_tooltip(ctx, "Power Target (3.3V)", &opt_tpwr, "Let the debug probe provide power to the target")) {
             if (!opt_tpwr)
               task_stdin(&task, "monitor tpwr disable\n");
             if (opt_tpwr && curstate != STATE_MON_SCAN)
@@ -5467,7 +5543,7 @@ int main(int argc, char *argv[])
           }
           /* reset during connect */
           nk_layout_row_dynamic(ctx, ROW_HEIGHT, 1);
-          if (checkbox_tooltip(ctx, "Reset target during connect", &opt_connect_srst, "Keep target MCU reset while debug probe attaches", &rc_canvas)) {
+          if (checkbox_tooltip(ctx, "Reset target during connect", &opt_connect_srst, "Keep target MCU reset while debug probe attaches")) {
             if (opt_connect_srst)
               task_stdin(&task, "monitor connect_srst enable\n");
             else
@@ -5477,10 +5553,10 @@ int main(int argc, char *argv[])
           /* auto-download */
           nk_layout_row_dynamic(ctx, ROW_HEIGHT, 1);
           checkbox_tooltip(ctx, "Download to target on mismatch", &opt_autodownload,
-                           "Download firmware to the target MCU if it is different from the code currently in it", &rc_canvas);
+                           "Download firmware to the target MCU if it is different from the code currently in it");
           /* show all GDB output */
           nk_layout_row_dynamic(ctx, ROW_HEIGHT, 1);
-          if (checkbox_tooltip(ctx, "Show all GDB messages", &opt_allmsg, "Do not filter GDB output in the console to only relevant messages", &rc_canvas))
+          if (checkbox_tooltip(ctx, "Show all GDB messages", &opt_allmsg, "Do not filter GDB output in the console to only relevant messages"))
             console_hiddenflags = opt_allmsg ? 0 : STRFLG_NOTICE | STRFLG_RESULT | STRFLG_EXEC | STRFLG_MI_INPUT | STRFLG_TARGET;
           nk_tree_state_pop(ctx);
         } /* config */
@@ -5567,7 +5643,7 @@ int main(int argc, char *argv[])
             nk_label(ctx, watch->expr, NK_TEXT_LEFT);
             nk_layout_row_push(ctx, valwidth);
             if (watch->value != NULL) {
-              //??? if integer, add tooltip with decimal, hex & binary
+              //??? ability to change the format
               if (watch->flags & WATCHFLG_CHANGED)
                 nk_label_colored(ctx, watch->value, NK_TEXT_LEFT, nk_rgb(255, 100, 128));
               else
@@ -5593,7 +5669,8 @@ int main(int argc, char *argv[])
           if (w < 150)
             w = 150;
           nk_layout_row_push(ctx, w);
-          result = nk_edit_string_zero_terminated(ctx, NK_EDIT_FIELD | NK_EDIT_SIG_ENTER, watch_edit, sizearray(watch_edit), nk_filter_ascii);
+          result = nk_edit_string_zero_terminated(ctx, NK_EDIT_FIELD|NK_EDIT_SIG_ENTER|NK_EDIT_CLIPBOARD,
+                                                  watch_edit, sizearray(watch_edit), nk_filter_ascii);
           nk_layout_row_push(ctx, ROW_HEIGHT);
           if ((nk_button_symbol(ctx, NK_SYMBOL_PLUS) || (result & NK_EDIT_COMMITED)) && curstate == STATE_STOPPED && strlen(watch_edit) > 0) {
             RESETSTATE(STATE_WATCH_TOGGLE);
@@ -5650,7 +5727,7 @@ int main(int argc, char *argv[])
         /* highlight tab text if new content arrives and the tab is closed */
         highlight = !tab_states[TAB_SEMIHOSTING] && stringlist_count(&semihosting_root) != semihosting_lines;
         if (highlight)
-          nk_style_push_color(ctx,&ctx->style.tab.text, nk_rgba(255, 255, 160, 255));
+          nk_style_push_color(ctx,&ctx->style.tab.text, nk_rgb(255, 255, 160));
         result = nk_tree_state_push(ctx, NK_TREE_TAB, "Semihosting output", &tab_states[TAB_SEMIHOSTING]);
         if (highlight)
           nk_style_pop_color(ctx);
@@ -5690,7 +5767,7 @@ int main(int argc, char *argv[])
         /* highlight tab text if new content arrives and the tab is closed */
         highlight = !tab_states[TAB_SERMON] && sermon_countlines() != sermon_lines;
         if (highlight)
-          nk_style_push_color(ctx,&ctx->style.tab.text, nk_rgba(255, 255, 160, 255));
+          nk_style_push_color(ctx,&ctx->style.tab.text, nk_rgb(255, 255, 160));
         result = nk_tree_state_push(ctx, NK_TREE_TAB, "Serial console", &tab_states[TAB_SERMON]);
         if (highlight)
           nk_style_pop_color(ctx);
@@ -5720,7 +5797,7 @@ int main(int argc, char *argv[])
               linecount += 1;
             }
             if (!sermon_isopen()) {
-              struct nk_color clr = nk_rgb(255, 120, 135);
+              struct nk_color clr = nk_rgb(255, 80, 100);
               nk_layout_row_dynamic(ctx, opt_fontsize, 1);
               nk_label_colored(ctx, "No port opened", NK_TEXT_LEFT, clr);
               linecount += 1;
@@ -5759,7 +5836,7 @@ int main(int argc, char *argv[])
         /* highlight tab text if new content arrives and the tab is closed */
         highlight = !tab_states[TAB_SWO] && tracestring_count() != swo_lines;
         if (highlight)
-          nk_style_push_color(ctx,&ctx->style.tab.text, nk_rgba(255, 255, 160, 255));
+          nk_style_push_color(ctx,&ctx->style.tab.text, nk_rgb(255, 255, 160));
         result = nk_tree_state_push(ctx, NK_TREE_TAB, "SWO tracing", &tab_states[TAB_SWO]);
         if (highlight)
           nk_style_pop_color(ctx);
@@ -5802,7 +5879,8 @@ int main(int argc, char *argv[])
           nk_layout_row(ctx, NK_DYNAMIC, ROW_HEIGHT, 3, bottomrow_ratio);
           nk_label(ctx, (popup_active == POPUP_INFO) ? "More info" : "More help", NK_TEXT_LEFT);
           nk_edit_focus(ctx, 0);
-          result = nk_edit_string_zero_terminated(ctx, NK_EDIT_FIELD | NK_EDIT_SIG_ENTER, help_edit, sizearray(help_edit), nk_filter_ascii);
+          result = nk_edit_string_zero_terminated(ctx, NK_EDIT_FIELD|NK_EDIT_SIG_ENTER|NK_EDIT_CLIPBOARD,
+                                                  help_edit, sizearray(help_edit), nk_filter_ascii);
           if ((result & NK_EDIT_COMMITED) != 0 && strlen(help_edit) > 0) {
             stringlist_clear(&helptext_root);
             if (strncmp(help_edit, "help", 4) != 0 && strncmp(help_edit, "info", 4) != 0) {
@@ -5946,7 +6024,7 @@ int main(int argc, char *argv[])
   console_clear();
   sources_clear(nk_true);
   bmscript_clear();
-  dwarf_cleanup(&dwarf_linetable,&dwarf_symboltable,&dwarf_filetable);
+  dwarf_cleanup(&dwarf_linetable, &dwarf_symboltable, &dwarf_filetable);
   tcpip_cleanup();
   sermon_close();
   return exitcode;
