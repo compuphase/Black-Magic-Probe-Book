@@ -23,6 +23,7 @@ As an aside: the utilities have more command line options that just `-f`. The `-
 Prerequisites are
 * libbsd-dev
 * libusb-1.0-dev
+* libgtk-3-dev
 * glfw-3.3 (libglfw3-dev)
 
 The development packages for these modules must be present. If you build glfw from source (as a static library), you can configure the path to the include files and the library in makefile.cfg. In particular, on some Linux distributions the library is called `glfw` rather than `glfw3`; in this case, create a `makefile.cfg` file in the same directory as `Makefile.linux` and add the following line to it:
