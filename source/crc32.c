@@ -1,4 +1,6 @@
-
+/* Implementation of CRC32 as used by GDB
+ * GDB uses the ITU I.363.5 algorithm, see: https://github.com/Michaelangel007/crc32
+ */
 #include "crc32.h"
 
 /* CRC32 table is copied from the GDB source

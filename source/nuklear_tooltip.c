@@ -117,11 +117,11 @@ nk_bool button_symbol_tooltip(struct nk_context *ctx, enum nk_symbol_type symbol
   return result;
 }
 
-nk_bool checkbox_tooltip(struct nk_context *ctx, const char *label, nk_bool *active,
+nk_bool checkbox_tooltip(struct nk_context *ctx, const char *label, nk_bool *active, nk_flags align,
                          const char *tiptext)
 {
   struct nk_rect bounds = nk_widget_bounds(ctx);
-  nk_bool result = nk_checkbox_label(ctx, label, active);
+  nk_bool result = nk_checkbox_label(ctx, label, active, align);
   tooltip(ctx, bounds, tiptext);
   return result;
 }

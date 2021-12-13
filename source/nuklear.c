@@ -260,7 +260,7 @@ enum nk_toggle_type {
 NK_LIB nk_bool nk_toggle_behavior(const struct nk_input *in, struct nk_rect select, nk_flags *state, nk_bool active);
 NK_LIB void nk_draw_checkbox(struct nk_command_buffer *out, nk_flags state, const struct nk_style_toggle *style, nk_bool active, const struct nk_rect *label, const struct nk_rect *selector, const struct nk_rect *cursors, const char *string, int len, const struct nk_user_font *font);
 NK_LIB void nk_draw_option(struct nk_command_buffer *out, nk_flags state, const struct nk_style_toggle *style, nk_bool active, const struct nk_rect *label, const struct nk_rect *selector, const struct nk_rect *cursors, const char *string, int len, const struct nk_user_font *font);
-NK_LIB nk_bool nk_do_toggle(nk_flags *state, struct nk_command_buffer *out, struct nk_rect r, nk_bool *active, const char *str, int len, enum nk_toggle_type type, const struct nk_style_toggle *style, const struct nk_input *in, const struct nk_user_font *font);
+NK_LIB nk_bool nk_do_toggle(nk_flags *state, struct nk_command_buffer *out, struct nk_rect r, nk_bool *active, const char *str, int len, enum nk_toggle_type type, const struct nk_style_toggle *style, const struct nk_input *in, const struct nk_user_font *font, const nk_flags align);
 
 /* progress */
 NK_LIB nk_size nk_progress_behavior(nk_flags *state, struct nk_input *in, struct nk_rect r, struct nk_rect cursor, nk_size max, nk_size value, nk_bool modifiable);
@@ -16031,6 +16031,129 @@ nk_layout_space_end(struct nk_context *ctx)
     layout->row.item_offset = 0;
     nk_zero(&layout->row.item, sizeof(layout->row.item));
 }
+NK_LIB struct nk_panel*
+nk_layout_subspace_get_parent_layout(struct nk_context *ctx)
+{
+    struct nk_window *win;
+    struct nk_panel *layout;
+
+    NK_ASSERT(ctx);
+    NK_ASSERT(ctx->current);
+    NK_ASSERT(ctx->current->layout);
+    if (!ctx || !ctx->current || !ctx->current->layout)
+        return NULL;
+
+    win = ctx->current;
+    layout = win->layout;
+
+    while (layout) {
+        if (layout->row.type == NK_LAYOUT_DYNAMIC_FREE)
+            break;
+
+        if (layout->row.type == NK_LAYOUT_STATIC_FREE)
+            break;
+
+        layout = layout->parent;
+    }
+    return layout;
+}
+NK_API struct nk_rect
+nk_layout_subspace_bounds(struct nk_context *ctx)
+{
+    struct nk_rect ret;
+    struct nk_panel *parent_layout;
+
+    ret.x = 0;
+    ret.y = 0;
+    ret.w = 0;
+    ret.h = 0;
+
+    NK_ASSERT(ctx);
+    if (!ctx)
+        return ret;
+
+    parent_layout = nk_layout_subspace_get_parent_layout(ctx);
+    if (!parent_layout) /* not between nk_layout_space_begin() and nk_layout_space_end() */
+        return ret;
+
+    if (parent_layout->row.type == NK_LAYOUT_DYNAMIC_FREE) {
+        if  (parent_layout->row.item.x == 0.0f && parent_layout->row.item.w == 0.0f &&
+             parent_layout->row.item.y == 0.0f && parent_layout->row.item.h == 0.0f )
+            return ret;
+
+        struct nk_rect rect_bounds;
+        rect_bounds.x = parent_layout->clip.x;
+        rect_bounds.y = parent_layout->clip.y;
+        rect_bounds.w = parent_layout->clip.w;
+        rect_bounds.h = parent_layout->row.height;
+
+        struct nk_rect rect_relative;
+        rect_relative.x = parent_layout->row.item.x;
+        rect_relative.y = parent_layout->row.item.y;
+        rect_relative.w = parent_layout->row.item.w;
+        rect_relative.h = parent_layout->row.item.h;
+
+        ret.x = rect_bounds.x + (rect_bounds.w * rect_relative.x);
+        ret.y = rect_bounds.y + (rect_bounds.h * rect_relative.y);
+        ret.w = rect_bounds.w * rect_relative.w;
+        ret.h = rect_bounds.h * rect_relative.h;
+        return ret;
+    }
+    else if (parent_layout->row.type == NK_LAYOUT_STATIC_FREE) {
+        ret = parent_layout->row.item;
+        ret.y += parent_layout->at_y;
+        return ret;
+    } else return ret;
+}
+NK_API struct nk_rect
+nk_layout_subspace_remaining(struct nk_context *ctx)
+{
+    struct nk_rect ret;
+    struct nk_window *win;
+    struct nk_panel *layout;
+    struct nk_panel *parent_layout;
+    NK_ASSERT(ctx);
+    NK_ASSERT(ctx->current);
+    NK_ASSERT(ctx->current->layout);
+
+    ret.x = 0;
+    ret.y = 0;
+    ret.w = 0;
+    ret.h = 0;
+
+    if (!ctx || !ctx->current || !ctx->current->layout)
+        return ret;
+
+    win = ctx->current;
+    layout = win->layout;
+
+    parent_layout = nk_layout_subspace_get_parent_layout(ctx);
+    if (!parent_layout) /* not between nk_layout_space_begin() and nk_layout_space_end() */
+        return ret;
+
+    if (parent_layout->row.type == NK_LAYOUT_DYNAMIC_FREE) {
+        struct nk_rect bounds;
+        bounds = nk_layout_subspace_bounds(ctx);
+        ret.x = bounds.x;
+        ret.y = bounds.y + layout->at_y;
+        ret.w = bounds.w;
+        ret.h = bounds.h - layout->at_y;
+
+        /* required for special case */
+        if (ret.h < 0)
+            ret.h *= -1;
+
+        return ret;
+    }
+    else if (parent_layout->row.type == NK_LAYOUT_STATIC_FREE) {
+        ret.x = parent_layout->row.item.x;
+        ret.y = layout->at_y + parent_layout->at_y;
+        ret.w = parent_layout->row.item.w;
+        ret.h = parent_layout->row.item.h - (layout->at_y - parent_layout->row.item.y);
+
+        return ret;
+    } else return ret;
+}
 NK_API void
 nk_layout_space_push(struct nk_context *ctx, struct nk_rect rect)
 {
@@ -16839,7 +16962,10 @@ nk_group_begin_titled(struct nk_context *ctx, const char *id,
         NK_ASSERT(y_offset);
         if (!x_offset || !y_offset) return 0;
         *x_offset = *y_offset = 0;
-    } else y_offset = nk_find_value(win, id_hash+1);
+    } else {
+        y_offset = nk_find_value(win, id_hash+1);
+        NK_ASSERT(y_offset);
+    }
     return nk_group_scrolled_offset_begin(ctx, x_offset, y_offset, title, flags);
 }
 NK_API nk_bool
@@ -16916,7 +17042,10 @@ nk_group_set_scroll(struct nk_context *ctx, const char *id, nk_uint x_offset, nk
         NK_ASSERT(y_offset_ptr);
         if (!x_offset_ptr || !y_offset_ptr) return;
         *x_offset_ptr = *y_offset_ptr = 0;
-    } else y_offset_ptr = nk_find_value(win, id_hash+1);
+    } else {
+        y_offset_ptr = nk_find_value(win, id_hash+1);
+        NK_ASSERT(y_offset_ptr);
+    }
     *x_offset_ptr = x_offset;
     *y_offset_ptr = y_offset;
 }
@@ -18600,7 +18729,7 @@ nk_do_toggle(nk_flags *state,
     struct nk_command_buffer *out, struct nk_rect r,
     nk_bool *active, const char *str, int len, enum nk_toggle_type type,
     const struct nk_style_toggle *style, const struct nk_input *in,
-    const struct nk_user_font *font)
+    const struct nk_user_font *font, const nk_flags align)
 {
     int was_active;
     struct nk_rect bounds;
@@ -18627,7 +18756,14 @@ nk_do_toggle(nk_flags *state,
     select.w = font->height;
     select.h = select.w;
     select.y = r.y + r.h/2.0f - select.h/2.0f;
-    select.x = r.x;
+    if (align & NK_TEXT_ALIGN_RIGHT) {
+        float text_width = font->width(font->userdata, font->height, (const char*)str, len);
+        select.x = r.x + r.w - text_width - select.w - 2 * style->padding.x;
+    }
+    else if (align & NK_TEXT_ALIGN_CENTERED) {
+        float text_width = font->width(font->userdata, font->height, (const char*)str, len);
+        select.x = r.x + ((r.w - text_width - select.w - 2 * style->padding.x) / 2);
+    } else select.x = r.x; /* NK_TEXT_LEFT */
 
     /* calculate the bounds of the cursor inside the selector */
     cursor.x = select.x + style->padding.x + style->border;
@@ -18663,7 +18799,7 @@ nk_do_toggle(nk_flags *state,
  *
  * --------------------------------------------------------------*/
 NK_API nk_bool
-nk_check_text(struct nk_context *ctx, const char *text, int len, nk_bool active)
+nk_check_text(struct nk_context *ctx, const char *text, int len, nk_bool active, nk_flags align)
 {
     struct nk_window *win;
     struct nk_panel *layout;
@@ -18687,25 +18823,25 @@ nk_check_text(struct nk_context *ctx, const char *text, int len, nk_bool active)
     if (!state) return active;
     in = (state == NK_WIDGET_ROM || layout->flags & NK_WINDOW_ROM) ? 0 : &ctx->input;
     nk_do_toggle(&ctx->last_widget_state, &win->buffer, bounds, &active,
-        text, len, NK_TOGGLE_CHECK, &style->checkbox, in, style->font);
+        text, len, NK_TOGGLE_CHECK, &style->checkbox, in, style->font, align);
     return active;
 }
 NK_API unsigned int
 nk_check_flags_text(struct nk_context *ctx, const char *text, int len,
-    unsigned int flags, unsigned int value)
+    unsigned int flags, unsigned int value, nk_flags align)
 {
     int old_active;
     NK_ASSERT(ctx);
     NK_ASSERT(text);
     if (!ctx || !text) return flags;
     old_active = (int)((flags & value) & value);
-    if (nk_check_text(ctx, text, len, old_active))
+    if (nk_check_text(ctx, text, len, old_active, align))
         flags |= value;
     else flags &= ~value;
     return flags;
 }
 NK_API nk_bool
-nk_checkbox_text(struct nk_context *ctx, const char *text, int len, nk_bool *active)
+nk_checkbox_text(struct nk_context *ctx, const char *text, int len, nk_bool *active, nk_flags align)
 {
     int old_val;
     NK_ASSERT(ctx);
@@ -18713,12 +18849,12 @@ nk_checkbox_text(struct nk_context *ctx, const char *text, int len, nk_bool *act
     NK_ASSERT(active);
     if (!ctx || !text || !active) return 0;
     old_val = *active;
-    *active = nk_check_text(ctx, text, len, *active);
+    *active = nk_check_text(ctx, text, len, *active, align);
     return old_val != *active;
 }
 NK_API nk_bool
 nk_checkbox_flags_text(struct nk_context *ctx, const char *text, int len,
-    unsigned int *flags, unsigned int value)
+    unsigned int *flags, unsigned int value, nk_flags align)
 {
     nk_bool active;
     NK_ASSERT(ctx);
@@ -18727,30 +18863,30 @@ nk_checkbox_flags_text(struct nk_context *ctx, const char *text, int len,
     if (!ctx || !text || !flags) return 0;
 
     active = (int)((*flags & value) & value);
-    if (nk_checkbox_text(ctx, text, len, &active)) {
+    if (nk_checkbox_text(ctx, text, len, &active, align)) {
         if (active) *flags |= value;
         else *flags &= ~value;
         return 1;
     }
     return 0;
 }
-NK_API nk_bool nk_check_label(struct nk_context *ctx, const char *label, nk_bool active)
+NK_API nk_bool nk_check_label(struct nk_context *ctx, const char *label, nk_bool active, nk_flags align)
 {
-    return nk_check_text(ctx, label, nk_strlen(label), active);
+    return nk_check_text(ctx, label, nk_strlen(label), active, align);
 }
 NK_API unsigned int nk_check_flags_label(struct nk_context *ctx, const char *label,
-    unsigned int flags, unsigned int value)
+    unsigned int flags, unsigned int value, nk_flags align)
 {
-    return nk_check_flags_text(ctx, label, nk_strlen(label), flags, value);
+    return nk_check_flags_text(ctx, label, nk_strlen(label), flags, value, align);
 }
-NK_API nk_bool nk_checkbox_label(struct nk_context *ctx, const char *label, nk_bool *active)
+NK_API nk_bool nk_checkbox_label(struct nk_context *ctx, const char *label, nk_bool *active, nk_flags align)
 {
-    return nk_checkbox_text(ctx, label, nk_strlen(label), active);
+    return nk_checkbox_text(ctx, label, nk_strlen(label), active, align);
 }
 NK_API nk_bool nk_checkbox_flags_label(struct nk_context *ctx, const char *label,
-    unsigned int *flags, unsigned int value)
+    unsigned int *flags, unsigned int value, nk_flags align)
 {
-    return nk_checkbox_flags_text(ctx, label, nk_strlen(label), flags, value);
+    return nk_checkbox_flags_text(ctx, label, nk_strlen(label), flags, value, align);
 }
 /*----------------------------------------------------------------
  *
@@ -18758,7 +18894,7 @@ NK_API nk_bool nk_checkbox_flags_label(struct nk_context *ctx, const char *label
  *
  * --------------------------------------------------------------*/
 NK_API nk_bool
-nk_option_text(struct nk_context *ctx, const char *text, int len, nk_bool is_active)
+nk_option_text(struct nk_context *ctx, const char *text, int len, nk_bool is_active, nk_flags align)
 {
     struct nk_window *win;
     struct nk_panel *layout;
@@ -18782,11 +18918,16 @@ nk_option_text(struct nk_context *ctx, const char *text, int len, nk_bool is_act
     if (!state) return (int)state;
     in = (state == NK_WIDGET_ROM || layout->flags & NK_WINDOW_ROM) ? 0 : &ctx->input;
     nk_do_toggle(&ctx->last_widget_state, &win->buffer, bounds, &is_active,
-        text, len, NK_TOGGLE_OPTION, &style->option, in, style->font);
+        text, len, NK_TOGGLE_OPTION, &style->option, in, style->font, align);
     return is_active;
 }
 NK_API nk_bool
-nk_radio_text(struct nk_context *ctx, const char *text, int len, nk_bool *active)
+nk_option_label(struct nk_context *ctx, const char *label, nk_bool active, nk_flags align)
+{
+    return nk_option_text(ctx, label, nk_strlen(label), active, align);
+}
+NK_API nk_bool
+nk_radio_text(struct nk_context *ctx, const char *text, int len, nk_bool *active, nk_flags align)
 {
     int old_value;
     NK_ASSERT(ctx);
@@ -18794,18 +18935,13 @@ nk_radio_text(struct nk_context *ctx, const char *text, int len, nk_bool *active
     NK_ASSERT(active);
     if (!ctx || !text || !active) return 0;
     old_value = *active;
-    *active = nk_option_text(ctx, text, len, old_value);
+    *active = nk_option_text(ctx, text, len, old_value, align);
     return old_value != *active;
 }
 NK_API nk_bool
-nk_option_label(struct nk_context *ctx, const char *label, nk_bool active)
+nk_radio_label(struct nk_context *ctx, const char *label, nk_bool *active, nk_flags align)
 {
-    return nk_option_text(ctx, label, nk_strlen(label), active);
-}
-NK_API nk_bool
-nk_radio_label(struct nk_context *ctx, const char *label, nk_bool *active)
-{
-    return nk_radio_text(ctx, label, nk_strlen(label), active);
+    return nk_radio_text(ctx, label, nk_strlen(label), active, align);
 }
 
 
@@ -19469,25 +19605,33 @@ nk_do_progress(nk_flags *state,
     float prog_scale;
     nk_size prog_value;
     struct nk_rect cursor;
+    struct nk_rect outer;
 
     NK_ASSERT(style);
     NK_ASSERT(out);
     if (!out || !style) return 0;
 
+    /* calculate progressbar outer rect */
+    outer.w = NK_MAX(bounds.w, 2 * (style->margin.x + style->border ) );
+    outer.h = NK_MAX(bounds.h, 2 * (style->margin.y + style->border ) );
+    outer = nk_pad_rect(bounds, nk_vec2(style->margin.x + style->border,
+                                        style->margin.y + style->border));
+
     /* calculate progressbar cursor */
-    cursor.w = NK_MAX(bounds.w, 2 * style->padding.x + 2 * style->border);
-    cursor.h = NK_MAX(bounds.h, 2 * style->padding.y + 2 * style->border);
-    cursor = nk_pad_rect(bounds, nk_vec2(style->padding.x + style->border, style->padding.y + style->border));
+    cursor.w = NK_MAX(bounds.w, 2 * (style->padding.x + style->margin.x + style->border ) );
+    cursor.h = NK_MAX(bounds.h, 2 * (style->padding.y + style->margin.y + style->border ) );
+    cursor = nk_pad_rect(bounds, nk_vec2(style->padding.x + style->margin.x + style->border,
+                                         style->padding.y + style->margin.y + style->border));
     prog_scale = (float)value / (float)max;
 
     /* update progressbar */
     prog_value = NK_MIN(value, max);
-    prog_value = nk_progress_behavior(state, in, bounds, cursor,max, prog_value, modifiable);
+    prog_value = nk_progress_behavior(state, in, outer, cursor,max, prog_value, modifiable);
     cursor.w = cursor.w * prog_scale;
 
     /* draw progressbar */
     if (style->draw_begin) style->draw_begin(out, style->userdata);
-    nk_draw_progress(out, *state, style, &bounds, &cursor, value, max);
+    nk_draw_progress(out, *state, style, &outer, &cursor, value, max);
     if (style->draw_end) style->draw_end(out, style->userdata);
     return prog_value;
 }

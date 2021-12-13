@@ -343,8 +343,9 @@ unsigned tracestring_count(void)
   return count;
 }
 
-void tracestring_process(int enabled)
+int tracestring_process(int enabled)
 {
+  int count = 0;
   while (tracequeue_head != tracequeue_tail) {
     if (enabled) {
       const unsigned char *pktdata = trace_queue[tracequeue_head].data;
@@ -420,12 +421,16 @@ void tracestring_process(int enabled)
         pktdata += len + 1;
         pktlen -= len + 1;
       }
-      if (chan < NUM_CHANNELS && buflen > 0)
+      if (chan < NUM_CHANNELS && buflen > 0) {
         tracestring_add(chan, buffer, buflen, trace_queue[tracequeue_head].timestamp);
+        count++;
+      }
     }
   skip_packet:
     tracequeue_head = (tracequeue_head + 1) % PACKET_NUM;
   }
+
+  return count;
 }
 
 int tracestring_find(const char *text, int curline)

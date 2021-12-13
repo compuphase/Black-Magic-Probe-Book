@@ -4,7 +4,7 @@
  * The * input is a file in the Trace Stream Description Language (TDSL), the
  * primary specification language for CTF.
  *
- * Copyright 2019-2020 CompuPhase
+ * Copyright 2019-2021 CompuPhase
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -21,6 +21,7 @@
 
 #include <assert.h>
 #include <ctype.h>
+#include <errno.h>
 #include <stdarg.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -467,7 +468,7 @@ void generate_funcstubs(FILE *fp, unsigned flags, const char *trace_func, const 
   fprintf(fp, "#endif /* NTRACE */\n");
 }
 
-static void usage(void)
+static void usage(int status)
 {
   printf("tragegen - generate C source & header files from TSDL specifications,"
          "           for tracing in the Common Trace Format.\n\n"
@@ -483,6 +484,7 @@ static void usage(void)
          "-o=name   Base output filename; a .c and .h suffix is added to this name.\n"
          "-s        SWO tracing: use channels for stream ids.\n"
          "-t        Force basic C types on arguments, if available.\n");
+  exit(status);
 }
 
 static void unknown_option(const char *option)
@@ -500,10 +502,8 @@ int main(int argc, char *argv[])
   unsigned opt_flags;
   int idx;
 
-  if (argc <= 1) {
-    usage();
-    return 1;
-  }
+  if (argc <= 1)
+    usage(EXIT_FAILURE);
 
   /* command line options */
   infile[0] = '\0';
@@ -515,8 +515,8 @@ int main(int argc, char *argv[])
       switch (argv[idx][1]) {
       case '?':
       case 'h':
-        usage();
-        return 0;
+        usage(EXIT_SUCCESS);
+        break;
       case 'c':
         if (strcmp(argv[idx]+1, "c99") == 0)
           opt_flags |= FLAG_C99;
@@ -588,7 +588,7 @@ int main(int argc, char *argv[])
   }
   if (strlen(infile) == 0) {
     fprintf(stderr, "No input file specified.\n");
-    return 1;
+    return EXIT_FAILURE;
   }
   if (strlen(outfile) == 0) {
     #if defined _WIN32
@@ -608,7 +608,7 @@ int main(int argc, char *argv[])
   }
 
   if (!ctf_parse_init(infile))
-    return 1; /* error message already issued via ctf_error_notify() */
+    return EXIT_FAILURE; /* error message already issued via ctf_error_notify() */
   if (ctf_parse_run()) {
     FILE *fp;
     int done_msg = 1;
@@ -619,7 +619,7 @@ int main(int argc, char *argv[])
       generate_prototypes(fp, opt_flags, trace_func, &includepaths);  //??? pass in timestamp_func
       fclose(fp);
     } else {
-      fprintf(stderr, "Error writing file %s.\n", outfile);
+      fprintf(stderr, "Error writing file \"%s\", error %d.\n", outfile, errno);
       done_msg = 0;
     }
 
@@ -636,12 +636,12 @@ int main(int argc, char *argv[])
       *(ptr + 1) = 'c';
       fclose(fp);
     } else {
-      fprintf(stderr, "Error writing file %s.\n", outfile);
+      fprintf(stderr, "Error writing file \"%s\", error %d.\n", outfile, errno);
       done_msg = 0;
     }
 
     if (done_msg)
-      printf("Generated %s.\n", outfile);
+      printf("Generated \"%s\".\n", outfile);
   }
 
   ctf_parse_cleanup();
@@ -652,6 +652,6 @@ int main(int argc, char *argv[])
     free(path);
   }
 
-  return 0;
+  return EXIT_SUCCESS;
 }
 

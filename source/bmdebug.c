@@ -63,6 +63,7 @@
 #include <string.h>
 #include <time.h>
 
+#include "bmcommon.h"
 #include "bmp-scan.h"
 #include "bmp-script.h"
 #include "dwarf.h"
@@ -71,6 +72,7 @@
 #include "noc_file_dialog.h"
 #include "nuklear_mousepointer.h"
 #include "nuklear_style.h"
+#include "nuklear_splitter.h"
 #include "nuklear_tooltip.h"
 #include "minIni.h"
 #include "serialmon.h"
@@ -127,7 +129,7 @@ static DWARF_PATHLIST dwarf_filetable = { NULL};
 #define STRFLG_TARGET   0x0080  /* '@' */
 #define STRFLG_MI_INPUT 0x0100  /* '-' */
 #define STRFLG_SCRIPT   0x0200  /* log output from script */
-#define STRFLG_MON_OUT  0x0200  /* monitor echo */
+#define STRFLG_MON_OUT  0x0400  /* monitor echo */
 #define STRFLG_STARTUP  0x4000
 #define STRFLG_HANDLED  0x8000
 
@@ -444,8 +446,18 @@ static char *format_string(char *buffer)
           *tgt = '\\';
           break;
         default:
-          assert(0);
-          *tgt = '?';
+          if (isdigit(*src)) {
+            int v = *src - '0';
+            int count = 0;
+            while (isdigit(*(src + 1)) && count++ < 3) {
+              src += 1;
+              v = (v << 3) + *src - '0';
+            }
+            *tgt = (char)v;
+          } else {
+            assert(0);
+            *tgt = '?';
+          }
         }
       } else {
         *tgt = *src;
@@ -533,7 +545,7 @@ static const char *gdbmi_leader(char *buffer, int *flags, char **next_segment)
   case '@': /* target output in MI mode */
     *flags |= STRFLG_TARGET;
     buffer += 1;
-    tail =format_string(buffer);
+    tail = format_string(buffer);
     break;
   }
 
@@ -734,8 +746,8 @@ static int console_autocomplete(char *text, size_t textsize, const DWARF_SYMBOLL
     { "find", NULL, NULL },
     { "finish", "fin", NULL },
     { "frame", "f", NULL },
-    { "help", NULL, "break breakpoints data files keyboard monitor running serial stack status support trace user-defined" },
-    { "info", NULL, "args breakpoints frame functions locals scope set sources stack variables vtbl" },
+    { "help", NULL, "break breakpoints data files keyboard monitor running serial stack status support svd trace user-defined" },
+    { "info", NULL, "args breakpoints frame functions locals scope set sources stack svd variables vtbl" },
     { "list", NULL, "%func %var %file" },
     { "load", NULL, NULL },
     { "monitor", NULL, "connect_srst hard_srst jtag_scan morse option swdp_scan targets tpwr traceswo vector_catch" },
@@ -922,7 +934,7 @@ static int console_autocomplete(char *text, size_t textsize, const DWARF_SYMBOLL
                 const char *name;
                 word += prefix_len;
                 len -= prefix_len;
-                for (iter = 0; !result && (name = svd_peripheral(iter, NULL)) != NULL; iter++) {
+                for (iter = 0; !result && (name = svd_peripheral(iter, NULL, NULL)) != NULL; iter++) {
                   if (strncmp(word, name, len) == 0) {
                     first_suffix = "->";
                     if (first == NULL)
@@ -951,7 +963,7 @@ static int console_autocomplete(char *text, size_t textsize, const DWARF_SYMBOLL
                 periph_name[ln - prefix_len] = '\0';
                 word += ln;
                 ln = strlen(sep);
-                for (iter = 0; !result && (name = svd_register(periph_name, iter, NULL)) != NULL; iter++) {
+                for (iter = 0; !result && (name = svd_register(periph_name, iter, NULL, NULL, NULL)) != NULL; iter++) {
                   if (strncmp(sep, name, ln) == 0) {
                     first_prefix = "->";
                     if (first == NULL)
@@ -2336,6 +2348,8 @@ static int is_idle(void)
 #define BUTTON_WIDTH    (3.0 * opt_fontsize)
 #define BROWSEBTN_WIDTH (1.5 * opt_fontsize)
 
+static int opt_fontsize = FONT_HEIGHT;
+
 
 static void textview_widget(struct nk_context *ctx, const char *id,
                             const STRINGLIST *content, float rowheight)
@@ -2876,6 +2890,190 @@ static int load_settings(const char *filename, char *entrypoint, size_t entrypoi
   return 1;
 }
 
+static void svd_info(const char *params, STRINGLIST *textroot)
+{
+  stringlist_add(textroot, "System View Description", 0);
+  stringlist_add(textroot, "", 0);
+
+  assert(params != NULL);
+  if (*params == '\0') {
+    unsigned long address;
+    const char *name, *description;
+    int idx = 0;
+    nk_bool has_info = nk_false;
+    while ((name = svd_peripheral(idx, &address, &description)) != NULL) {
+      has_info = nk_true;
+      if (idx == 0)
+        stringlist_add(textroot, "Peripherals:", 0);
+      char line[200];
+      sprintf(line, "    [%lx] %s", address, name);
+      if (description != NULL) {
+        /* add first sentence of description */
+        strcat(line, " -- ");
+        const char *ptr;
+        for (ptr = description; *ptr != '\0' && *ptr != '.'; ptr++)
+          {}
+        int count = (ptr - description);
+        int len = strlen(line);
+        if (len + count < sizearray(line)) {
+          memcpy(line + len, description, count);
+          line[len + count] = '\0';
+        }
+      }
+      stringlist_add(textroot, line, 0);
+      idx += 1;
+    }
+    if (!has_info)
+      stringlist_add(textroot, "No SVD file loaded, no information available", 0);
+  } else {
+    char *params_upcase = NULL;
+    unsigned long address;
+    const char *periph_name, *reg_name, *description;
+    int result = svd_lookup(params, 0, &periph_name, &reg_name, &address, &description);
+    if (result == 0) {
+      /* on failure, also try with params converted to upper case */
+      #if !defined __linux__
+        params_upcase = strdup(params);
+        if (params_upcase != NULL) {
+          strupr(params_upcase);	//??? make strupr() for Linux
+          result = svd_lookup(params_upcase, 0, &periph_name, &reg_name, &address, &description);
+        }
+      #endif
+    }
+    if (result > 0) {
+      char line[200];
+      if (reg_name != NULL && result == 1) {
+        /* register details */
+        sprintf(line, "[%lx] %s%s->%s:", address, svd_mcu_prefix(), periph_name, reg_name);
+        stringlist_add(textroot, line, 0);
+        /* full description, reformatted in strings of 80 characters */
+        if (description != NULL) {
+          const char *head = description;
+          while (*head != '\0') {
+            int cutoff = strlen(head);
+            if (cutoff > 80)
+              cutoff = 80;
+            int len = cutoff;
+            while (len > 0 && head[len] > ' ')
+              len -= 1;
+            if (len == 0) {
+              /* single "word" of 80 characters or longer */
+              int len = cutoff;
+              while (head[len] > ' ')
+                len += 1;
+            }
+            if (len < sizearray(line)) {
+              strncpy(line, head, len);
+              line[len] = '\0';
+              stringlist_add(textroot, line, 0);
+            } else {
+              /* remainder text does not fit in line variable -> just dump the
+                 remainder (this should not occur) */
+              stringlist_add(textroot, head, 0);
+              len = strlen(head);
+            }
+            head += len;
+            while (*head != '\0' && *head <= ' ')
+              head++;
+          }
+        }
+        stringlist_add(textroot, "", 0);
+        /* register fields */
+        int idx = 0;
+        const char *name;
+        short low_bit, high_bit;
+        while ((name = svd_bitfield(periph_name, reg_name, idx, &low_bit, &high_bit, &description)) != NULL) {
+          strcpy(line, "    ");
+          if (low_bit >= 0 && high_bit > low_bit)
+            sprintf(line + strlen(line), "[%d:%d] ", high_bit, low_bit);
+          else if (low_bit >= 0)
+            sprintf(line + strlen(line), "[%d] ", low_bit);
+          strlcat(line, name, sizearray(line));
+          if (description != NULL) {
+            strlcat(line, " -- ", sizearray(line));
+            strlcat(line, description, sizearray(line));
+          }
+          stringlist_add(textroot, line, 0);
+          idx += 1;
+        }
+      } else if (reg_name != NULL && result > 1) {
+        /* register name with implied peripheral, and there are multiple
+           peripherals with this register name */
+        stringlist_add(textroot, "Multiple matches:", 0);
+        for (int idx = 0; idx < result; idx++) {
+          if (idx > 0) {
+            /* name for index 0 was already looked up, so only look up registers
+               above 0 */
+            svd_lookup((params_upcase != NULL) ? params_upcase : params, idx,
+                       &periph_name, &reg_name, &address, &description);
+          }
+          sprintf(line, "    [%lx] %s%s->%s", address, svd_mcu_prefix(),
+                  periph_name, reg_name);
+          if (description != NULL) {
+            /* add first sentence of description */
+            strcat(line, " -- ");
+            const char *ptr;
+            for (ptr = description; *ptr != '\0' && *ptr != '.'; ptr++)
+              {}
+            int count = (ptr - description);
+            int len = strlen(line);
+            if (len + count < sizearray(line)) {
+              memcpy(line + len, description, count);
+              line[len + count] = '\0';
+            }
+          }
+          stringlist_add(textroot, line, 0);
+        }
+      } else {
+        /* peripheral details, list all registers */
+        assert(result == 1 && reg_name == NULL);
+        sprintf(line, "%s%s:", svd_mcu_prefix(), periph_name);
+        stringlist_add(textroot, line, 0);
+        if (description != NULL)
+          stringlist_add(textroot, description, 0);
+        stringlist_add(textroot, "", 0);
+        /* list all registers in the peripheral */
+        stringlist_add(textroot, "Registers:", 0);
+        unsigned long offset;
+        int range;
+        const char *name, *description;
+        int idx = 0;
+        while ((name = svd_register(periph_name, idx, &offset, &range, &description)) != NULL) {
+          char formatted_name[50];
+          if (strstr(name, "%s") != NULL && strlen(name) < sizearray(formatted_name) - 8) {
+            /* replace index */
+            strcpy(formatted_name, name);
+            char *ptr = strchr(formatted_name, '%');
+            assert(ptr != NULL);
+            sprintf(ptr, "[%d]", range);
+            name = formatted_name;
+          }
+          sprintf(line, "    [%lx] %s", address + offset, name);
+          if (description != NULL) {
+            /* add first sentence of description (so, the text up to the first period) */
+            strcat(line, " -- ");
+            const char *ptr;
+            for (ptr = description; *ptr != '\0' && *ptr != '.'; ptr++)
+              {}
+            int count = (ptr - description);
+            int len = strlen(line);
+            if (len + count < sizearray(line)) {
+              memcpy(line + len, description, count);
+              line[len + count] = '\0';
+            }
+          }
+          stringlist_add(textroot, line, 0);
+          idx += 1;
+        }
+      }
+    } else {
+      stringlist_add(textroot, "Specified register of peripheral is not found", 0);
+    }
+    if (params_upcase != NULL)
+      free((void*)params_upcase);
+  }
+}
+
 static int handle_help_cmd(char *command, STRINGLIST *textroot, int *active)
 {
   assert(command != NULL);
@@ -2886,10 +3084,11 @@ static int handle_help_cmd(char *command, STRINGLIST *textroot, int *active)
     const char *cmdptr = skipwhite(command + 4);
     *active = 1;
     if (*cmdptr == '\0') {
-      stringlist_add(textroot, "Front end topics.", 0);
+      stringlist_add(textroot, "Front-end topics.", 0);
       stringlist_add(textroot, "", 0);
       stringlist_add(textroot, "keyboard -- list special keys.", 0);
       stringlist_add(textroot, "serial -- configure the serial monitor.", 0);
+      stringlist_add(textroot, "svd -- show or list peripherals and registers.", 0);
       stringlist_add(textroot, "trace -- configure SWO tracing.", 0);
       stringlist_add(textroot, "", 0);
       /* drop to the default "return 0", so that GDB's help follows */
@@ -2938,6 +3137,13 @@ static int handle_help_cmd(char *command, STRINGLIST *textroot, int *active)
       stringlist_add(textroot, "", 0);
       stringlist_add(textroot, "serial clear -- clear the serial monitor view (delete contents).", 0);
       stringlist_add(textroot, "serial save [filename] -- save the contents in the serial monitor to a file.", 0);
+    } else if (TERM_EQU(cmdptr, "svd", 3)) {
+      stringlist_add(textroot, "Show information from the System View Description file.", 0);
+      stringlist_add(textroot, "", 0);
+      stringlist_add(textroot, "info svd -- list all peripherals.", 0);
+      stringlist_add(textroot, "info svd [peripheral] -- list registers in the peripheral.", 0);
+      stringlist_add(textroot, "info svd [register] -- look up register, display matching registers.", 0);
+      stringlist_add(textroot, "info svd [peripheral->register] -- show register details.", 0);
     } else if (TERM_EQU(cmdptr, "trace", 5) || TERM_EQU(cmdptr, "tracepoint", 10) || TERM_EQU(cmdptr, "tracepoints", 11)) {
       stringlist_add(textroot, "Configure SWO tracing.", 0);
       stringlist_add(textroot, "", 0);
@@ -2988,11 +3194,22 @@ static int handle_info_cmd(char *command, STRINGLIST *textroot, int *active,
   if (TERM_EQU(command, "info", 4)) {
     const char *cmdptr = skipwhite(command + 4);
     *active = 2;
-    if (TERM_EQU(cmdptr, "trace", 5)) {
+    if (*cmdptr == '\0') {
+      stringlist_add(textroot, "Front-end topics.", 0);
+      stringlist_add(textroot, "", 0);
+      stringlist_add(textroot, "serial -- status of the serial monitor.", 0);
+      stringlist_add(textroot, "svd -- list peripherals and registers.", 0);
+      stringlist_add(textroot, "trace -- status SWO tracing.", 0);
+      stringlist_add(textroot, "", 0);
+      /* drop to the default "return 0", so that GDB's info follows */
+    } else if (TERM_EQU(cmdptr, "trace", 5)) {
       trace_info_mode(swo, 1, textroot);
       return 1;
     } else if (TERM_EQU(cmdptr, "serial", 6)) {
       serial_info_mode(textroot);
+      return 1;
+    } else if (TERM_EQU(cmdptr, "svd", 3)) {
+      svd_info(skipwhite(cmdptr + 3), textroot);
       return 1;
     }
   } else if (*active == 2) {
@@ -3320,7 +3537,7 @@ static void trace_info_channel(int ch_start, int ch_end, STRINGLIST *textroot)
         strlcat(msg, ptr, sizearray(msg));
         strlcat(msg, "\"", sizearray(msg));
       }
-      //??? colour
+      //??? enhancement: add option to set colour for trace messages on this channel
     }
     if (textroot != NULL) {
       stringlist_add(textroot, msg, 0);
@@ -3485,7 +3702,7 @@ static int handle_trace_cmd(const char *command, SWOSETTINGS *swo)
       ch_end = NUM_CHANNELS - 1;
     } else {
       ch_start =(int)strtol(ptr,(char**)&ptr, 10);
-      //??? allow a name as well as a number
+      //??? enhancement (especially with CTF): allow a channel name as well as a number
       ptr = (char*)skipwhite(ptr);
       if (*ptr == '-') {
         ch_end = (int)strtol(ptr + 1, (char**)&ptr, 10);
@@ -3840,74 +4057,2029 @@ static void usage(const char *invalid_option)
          "-h        This help.\n");
 }
 
+static void config_read_tabstate(const char *key, enum nk_collapse_states *state, SIZERBAR *sizer,
+                                 enum nk_collapse_states default_state, float default_height,
+                                 const char *configfile)
+{
+  assert(state != NULL);
+  *state = default_state;
+  if (sizer != NULL)
+    sizer->size = default_height;
+
+  assert(key != NULL);
+  char valstr[64];
+  int opened;
+  float size;
+  ini_gets("Views", key, "", valstr, sizearray(valstr), configfile);
+  int result = sscanf(valstr, "%d %f", &opened, &size);
+  if (result >= 1)
+    *state = opened;
+  if (sizer != NULL && result >= 2 && size > ROW_HEIGHT)
+    sizer->size = size;
+}
+
+static void config_write_tabstate(const char *key, enum nk_collapse_states state, const SIZERBAR *sizer,
+                                  const char *configfile)
+{
+  assert(key != NULL);
+  char valstr[64];
+  if (sizer != NULL)
+    sprintf(valstr, "%d %f", state, sizer->size);
+  else
+    sprintf(valstr, "%d", state);
+  ini_puts("Views", key, valstr, configfile);
+}
+
+typedef struct tagAPPSTATE {
+  int curstate;                 /**< current (or new) state */
+  int prevstate;                /**< previous state (to detect state changes) */
+  int nextstate;                /**< on occasion, follow-up state depends on logic */
+  int stateparam[3];            /**< parameters for state change */
+  int refreshflags;             /**< flags for refresh of various views */
+  int probe;                    /**< selected debug probe (index) */
+  int netprobe;                 /**< index for the IP address (pseudo-probe) */
+  const char **probelist;       /**< list of detected probes */
+  int probe_type;               /**< BMP or ctxLink (needed to select manchester/async mode) */
+  char port_gdb[64];            /**< COM port for GDB */
+  char IPaddr[64];              /**< IP address for network probe */
+  char mcu_family[64];          /**< detected MCU family (on attach) */
+  char mcu_architecture[32];    /**< detected ARM architecture (on attach) */
+  char GDBpath[_MAX_PATH];      /**< path to GDB executable */
+  TASK task;                    /**< GDB task */
+  char *cmdline;                /**< command & response buffer (for GDB task) */
+  char port_sermon[64];         /**< COM port name for serial monitor */
+  int sermon_baud;              /**< serial monitor baud rate */
+  int trace_status;             /**< status of TRACESWO */
+  unsigned char trace_endpoint; /**< USB endpoint for TRACESWO */
+  nk_bool tpwr;                 /**< option: tpwr (target power) */
+  nk_bool connect_srst;         /**< option: keep in reset during connect */
+  nk_bool autodownload;         /**< option: download ELF file to target on changes */
+  nk_bool force_download;       /**< temporary option: download ELF file */
+  nk_bool allmsg;               /**< option: show all GDB output (instead of filtered) */
+  nk_bool atprompt;             /**< whether GDB has displayed the prompt (and waits for input) */
+  nk_bool monitor_cmd_active;   /**< to silence output of scripts */
+  nk_bool waitidle;             /**< whether to yield while waiting for GUI input */
+  nk_bool is_attached;          /**< BMP is attached */
+  nk_bool cont_is_run;          /**< "cont" command must be interpreted as "run" command */
+  nk_bool warn_source_tstamps;  /**< whether warning must be given when source files are more recent than target */
+  unsigned watchseq;            /**< sequence number for watches */
+  int console_activate;         /**< whether the edit line should get the focus (and whether to move the cursor to the end) */
+  nk_bool console_isactive;     /**< whether the console is currently active */
+  char console_edit[256];       /**< edit line for console input */
+  const STRINGLIST *console_mark;/**< marker to help parsing GDB output */
+  STRINGLIST consoleedit_root;  /**< edit history */
+  const STRINGLIST *consoleedit_next; /**< start point in history to search backward from */
+  char Filename[_MAX_PATH];     /**< ELF file being debugged */
+  char ParamFile[_MAX_PATH];    /**< debug parameters for the ELF file */
+  char SVDfile[_MAX_PATH];      /**< target MCU definitions */
+  char EntryPoint[64];          /**< name of the entry-point function (e.g. "main") */
+  SWOSETTINGS swo;              /**< TRACESWO configuration */
+  unsigned long scriptparams[4];/**< parameters for running configuration scripts (for TRACESWO) */
+  const char **sourcefiles;     /**< array of all source files */
+  int prev_clicked_line;        /**< line in source view that was previously clicked on (to detect multiple clicks on the same line) */
+  char statesymbol[128];        /**< name of the symbol hovered over (in source view) */
+  char ttipvalue[256];          /**< text for variable value in tooltip (when hovering above symbol) */
+  unsigned long tooltip_tstamp; /**< time-stamp of when the tooltip popped up */
+  char watch_edit[128];         /**< edit string for watches panel */
+  MEMDUMP memdump;              /**< information for memory watch/view */
+  unsigned semihosting_lines;   /**< number of lines in the semihosting view (to detect new incoming lines) */
+  unsigned sermon_lines;        /**< number of lines in the serial monitor (to detect new incoming lines) */
+  unsigned swo_lines;           /**< number of lines in the traceswo monitor (to detect new incoming lines) */
+  int popup_active;             /**< whether a popup is active (and which one) */
+  char help_edit[128];          /**< edit field for help and info popup windows */
+  SIZERBAR sizerbar_memory;     /**< info for resizable memory dump view */
+  SIZERBAR sizerbar_semihosting;/**< info for resizable semihosting output view */
+  SIZERBAR sizerbar_serialmon;  /**< info for resizable serial monitor */
+  SIZERBAR sizerbar_swo;        /**< info for resizable TRACESWO monitor */
+} APPSTATE;
+
+enum {
+  TAB_CONFIGURATION,
+  TAB_BREAKPOINTS,
+  TAB_WATCHES,
+  TAB_MEMORY,
+  TAB_SEMIHOSTING,
+  TAB_SERMON,
+  TAB_SWO,
+  /* --- */
+  TAB_COUNT
+};
+
+enum {
+  POPUP_NONE,
+  POPUP_HELP,
+  POPUP_INFO,
+  /* --- */
+  POPUP_COUNT
+};
+
+#define SPACING       8 /* general spacing between widgets */
+#define SEPARATOR_HOR 4
+#define SEPARATOR_VER 4
+
+#define CMD_BUFSIZE   2048
+
+#define RESETSTATE(app, state)  ((app)->prevstate = (app)->nextstate = -1, (app)->waitidle = nk_false, (app)->curstate = (state))
+#define MOVESTATE(app, state)   ((app)->waitidle = nk_false, (app)->curstate = (state))
+#define STATESWITCH(app)        ((app)->curstate != (app)->prevstate)
+#define MARKSTATE(app)          ((app)->prevstate = (app)->curstate)
+
+
+static void help_popup(struct nk_context *ctx, APPSTATE *state, float canvas_width, float canvas_height)
+{
+  assert(ctx != NULL);
+  assert(state != NULL);
+
+  float w = opt_fontsize * 40;
+  if (w > canvas_width - 20)  /* clip "ideal" help window size of canvas size */
+    w = canvas_width - 20;
+  float h = canvas_height * 0.75;
+  struct nk_rect rc = nk_rect((canvas_width - w) / 2, (canvas_height - h) / 2, w, h);
+  if (nk_popup_begin(ctx, NK_POPUP_STATIC, "Help", NK_WINDOW_NO_SCROLLBAR, rc)) {
+    static const float bottomrow_ratio[] = {0.15, 0.68, 0.17};
+    nk_layout_row_dynamic(ctx, h - 1.75*ROW_HEIGHT, 1);
+    textview_widget(ctx, "help", helptext_root.next, opt_fontsize);
+    nk_layout_row(ctx, NK_DYNAMIC, ROW_HEIGHT, 3, bottomrow_ratio);
+    nk_label(ctx, (state->popup_active == POPUP_INFO) ? "More info" : "More help", NK_TEXT_LEFT);
+    nk_edit_focus(ctx, 0);
+    int result = nk_edit_string_zero_terminated(ctx, NK_EDIT_FIELD|NK_EDIT_SIG_ENTER|NK_EDIT_CLIPBOARD,
+                                                state->help_edit, sizearray(state->help_edit),
+                                                nk_filter_ascii);
+    if ((result & NK_EDIT_COMMITED) != 0 && strlen(state->help_edit) > 0) {
+      stringlist_clear(&helptext_root);
+      if (strncmp(state->help_edit, "help", 4) != 0 && strncmp(state->help_edit, "info", 4) != 0) {
+        /* insert "help" or "info" before the command */
+        memmove(state->help_edit + 5, state->help_edit, strlen(state->help_edit) + 1);
+        memmove(state->help_edit, (state->popup_active == POPUP_INFO) ? "info " : "help ", 5);
+      }
+      if (!handle_help_cmd(state->help_edit, &helptext_root, &state->popup_active)
+          && !handle_info_cmd(state->help_edit, &helptext_root, &state->popup_active, &state->swo))
+      {
+        strlcat(state->help_edit, "\n", sizearray(state->help_edit));
+        if (task_stdin(&state->task, state->help_edit))
+          gdbmi_sethandled(0); /* clear result on new input */
+      }
+      state->help_edit[0] = '\0';
+    }
+    if (nk_button_label(ctx, "Close") || nk_input_is_key_pressed(&ctx->input, NK_KEY_ESCAPE)) {
+      state->popup_active = POPUP_NONE;
+      state->atprompt = nk_true;
+      state->help_edit[0] = '\0';
+      stringlist_clear(&helptext_root);
+      nk_popup_close(ctx);
+    }
+
+    /* handle cursor/scrolling keys */
+    int delta = 0;
+    if (nk_input_is_key_pressed(&ctx->input, NK_KEY_UP))
+      delta = -opt_fontsize;
+    else if (nk_input_is_key_pressed(&ctx->input, NK_KEY_DOWN))
+      delta = opt_fontsize;
+    else if (nk_input_is_key_pressed(&ctx->input, NK_KEY_SCROLL_UP))
+      delta = - (h - 2.5*ROW_HEIGHT);
+    else if (nk_input_is_key_pressed(&ctx->input, NK_KEY_SCROLL_DOWN))
+      delta = (h - 2.5*ROW_HEIGHT);
+    else if (nk_input_is_key_pressed(&ctx->input, NK_KEY_SCROLL_TOP))
+      delta = INT_MIN;
+    else if (nk_input_is_key_pressed(&ctx->input, NK_KEY_SCROLL_BOTTOM))
+      delta = INT_MAX;
+    //??? enhancement: tab-completion, back to previous help/info screen
+    if (delta != 0) {
+      nk_uint xoffs, yoffs;
+      nk_group_get_scroll(ctx, "help", &xoffs, &yoffs);
+      if (delta < 0 && yoffs < -delta) {
+        yoffs = 0;
+      } else {
+        yoffs += delta;
+        unsigned rows = stringlist_count(&helptext_root);
+        int maxscroll = (int)(rows + 1) * (opt_fontsize + 4) - (h - 2*ROW_HEIGHT - 2*SPACING);
+        if (maxscroll < 0)
+          yoffs = 0;
+        else if (yoffs > maxscroll)
+          yoffs = maxscroll;
+      }
+      nk_group_set_scroll(ctx, "help", xoffs, yoffs);
+    }
+
+    nk_popup_end(ctx);
+  } else {
+    state->popup_active = POPUP_NONE;
+    state->atprompt = nk_true;
+  }
+}
+
+static void button_bar(struct nk_context *ctx, APPSTATE *state, float panel_width)
+{
+  assert(ctx != NULL);
+  assert(state != NULL);
+
+  nk_layout_row_push(ctx, BUTTON_WIDTH);
+  if (button_tooltip(ctx, "reset", NK_KEY_CTRL_F2, (state->curstate != STATE_RUNNING),
+                     "Reload and restart the program (Ctrl+F2)")) {
+    if (strlen(state->Filename) > 0 && access(state->Filename, 0) == 0)
+      save_settings(state->ParamFile, state->EntryPoint, state->tpwr, state->connect_srst,
+                    state->autodownload, state->SVDfile, &state->swo);
+    RESETSTATE(state, STATE_FILE);
+  }
+  nk_layout_row_push(ctx, BUTTON_WIDTH);
+  if (state->curstate == STATE_RUNNING) {
+    if (button_tooltip(ctx, "stop", NK_KEY_CTRL_F5, nk_true, "Interrupt the program (Ctrl+F5)")
+        || nk_input_is_key_pressed(&ctx->input, NK_KEY_COPY)) /* Ctrl+C = break (plus "copy to clipboard") */
+    {
+      RESETSTATE(state, STATE_EXEC_CMD);
+      state->stateparam[0] = STATEPARAM_EXEC_STOP;
+    }
+  } else {
+    if (button_tooltip(ctx, "cont", NK_KEY_F5, (state->curstate != STATE_RUNNING), "Continue running (F5)"))
+    {
+      RESETSTATE(state, STATE_EXEC_CMD);
+      state->stateparam[0] = STATEPARAM_EXEC_CONTINUE;
+    }
+  }
+  nk_layout_row_push(ctx, BUTTON_WIDTH);
+  if (button_tooltip(ctx, "next", NK_KEY_F10, (state->curstate != STATE_RUNNING), "Step over (F10)"))
+  {
+    RESETSTATE(state, STATE_EXEC_CMD);
+    state->stateparam[0] = STATEPARAM_EXEC_NEXT;
+  }
+  nk_layout_row_push(ctx, BUTTON_WIDTH);
+  if (button_tooltip(ctx, "step", NK_KEY_F11, (state->curstate != STATE_RUNNING), "Step into (F11)"))
+  {
+    RESETSTATE(state, STATE_EXEC_CMD);
+    state->stateparam[0] = STATEPARAM_EXEC_STEP;
+  }
+  nk_layout_row_push(ctx, BUTTON_WIDTH);
+  if (button_tooltip(ctx, "finish", NK_KEY_SHIFT_F11, (state->curstate != STATE_RUNNING), "Step out of function (Shift+F11)"))
+  {
+    RESETSTATE(state, STATE_EXEC_CMD);
+    state->stateparam[0] = STATEPARAM_EXEC_FINISH;
+  }
+  nk_layout_row_push(ctx, BUTTON_WIDTH);
+  if (button_tooltip(ctx, "until", NK_KEY_F7, (state->curstate != STATE_RUNNING), "Run until cursor (F7)"))
+  {
+    RESETSTATE(state, STATE_EXEC_CMD);
+    state->stateparam[0] = STATEPARAM_EXEC_UNTIL;
+    state->stateparam[1] = source_cursorline;
+  }
+  float combo_width = panel_width - 6 * (BUTTON_WIDTH + 5);
+  nk_layout_row_push(ctx, combo_width);
+  if (sources_count > 0) {
+    int curfile = source_cursorfile;
+    if (curfile < 0 || (unsigned)curfile >= sources_count)
+      curfile = 0;
+    assert(state->sourcefiles != NULL);
+    source_cursorfile = nk_combo(ctx, state->sourcefiles, sources_count, curfile,
+                                 (int)COMBOROW_CY, nk_vec2(combo_width, 10*ROW_HEIGHT));
+    if (source_cursorfile != curfile)
+      source_cursorline = 1;  /* reset scroll */
+  }
+}
+
+static void sourcecode_view(struct nk_context *ctx, APPSTATE *state)
+{
+  assert(ctx != NULL);
+  assert(state != NULL);
+
+  if (source_cursorfile >= 0 && source_cursorfile < sources_count) {
+    int linecount = source_linecount(source_cursorfile);
+    if (source_cursorline > linecount)
+      source_cursorline = linecount;
+  }
+
+  struct nk_rect bounds = nk_widget_bounds(ctx);
+  source_widget(ctx, "source", opt_fontsize, state->curstate == STATE_RUNNING);
+  if (state->curstate == STATE_STOPPED) {
+    /* handle input for the source view only when not running */
+    if (nk_input_mouse_clicked(&ctx->input, NK_BUTTON_LEFT, bounds)) {
+      int row, col;
+      source_mouse2char(ctx, "source", opt_fontsize, bounds, &row, &col);
+      if (col == 0) {
+        /* click in the margin: set/clear/enable/disable breakpoint
+           - if there is no breakpoint on this line -> add a breakpoint
+           - if there is an enabled breakpoint on this line -> disable it
+           - if there is a disabled breakpoint on this line -> check
+             whether the current line is the same as the one previously
+             clicked on; if yes -> delete; if no: -> enable */
+        BREAKPOINT *bp = breakpoint_lookup(source_cursorfile, row);
+        if (bp == NULL) {
+          /* no breakpoint yet -> add (but check first whether that can
+             be done) */
+          if (source_cursorfile < sources_count) {
+            RESETSTATE(state, STATE_BREAK_TOGGLE);
+            state->stateparam[0] = STATEPARAM_BP_ADD;
+            state->stateparam[1] = source_cursorfile;
+            state->stateparam[2] = row;
+          }
+        } else if (bp->enabled) {
+          /* enabled breakpoint -> disable */
+          RESETSTATE(state, STATE_BREAK_TOGGLE);
+          state->stateparam[0] = STATEPARAM_BP_DISABLE;
+          state->stateparam[1] = bp->number;
+        } else if (state->prev_clicked_line != row) {
+          /* disabled breakpoint & not a double click -> enable */
+          RESETSTATE(state, STATE_BREAK_TOGGLE);
+          state->stateparam[0] = STATEPARAM_BP_ENABLE;
+          state->stateparam[1] = bp->number;
+        } else {
+          /* disabled breakpoint & double click -> enable */
+          RESETSTATE(state, STATE_BREAK_TOGGLE);
+          state->stateparam[0] = STATEPARAM_BP_DELETE;
+          state->stateparam[1] = bp->number;
+        }
+      } else {
+        /* set the cursor line */
+        if (row > 0 && row <= source_linecount(source_cursorfile))
+          source_cursorline = row;
+      }
+      state->prev_clicked_line = row;
+    } else if (nk_input_is_mouse_hovering_rect(&ctx->input, bounds)) {
+      int row, col;
+      char sym[64];
+      source_mouse2char(ctx, "source", opt_fontsize, bounds, &row, &col);
+      if (row != state->prev_clicked_line)
+        state->prev_clicked_line = -1; /* mouse leaves the line clicked on, erase "repeat click" */
+      if (source_getsymbol(sym, sizearray(sym), row, col)) {
+        /* we are hovering over a symbol; if the symbol hovered over is
+           different from the previous one -> clear the tooltip value */
+        if (strcmp(sym, state->statesymbol) != 0) {
+          state->ttipvalue[0] = '\0';
+          state->tooltip_tstamp = 0;
+          strlcpy(state->statesymbol, sym, sizearray(state->statesymbol));
+          /* if the new symbol is valid -> start timeout for hovering tooltip */
+          if (state->statesymbol[0] != '\0' && state->curstate == STATE_STOPPED)
+            state->tooltip_tstamp = timestamp();
+        } else if (state->tooltip_tstamp != 0) {
+          unsigned long tstamp = timestamp();
+          if (tstamp - state->tooltip_tstamp >= TOOLTIP_DELAY) {
+            RESETSTATE(state, STATE_HOVER_SYMBOL);
+            state->tooltip_tstamp = 0; /* reset, to this case is only dropped into once */
+          }
+        }
+        /* if the tooltip value is valid, show it */
+        if (state->ttipvalue[0] != '\0')
+          nk_tooltip(ctx, state->ttipvalue);
+      } else {
+        state->ttipvalue[0] = '\0';
+      }
+    }
+  }
+}
+
+static void console_view(struct nk_context *ctx, APPSTATE *state,
+                         enum nk_collapse_states tab_states[TAB_COUNT],
+                         float panel_height)
+{
+  assert(ctx != NULL);
+  assert(state != NULL);
+  assert(tab_states != NULL);
+  if (nk_group_begin(ctx, "console", NK_WINDOW_NO_SCROLLBAR|NK_WINDOW_BORDER)) {
+    nk_layout_row_dynamic(ctx, panel_height - ROW_HEIGHT - SPACING, 1);
+    console_widget(ctx, "console-out", opt_fontsize);
+    nk_layout_row_dynamic(ctx, ROW_HEIGHT, 1);
+
+    if ((state->curstate < STATE_START && !state->atprompt) || state->curstate == STATE_RUNNING) {
+      /* while initializing (or running), say "please wait" and disable entering a command */
+      if (state->curstate < STATE_START)
+        strlcpy(state->console_edit, "Initializing. Please wait...", sizearray(state->console_edit));
+      else if (state->curstate == STATE_RUNNING)
+        strlcpy(state->console_edit, "Running... (Press Ctrl+C to interrupt)", sizearray(state->console_edit));
+      nk_edit_string_zero_terminated(ctx, NK_EDIT_FIELD|NK_EDIT_READ_ONLY|NK_EDIT_NO_CURSOR,
+                                     state->console_edit, sizearray(state->console_edit), nk_filter_ascii);
+      state->console_edit[0] = '\0';
+    } else {
+      /* true edit line */
+      if (state->console_activate) {
+        nk_edit_focus(ctx, (state->console_activate == 2) ? NK_EDIT_GOTO_END_ON_ACTIVATE : 0);
+        state->console_activate = 1;
+      }
+      int result = nk_edit_string_zero_terminated(ctx, NK_EDIT_FIELD|NK_EDIT_SIG_ENTER|NK_EDIT_CLIPBOARD,
+                                                  state->console_edit, sizearray(state->console_edit),
+                                                  nk_filter_ascii);
+      state->console_isactive = ((result & NK_EDIT_ACTIVE) != 0);
+      if (result & NK_EDIT_COMMITED) {
+        char *ptr;
+        for (ptr = strchr(state->console_edit, '\0'); ptr > state->console_edit && *(ptr - 1) <= ' '; )
+          *--ptr = '\0'; /* strip trailing whitespace */
+        /* some commands are handled internally (fully or partially) */
+        if (handle_display_cmd(state->console_edit, state->stateparam, state->statesymbol, sizearray(state->statesymbol))) {
+          RESETSTATE(state, STATE_WATCH_TOGGLE);
+          tab_states[TAB_WATCHES] = NK_MAXIMIZED; /* make sure the watch view to open */
+        } else if ((result = handle_file_load_reset(state->console_edit, state->Filename, sizearray(state->Filename))) != 0) {
+          state->force_download = nk_false;
+          if (result == HARD_RESET) {
+            RESETSTATE(state, STATE_HARDRESET);
+          } else if (result == LOAD_CUR_ELF) {
+            state->force_download = nk_true;
+            RESETSTATE(state, STATE_MEMACCESS_1);
+          } else {
+            if (result == LOAD_FILE_ELF || result == RESET_LOAD)
+              state->force_download = nk_true;
+            RESETSTATE(state, STATE_FILE);
+          }
+          /* save target-specific settings in the parameter file before
+             switching to the new file (new options are loaded in the
+             STATE_FILE case) */
+          if (strlen(state->Filename) > 0 && access(state->Filename, 0) == 0)
+            save_settings(state->ParamFile, state->EntryPoint, state->tpwr,
+                          state->connect_srst, state->autodownload, state->SVDfile,
+                          &state->swo);
+        } else if ((result = handle_serial_cmd(state->console_edit,
+                                               state->port_sermon, &state->sermon_baud,
+                                               state->swo.metadata, sizearray(state->swo.metadata))) != 0) {
+          if (result == 1) {
+            if (sermon_isopen())
+              sermon_close();
+            sermon_open(state->port_sermon, state->sermon_baud);
+            if (sermon_isopen()) {
+              sermon_setmetadata(state->swo.metadata);
+              if (strlen(state->swo.metadata) > 0) {
+                ctf_parse_cleanup();
+                ctf_decode_cleanup();
+                ctf_error_notify(CTFERR_NONE, 0, NULL);
+                if (!ctf_parse_init(state->swo.metadata) || !ctf_parse_run())
+                  ctf_parse_cleanup();
+              }
+              serial_info_mode(NULL);
+              tab_states[TAB_SERMON] = NK_MAXIMIZED;  /* make sure the serial monitor view is open */
+            } else {
+              console_add("Failed to configure the port.\n", STRFLG_STATUS);
+            }
+          } else if (result == 2 && sermon_isopen()) {
+            sermon_close();
+          } else if (result == 3) {
+            serial_info_mode(NULL);
+          }
+        } else if ((result = handle_trace_cmd(state->console_edit, &state->swo)) != 0) {
+          if (result == 1) {
+            state->monitor_cmd_active = nk_true; /* to silence output of scripts */
+            if (state->swo.enabled)
+              RESETSTATE(state, STATE_SWOTRACE);
+            else
+              RESETSTATE(state, STATE_SWOCHANNELS);  /* special case: disabling SWO tracing disables all channels */
+          } else if (result == 2) {
+            state->monitor_cmd_active = nk_true; /* to silence output of scripts */
+            RESETSTATE(state, STATE_SWOCHANNELS);
+          } else if (result == 3) {
+            trace_info_mode(&state->swo, 1, NULL);
+          }
+          tab_states[TAB_SWO] = NK_MAXIMIZED;  /* make sure the SWO tracing view is open */
+        } else if (handle_x_cmd(state->console_edit, &state->memdump)) {
+          if (state->memdump.count > 0 && state->memdump.size > 0) {
+            /* if in stopped state, perform the memory view command right
+               away, otherwise make sure it is scheduled */
+            if (state->curstate == STATE_STOPPED)
+              RESETSTATE(state, STATE_VIEWMEMORY);
+            else
+              state->refreshflags |= REFRESH_MEMORY;
+            tab_states[TAB_MEMORY] = NK_MAXIMIZED;  /* make sure the memory dump view is open */
+          }
+        } else if (!handle_list_cmd(state->console_edit, &dwarf_symboltable, &dwarf_filetable)
+                   && !handle_find_cmd(state->console_edit)
+                   && !handle_help_cmd(state->console_edit, &helptext_root, &state->popup_active)
+                   && !handle_info_cmd(state->console_edit, &helptext_root, &state->popup_active, &state->swo))
+        {
+          char translated[sizearray(state->console_edit)];
+          /* check monitor command, to avoid that the output should goes
+             to the semihosting view */
+          state->monitor_cmd_active = is_monitor_cmd(state->console_edit);
+          strlcat(state->console_edit, "\n", sizearray(state->console_edit));
+          /* translate any register names in the command */
+          strcpy(translated, state->console_edit);
+          svd_xlate_all_names(translated, sizearray(translated));
+          if (task_stdin(&state->task, translated))
+            console_input(state->console_edit);
+        }
+        /* check for a list of breakpoint commands, so that we can refresh
+           the breakpoint list after the command executed */
+        if (TERM_EQU(state->console_edit, "b", 1) ||
+            TERM_EQU(state->console_edit, "break", 5) ||
+            TERM_EQU(state->console_edit, "watch", 5) ||
+            TERM_EQU(state->console_edit, "del", 3) ||
+            TERM_EQU(state->console_edit, "delete", 6) ||
+            TERM_EQU(state->console_edit, "clear", 5) ||
+            TERM_EQU(state->console_edit, "disable", 7) ||
+            TERM_EQU(state->console_edit, "enable", 6))
+          state->refreshflags |= REFRESH_BREAKPOINTS | REFRESH_CONSOLE;
+        /* save console_edit in a recent command list */
+        stringlist_add_head(&state->consoleedit_root, state->console_edit, 0);
+        state->consoleedit_next = NULL;
+        state->console_edit[0] = '\0';
+      }
+    } /* if (curstate < STATE_START) */
+
+    nk_group_end(ctx);
+  }
+}
+
+static void panel_configuration(struct nk_context *ctx, APPSTATE *state,
+                                enum nk_collapse_states *tab_state)
+{
+  assert(ctx != NULL);
+  assert(state != NULL);
+  assert(tab_state != NULL);
+
+  if (nk_tree_state_push(ctx, NK_TREE_TAB, "Configuration", tab_state)) {
+    #define LABEL_WIDTH (2.5 * opt_fontsize)
+    struct nk_rect bounds = nk_widget_bounds(ctx);
+    float edtwidth = bounds.w - LABEL_WIDTH - BROWSEBTN_WIDTH - (2 * 5);
+
+    /* debug probe (and IP address) */
+    nk_layout_row_begin(ctx, NK_STATIC, ROW_HEIGHT, 2);
+    nk_layout_row_push(ctx, LABEL_WIDTH);
+    nk_label(ctx, "Probe", NK_TEXT_ALIGN_LEFT | NK_TEXT_ALIGN_MIDDLE);
+    nk_layout_row_push(ctx, edtwidth);
+    bounds = nk_widget_bounds(ctx);
+    int newprobe = nk_combo(ctx, state->probelist, state->netprobe+1, state->probe, (int)COMBOROW_CY, nk_vec2(bounds.w, 4.5*ROW_HEIGHT));
+    if (newprobe == state->netprobe) {
+      int reconnect = 0;
+      nk_layout_row_begin(ctx, NK_STATIC, ROW_HEIGHT, 3);
+      nk_layout_row_push(ctx, LABEL_WIDTH);
+      nk_label(ctx, "IP", NK_TEXT_ALIGN_LEFT | NK_TEXT_ALIGN_MIDDLE);
+      nk_layout_row_push(ctx, edtwidth);
+      int result = editctrl_tooltip(ctx, NK_EDIT_FIELD|NK_EDIT_SIG_ENTER|NK_EDIT_CLIPBOARD,
+                                    state->IPaddr, sizearray(state->IPaddr), nk_filter_ascii,
+                                    "IP address of the ctxLink");
+      if ((result & NK_EDIT_COMMITED) != 0 && is_ip_address(state->IPaddr))
+        reconnect = 1;
+      nk_layout_row_push(ctx, BROWSEBTN_WIDTH);
+      if (button_symbol_tooltip(ctx, NK_SYMBOL_TRIPLE_DOT, NK_KEY_NONE, "Scan network for ctxLink probes.")) {
+        #if defined WIN32 || defined _WIN32
+          HCURSOR hcur = SetCursor(LoadCursor(NULL, IDC_WAIT));
+        #endif
+        unsigned long addr;
+        int count = scan_network(&addr, 1);
+        #if defined WIN32 || defined _WIN32
+          SetCursor(hcur);
+        #endif
+        if (count == 1) {
+          sprintf(state->IPaddr, "%lu.%lu.%lu.%lu",
+                 addr & 0xff, (addr >> 8) & 0xff, (addr >> 16) & 0xff, (addr >> 24) & 0xff);
+          reconnect = 1;
+        } else {
+          strlcpy(state->IPaddr, "none found", sizearray(state->IPaddr));
+        }
+      }
+      if (reconnect)
+        RESETSTATE(state, STATE_SCAN_BMP);
+    }
+    if (newprobe != state->probe) {
+      state->probe = newprobe;
+      RESETSTATE(state, STATE_SCAN_BMP);
+    }
+
+    /* GDB */
+    char tooltip[_MAX_PATH];
+    char basename[_MAX_PATH], *p;
+    p = strrchr(state->GDBpath, DIRSEP_CHAR);
+    strlcpy(basename,(p == NULL)? state->GDBpath : p + 1, sizearray(basename));
+    nk_layout_row_begin(ctx, NK_STATIC, ROW_HEIGHT, 3);
+    nk_layout_row_push(ctx, LABEL_WIDTH);
+    nk_label(ctx, "GDB", NK_TEXT_LEFT);
+    nk_layout_row_push(ctx, edtwidth);
+    strlcpy(tooltip, (strlen(state->GDBpath) > 0) ? state->GDBpath : "Path to the GDB executable", sizearray(tooltip));
+    editctrl_tooltip(ctx, NK_EDIT_FIELD | NK_EDIT_READ_ONLY,
+                     basename, sizearray(basename), nk_filter_ascii, tooltip);
+    nk_layout_row_push(ctx, BROWSEBTN_WIDTH);
+    if (nk_button_symbol(ctx, NK_SYMBOL_TRIPLE_DOT)) {
+      const char *s;
+      s = noc_file_dialog_open(NOC_FILE_DIALOG_OPEN,
+                               "Executables\0*.elf;*.\0All files\0*.*\0",
+                               NULL, state->GDBpath, "Select GDB program",
+                               guidriver_apphandle());
+      if (s != NULL && strlen(s) < sizearray(state->GDBpath)) {
+        strcpy(state->GDBpath, s);
+        free((void*)s);
+        task_close(&state->task);  /* terminate running instance of GDB */
+        RESETSTATE(state, STATE_INIT);
+      }
+    }
+    nk_layout_row_end(ctx);
+
+    /* target executable */
+    p = strrchr(state->Filename, '/');
+    strlcpy(basename, (p == NULL) ? state->Filename : p + 1, sizearray(basename));
+    nk_layout_row_begin(ctx, NK_STATIC, ROW_HEIGHT, 3);
+    nk_layout_row_push(ctx, LABEL_WIDTH);
+    nk_label(ctx, "File", NK_TEXT_LEFT);
+    nk_layout_row_push(ctx, edtwidth);
+    strlcpy(tooltip, (strlen(state->Filename) > 0) ? state->Filename : "Path to the target ELF file", sizearray(tooltip));
+    editctrl_tooltip(ctx, NK_EDIT_FIELD | NK_EDIT_READ_ONLY,
+                     basename, sizearray(basename), nk_filter_ascii, tooltip);
+    nk_layout_row_push(ctx, BROWSEBTN_WIDTH);
+    if (nk_button_symbol(ctx, NK_SYMBOL_TRIPLE_DOT)) {
+      const char *s;
+      translate_path(state->Filename, 1);
+      s = noc_file_dialog_open(NOC_FILE_DIALOG_OPEN,
+                               "ELF Executables\0*.elf;*.bin;*.\0All files\0*.*\0",
+                               NULL, state->Filename, "Select ELF Executable",
+                               guidriver_apphandle());
+      if (s != NULL && strlen(s) < sizearray(state->Filename)) {
+        strcpy(state->Filename, s);
+        translate_path(state->Filename, 0);
+        free((void*)s);
+        if (state->curstate > STATE_FILE)
+          RESETSTATE(state, STATE_FILE);
+      }
+    }
+    nk_layout_row_end(ctx);
+
+    /* target entry point */
+    nk_layout_row_begin(ctx, NK_STATIC, ROW_HEIGHT, 2);
+    nk_layout_row_push(ctx, LABEL_WIDTH);
+    nk_label(ctx, "Entry point", NK_TEXT_LEFT);
+    nk_layout_row_push(ctx, edtwidth + BROWSEBTN_WIDTH);
+    int result = editctrl_tooltip(ctx, NK_EDIT_FIELD|NK_EDIT_SIG_ENTER|NK_EDIT_CLIPBOARD,
+                                  state->EntryPoint, sizearray(state->EntryPoint), nk_filter_ascii,
+                                  "The name of the entry point function (if not \"main\")");
+    nk_layout_row_end(ctx);
+    if (result & NK_EDIT_ACTIVATED)
+      state->console_activate = 0;
+
+    /* CMSIS SVD file */
+    p = strrchr(state->SVDfile, '/');
+    strlcpy(basename, (p == NULL) ? state->SVDfile : p + 1, sizearray(basename));
+    nk_layout_row_begin(ctx, NK_STATIC, ROW_HEIGHT, 3);
+    nk_layout_row_push(ctx, LABEL_WIDTH);
+    nk_label(ctx, "SVD", NK_TEXT_LEFT);
+    nk_layout_row_push(ctx, edtwidth);
+    strlcpy(tooltip, (strlen(state->SVDfile) > 0) ? state->SVDfile : "Path to an SVD file with the MCU description & registers", sizearray(tooltip));
+    editctrl_tooltip(ctx, NK_EDIT_FIELD | NK_EDIT_READ_ONLY,
+                     basename, sizearray(basename), nk_filter_ascii, tooltip);
+    nk_layout_row_push(ctx, BROWSEBTN_WIDTH);
+    if (nk_button_symbol(ctx, NK_SYMBOL_TRIPLE_DOT)) {
+      const char *s;
+      translate_path(state->SVDfile, 1);
+      s = noc_file_dialog_open(NOC_FILE_DIALOG_OPEN,
+                               "CMSIS SVD files\0*.svd\0All files\0*.*\0",
+                               NULL, state->SVDfile, "Select CMSIS SVD file",
+                               guidriver_apphandle());
+      if (s != NULL && strlen(s) < sizearray(state->SVDfile)) {
+        strcpy(state->SVDfile, s);
+        free((void*)s);
+        if (state->curstate > STATE_GET_SOURCES) {
+          svd_clear();
+          if (strlen(state->SVDfile) >0)
+            svd_load(state->SVDfile);
+        }
+        translate_path(state->SVDfile, 0);
+      }
+    }
+    nk_layout_row_end(ctx);
+
+    /* source directory */
+    //??? enhancement: overrule directory where source files are found; -environment-directory -r path "path" ...
+
+    /* TPWR option */
+    nk_layout_row_dynamic(ctx, ROW_HEIGHT, 1);
+    if (checkbox_tooltip(ctx, "Power Target (3.3V)", &state->tpwr, NK_TEXT_LEFT, "Let the debug probe provide power to the target")) {
+      if (!state->tpwr)
+        task_stdin(&state->task, "monitor tpwr disable\n");
+      if (state->tpwr && state->curstate != STATE_MON_SCAN)
+        task_stdin(&state->task, "monitor tpwr enable\n");
+      if (state->curstate == STATE_MON_SCAN)
+         RESETSTATE(state, STATE_MON_TPWR);
+    }
+
+    /* reset during connect */
+    nk_layout_row_dynamic(ctx, ROW_HEIGHT, 1);
+    if (checkbox_tooltip(ctx, "Reset target during connect", &state->connect_srst, NK_TEXT_LEFT, "Keep target MCU reset while debug probe attaches")) {
+      if (state->connect_srst)
+        task_stdin(&state->task, "monitor connect_srst enable\n");
+      else
+        task_stdin(&state->task, "monitor connect_srst disable\n");
+      RESETSTATE(state, STATE_MON_SCAN);
+    }
+
+    /* auto-download */
+    nk_layout_row_dynamic(ctx, ROW_HEIGHT, 1);
+    checkbox_tooltip(ctx, "Download to target on mismatch", &state->autodownload, NK_TEXT_LEFT,
+                     "Download firmware to the target MCU if it is different from the code currently in it");
+
+    /* show all GDB output */
+    nk_layout_row_dynamic(ctx, ROW_HEIGHT, 1);
+    if (checkbox_tooltip(ctx, "Show all GDB messages", &state->allmsg, NK_TEXT_LEFT, "Do not filter GDB output in the console to only relevant messages"))
+      console_hiddenflags = state->allmsg ? 0 : STRFLG_NOTICE | STRFLG_RESULT | STRFLG_EXEC | STRFLG_MI_INPUT | STRFLG_TARGET | STRFLG_SCRIPT;
+
+    nk_tree_state_pop(ctx);
+  }
+}
+
+static void panel_breakpoints(struct nk_context *ctx, APPSTATE *state,
+                              enum nk_collapse_states *tab_state)
+{
+  assert(ctx != NULL);
+  assert(state != NULL);
+  assert(tab_state != NULL);
+
+  if (nk_tree_state_push(ctx, NK_TREE_TAB, "Breakpoints", tab_state)) {
+    BREAKPOINT *bp;
+    char label[300];
+    float width = 0;
+    struct nk_user_font const *font = ctx->style.font;
+    /* find longest breakpoint description */
+    for (bp = breakpoint_root.next; bp != NULL; bp = bp->next) {
+      float w;
+      if (bp->flags & BKPTFLG_FUNCTION) {
+        assert(bp->name != NULL);
+        strlcpy(label, bp->name, sizearray(label));
+      } else if (source_getname(bp->filenr) != NULL) {
+        snprintf(label, sizearray(label), "%s : %d", source_getname(bp->filenr), bp->linenr);
+      }
+      w = font->width(font->userdata, font->height, label, strlen(label)) + 10;
+      if (w > width)
+        width = w;
+    }
+    for (bp = breakpoint_root.next; bp != NULL; bp = bp->next) {
+      int en;
+      nk_layout_row_begin(ctx, NK_STATIC, ROW_HEIGHT, 3);
+      nk_layout_row_push(ctx, LABEL_WIDTH);
+      snprintf(label, sizearray(label), "%d", bp->number);
+      en = bp->enabled;
+      if (nk_checkbox_label(ctx, label, &en, NK_TEXT_LEFT)) {
+        RESETSTATE(state, STATE_BREAK_TOGGLE);
+        state->stateparam[0] = (en == 0) ? STATEPARAM_BP_DISABLE : STATEPARAM_BP_ENABLE;
+        state->stateparam[1] = bp->number;
+      }
+      nk_layout_row_push(ctx, width);
+      if (bp->flags & BKPTFLG_FUNCTION) {
+        assert(bp->name != NULL);
+        strlcpy(label, bp->name, sizearray(label));
+      } else if (source_getname(bp->filenr) != NULL) {
+        snprintf(label, sizearray(label), "%s : %d", source_getname(bp->filenr), bp->linenr);
+      } else {
+        strlcpy(label, "??", sizearray(label));
+      }
+      nk_label(ctx, label, NK_TEXT_LEFT);
+      nk_layout_row_push(ctx, ROW_HEIGHT);
+      if (nk_button_symbol(ctx, NK_SYMBOL_X)) {
+        RESETSTATE(state, STATE_BREAK_TOGGLE);
+        state->stateparam[0] = STATEPARAM_BP_DELETE;
+        state->stateparam[1] = bp->number;
+      }
+    }
+    if (width == 0) {
+      /* this means that there are no breakpoints */
+      nk_layout_row_dynamic(ctx, ROW_HEIGHT, 1);
+      nk_label(ctx, "No breakpoints", NK_TEXT_ALIGN_CENTERED | NK_TEXT_ALIGN_MIDDLE);
+    }
+    nk_tree_state_pop(ctx);
+  }
+}
+
+static void panel_watches(struct nk_context *ctx, APPSTATE *state,
+                          enum nk_collapse_states *tab_state)
+{
+  assert(ctx != NULL);
+  assert(state != NULL);
+  assert(tab_state != NULL);
+
+  if (nk_tree_state_push(ctx, NK_TREE_TAB, "Watches", tab_state)) {
+    WATCH *watch;
+    float namewidth, valwidth, w;
+    char label[20];
+    struct nk_user_font const *font = ctx->style.font;
+    /* find longest watch expression and value */
+    namewidth = 0;
+    valwidth = 2 * ROW_HEIGHT;
+    for (watch = watch_root.next; watch != NULL; watch = watch->next) {
+      assert(watch->expr != NULL);
+      w = font->width(font->userdata, font->height, watch->expr, strlen(watch->expr)) + 10;
+      if (w > namewidth)
+        namewidth = w;
+      if (watch->value != NULL) {
+        w = font->width(font->userdata, font->height, watch->value, strlen(watch->value)) + 10;
+        if (w > valwidth)
+          valwidth = w;
+      }
+    }
+    for (watch = watch_root.next; watch != NULL; watch = watch->next) {
+      nk_layout_row_begin(ctx, NK_STATIC, ROW_HEIGHT, 4);
+      nk_layout_row_push(ctx, LABEL_WIDTH);
+      snprintf(label, sizearray(label), "%u", watch->seqnr); /* print sequence number for undisplay command */
+      nk_label(ctx, label, NK_TEXT_LEFT);
+      nk_layout_row_push(ctx, namewidth);
+      nk_label(ctx, watch->expr, NK_TEXT_LEFT);
+      nk_layout_row_push(ctx, valwidth);
+      if (watch->value != NULL) {
+        //??? enhancement: ability to change the format in which the value is displayed (decimal/hex/char)
+        if (watch->flags & WATCHFLG_CHANGED)
+          nk_label_colored(ctx, watch->value, NK_TEXT_LEFT, nk_rgb(255, 100, 128));
+        else
+          nk_label(ctx, watch->value, NK_TEXT_LEFT);
+      } else {
+        nk_label(ctx, "?", NK_TEXT_LEFT);
+      }
+      nk_layout_row_push(ctx, ROW_HEIGHT);
+      if (nk_button_symbol(ctx, NK_SYMBOL_X)) {
+        RESETSTATE(state, STATE_WATCH_TOGGLE);
+        state->stateparam[0] = STATEPARAM_WATCH_DEL;
+        state->stateparam[1] = watch->seqnr;
+      }
+    }
+    if (namewidth <= 0.1) {
+      /* this means there are no watches */
+      nk_layout_row_dynamic(ctx, ROW_HEIGHT, 1);
+      nk_label(ctx, "No watches", NK_TEXT_ALIGN_CENTERED | NK_TEXT_ALIGN_MIDDLE);
+    }
+    nk_layout_row_begin(ctx, NK_STATIC, ROW_HEIGHT, 3);
+    nk_layout_row_push(ctx, LABEL_WIDTH);
+    w = namewidth + valwidth + ctx->style.window.spacing.x;
+    if (w < 150)
+      w = 150;
+    nk_layout_row_push(ctx, w);
+    int result = nk_edit_string_zero_terminated(ctx, NK_EDIT_FIELD|NK_EDIT_SIG_ENTER|NK_EDIT_CLIPBOARD,
+                                                state->watch_edit, sizearray(state->watch_edit),
+                                                nk_filter_ascii);
+    nk_layout_row_push(ctx, ROW_HEIGHT);
+    if ((nk_button_symbol(ctx, NK_SYMBOL_PLUS) || (result & NK_EDIT_COMMITED))
+        && state->curstate == STATE_STOPPED && strlen(state->watch_edit) > 0) {
+      RESETSTATE(state, STATE_WATCH_TOGGLE);
+      state->stateparam[0] = STATEPARAM_WATCH_SET;
+      state->stateparam[1] = 0;
+      strlcpy(state->statesymbol, state->watch_edit, sizearray(state->statesymbol));
+      state->watch_edit[0] = '\0';
+    } else if (result & NK_EDIT_ACTIVATED) {
+      state->console_activate = 0;
+    }
+    nk_tree_state_pop(ctx);
+  } /* watches */
+}
+
+static void panel_memory(struct nk_context *ctx, APPSTATE *state,
+                             enum nk_collapse_states *tab_state)
+{
+  assert(ctx != NULL);
+  assert(state != NULL);
+  assert(tab_state != NULL);
+
+  nk_sizer_refresh(&state->sizerbar_memory);
+  int result = *tab_state;  /* save old state */
+  if (nk_tree_state_push(ctx, NK_TREE_TAB, "Memory", tab_state)) {
+    /* if previous state for the memory was closed, force an update of the memory view */
+    if (result == NK_MINIMIZED) {
+      /* if in stopped state, perform the memory view command right away,
+         otherwise make sure it is scheduled */
+      if (state->curstate == STATE_STOPPED)
+        RESETSTATE(state, STATE_VIEWMEMORY);
+      else
+        state->refreshflags |= REFRESH_MEMORY;
+    }
+    if (state->memdump.data != NULL) {
+      memdump_widget(ctx, &state->memdump, state->sizerbar_memory.size, ROW_HEIGHT);
+      nk_sizer(ctx, &state->sizerbar_memory); /* make view height resizeable */
+    } else {
+      nk_layout_row_dynamic(ctx, ROW_HEIGHT, 1);
+      if (state->memdump.message != NULL)
+        nk_label_colored(ctx, state->memdump.message, NK_TEXT_ALIGN_CENTERED | NK_TEXT_ALIGN_MIDDLE, nk_rgb(255, 100, 128));
+      else
+        nk_label(ctx, "Use \"x\" command to view memory", NK_TEXT_ALIGN_CENTERED | NK_TEXT_ALIGN_MIDDLE);
+    }
+    nk_tree_state_pop(ctx);
+  }
+}
+
+static void panel_semihosting(struct nk_context *ctx, APPSTATE *state,
+                              enum nk_collapse_states *tab_state)
+{
+  assert(ctx != NULL);
+  assert(state != NULL);
+  assert(tab_state != NULL);
+
+  /* highlight tab text if new content arrives and the tab is closed */
+  int highlight = !(*tab_state) && stringlist_count(&semihosting_root) != state->semihosting_lines;
+  if (highlight)
+    nk_style_push_color(ctx,&ctx->style.tab.text, nk_rgb(255, 255, 160));
+  int result = nk_tree_state_push(ctx, NK_TREE_TAB, "Semihosting output", tab_state);
+  if (highlight)
+    nk_style_pop_color(ctx);
+
+  nk_sizer_refresh(&state->sizerbar_semihosting);
+  if (result) {
+    nk_layout_row_dynamic(ctx, state->sizerbar_semihosting.size, 1);
+    nk_style_push_color(ctx, &ctx->style.window.fixed_background.data.color, nk_rgba(20, 29, 38, 225));
+    if (nk_group_begin(ctx, "semihosting", 0)) {
+      STRINGLIST *item;
+      state->semihosting_lines = 0;
+      for (item = semihosting_root.next; item != NULL; item = item->next) {
+        nk_layout_row_dynamic(ctx, opt_fontsize, 1);
+        nk_label(ctx, item->text, NK_TEXT_LEFT);
+        state->semihosting_lines += 1;
+      }
+      nk_group_end(ctx);
+    }
+    nk_style_pop_color(ctx);
+    nk_sizer(ctx, &state->sizerbar_semihosting);  /* make view height resizeable */
+    nk_tree_state_pop(ctx);
+  }
+}
+
+static void panel_serialmonitor(struct nk_context *ctx, APPSTATE *state,
+                                enum nk_collapse_states *tab_state)
+{
+  assert(ctx != NULL);
+  assert(state != NULL);
+  assert(tab_state != NULL);
+
+  /* highlight tab text if new content arrives and the tab is closed */
+  int highlight = !(*tab_state) && sermon_countlines() != state->sermon_lines;
+  if (highlight)
+    nk_style_push_color(ctx,&ctx->style.tab.text, nk_rgb(255, 255, 160));
+  int result = nk_tree_state_push(ctx, NK_TREE_TAB, "Serial console", tab_state);
+  if (highlight)
+    nk_style_pop_color(ctx);
+
+  nk_sizer_refresh(&state->sizerbar_serialmon);
+  if (result) {
+    nk_layout_row_dynamic(ctx, state->sizerbar_serialmon.size, 1);
+    struct nk_rect bounds = nk_layout_widget_bounds(ctx);
+    nk_style_push_color(ctx, &ctx->style.window.fixed_background.data.color, nk_rgba(20, 29, 38, 225));
+    if (nk_group_begin(ctx, "serial", 0)) {
+      struct nk_user_font const *font = ctx->style.font;
+      int linecount = 0;
+      float lineheight = 0;
+      const char *text;
+      sermon_rewind();
+      while ((text = sermon_next()) != NULL) {
+        int textwidth, textlength;
+        nk_layout_row_begin(ctx, NK_STATIC, opt_fontsize, 1);
+        if (lineheight < 0.01) {
+          struct nk_rect rcline = nk_layout_widget_bounds(ctx);
+          lineheight = rcline.h;
+        }
+        textlength = strlen(text);
+        assert(font != NULL && font->width != NULL);
+        textwidth = (int)font->width(font->userdata, font->height, text, textlength) + 10;
+        nk_layout_row_push(ctx, textwidth);
+        nk_text(ctx, text, textlength, NK_TEXT_LEFT);
+        nk_layout_row_end(ctx);
+        linecount += 1;
+      }
+      if (!sermon_isopen()) {
+        struct nk_color clr = nk_rgb(255, 80, 100);
+        nk_layout_row_dynamic(ctx, opt_fontsize, 1);
+        nk_label_colored(ctx, "No port opened", NK_TEXT_LEFT, clr);
+        linecount += 1;
+      }
+      nk_group_end(ctx);
+      if (linecount != state->sermon_lines && lineheight > 0.01) {
+        /* scroll to end */
+        int widgetlines = (int)((bounds.h - 2 * ctx->style.window.padding.y) / lineheight);
+        int sermon_scroll = (int)((linecount - widgetlines) * lineheight);
+        if (sermon_scroll < 0)
+          sermon_scroll = 0;
+        state->sermon_lines = linecount;
+        nk_group_set_scroll(ctx, "serial", 0, sermon_scroll);
+      }
+    }
+    nk_style_pop_color(ctx);
+    nk_sizer(ctx, &state->sizerbar_serialmon);  /* make view height resizeable */
+    nk_tree_state_pop(ctx);
+  }
+}
+
+static void panel_traceswo(struct nk_context *ctx, APPSTATE *state,
+                           enum nk_collapse_states *tab_state)
+{
+  assert(ctx != NULL);
+  assert(state != NULL);
+  assert(tab_state != NULL);
+
+  /* highlight tab text if new content arrives and the tab is closed */
+  int highlight = !(*tab_state) && tracestring_count() != state->swo_lines;
+  if (highlight)
+    nk_style_push_color(ctx,&ctx->style.tab.text, nk_rgb(255, 255, 160));
+  int result = nk_tree_state_push(ctx, NK_TREE_TAB, "SWO tracing", tab_state);
+  if (highlight)
+    nk_style_pop_color(ctx);
+
+  nk_sizer_refresh(&state->sizerbar_swo);
+  if (result) {
+    tracestring_process(state->trace_status == TRACESTAT_OK);
+    nk_layout_row_dynamic(ctx, state->sizerbar_swo.size, 1);
+    tracelog_widget(ctx, "tracelog", opt_fontsize, -1, NULL, 0);
+    state->swo_lines = tracestring_count();
+    nk_sizer(ctx, &state->sizerbar_swo);  /* make view height resizeable */
+    nk_tree_state_pop(ctx);
+  }
+}
+
+static void handle_kbdinput_main(struct nk_context *ctx, APPSTATE *state)
+{
+  if (nk_input_is_key_pressed(&ctx->input, NK_KEY_UP) && source_cursorline > 1) {
+    source_cursorline--;
+  } else if (nk_input_is_key_pressed(&ctx->input, NK_KEY_DOWN) && source_cursorline < source_linecount(source_cursorfile)) {
+    source_cursorline++;
+  } else if (nk_input_is_key_pressed(&ctx->input, NK_KEY_SCROLL_UP)) {
+    source_cursorline -= source_vp_rows;
+    if (source_cursorline < 1)
+      source_cursorline = 1;
+  } else if (nk_input_is_key_pressed(&ctx->input, NK_KEY_SCROLL_DOWN)) {
+    int linecount = source_linecount(source_cursorfile);
+    source_cursorline += source_vp_rows;
+    if (source_cursorline > linecount)
+      source_cursorline = linecount;
+  } else if (nk_input_is_key_pressed(&ctx->input, NK_KEY_SCROLL_TOP)) {
+    source_cursorline = 1;
+  } else if (nk_input_is_key_pressed(&ctx->input, NK_KEY_SCROLL_BOTTOM)) {
+    source_cursorline = source_linecount(source_cursorfile);
+  } else if (nk_input_is_key_pressed(&ctx->input, NK_KEY_FIND)) {
+    strlcpy(state->console_edit, "find ", sizearray(state->console_edit));
+    state->console_activate = 2;
+  } else if (nk_input_is_key_pressed(&ctx->input, NK_KEY_F3)) {
+    handle_find_cmd("find");  /* find next */
+  } else if (nk_input_is_key_pressed(&ctx->input, NK_KEY_GOTO)) {
+    strlcpy(state->console_edit, "list ", sizearray(state->console_edit));
+    state->console_activate = 2;
+  } else if (state->console_isactive & nk_input_is_key_pressed(&ctx->input, NK_KEY_PAR_UP)) {
+    state->consoleedit_next = console_history_step(&state->consoleedit_root, state->consoleedit_next, 0);
+    if (state->consoleedit_next != NULL)
+      strlcpy(state->console_edit, state->consoleedit_next->text, sizearray(state->console_edit));
+  } else if (state->console_isactive & nk_input_is_key_pressed(&ctx->input, NK_KEY_PAR_DOWN)) {
+    state->consoleedit_next = console_history_step(&state->consoleedit_root, state->consoleedit_next, 1);
+    if (state->consoleedit_next != NULL)
+      strlcpy(state->console_edit, state->consoleedit_next->text, sizearray(state->console_edit));
+  } else if (nk_input_is_key_pressed(&ctx->input, NK_KEY_REFRESH)) {
+    state->consoleedit_next = console_history_match(&state->consoleedit_root, state->consoleedit_next, state->console_edit, sizearray(state->console_edit));
+    if (state->consoleedit_next != NULL) {
+      strlcpy(state->console_edit, state->consoleedit_next->text, sizearray(state->console_edit));
+      state->console_activate = 2;
+    }
+  } else if (nk_input_is_key_pressed(&ctx->input, NK_KEY_TAB)) {
+    if (console_autocomplete(state->console_edit, sizearray(state->console_edit), &dwarf_symboltable))
+      state->console_activate = 2;
+  } else if (nk_input_is_key_pressed(&ctx->input, NK_KEY_ESCAPE)) {
+    state->console_edit[0] = '\0';
+    state->console_activate = 2;
+  }
+}
+
+static void handle_stateaction(APPSTATE *state, enum nk_collapse_states tab_states[TAB_COUNT])
+{
+  assert(state != NULL);
+  assert(state->cmdline != NULL);
+
+  if (!is_idle()) {
+    switch (state->curstate) {
+    case STATE_INIT:
+      /* kill GDB if it is running */
+      if (task_isrunning(&state->task))
+        task_close(&state->task);
+      RESETSTATE(state, STATE_GDB_TASK);
+      state->refreshflags = 0;
+      state->is_attached = nk_false;
+      state->atprompt = nk_false;
+      state->cont_is_run = nk_false;
+      break;
+    case STATE_GDB_TASK:
+      if (task_launch(state->GDBpath, "--interpreter=mi2", &state->task)) {
+        RESETSTATE(state, STATE_SCAN_BMP); /* GDB started, now find Black Magic Probe */
+      } else {
+        /* dialog to select GDB */
+        #if defined _WIN32
+          const char *filter = "Executables\0*.exe\0All files\0*.*\0";
+        #else
+          const char *filter = "Executables\0*\0All files\0*\0";
+        #endif
+        const char *s = noc_file_dialog_open(NOC_FILE_DIALOG_OPEN, filter,
+                                             NULL, state->GDBpath, "Select GDB Executable",
+                                             guidriver_apphandle());
+        if (s != NULL && strlen(s) < sizearray(state->GDBpath)) {
+          strcpy(state->GDBpath, s);
+          free((void*)s);
+          assert(state->curstate == STATE_GDB_TASK); /* drop back into this case after */
+        } else {
+          RESETSTATE(state, STATE_QUIT);  /* selection dialog was canceled, quit the front-end */
+        }
+      }
+      break;
+    case STATE_SCAN_BMP:
+      state->port_gdb[0] = '\0';
+      if (state->probe == state->netprobe) {
+        if (is_ip_address(state->IPaddr)) {
+          char portnr[20];
+          sprintf(portnr, ":%d", BMP_PORT_GDB);
+          strlcpy(state->port_gdb, state->IPaddr, sizearray(state->port_gdb));
+          strlcat(state->port_gdb, portnr, sizearray(state->port_gdb));
+        }
+      } else {
+        const char *ptr;
+        ptr = state->probelist[state->probe];
+        if (*ptr != '\0' && *ptr != '-') {
+          if (strncmp(ptr, "COM", 3)== 0 && strlen(ptr)>= 5) {
+            /* special case for Microsoft Windows, for COM ports >= 10 */
+            strlcpy(state->port_gdb, "\\\\.\\", sizearray(state->port_gdb));
+          }
+          strlcat(state->port_gdb, ptr, sizearray(state->port_gdb));
+        }
+      }
+      if (state->port_gdb[0] != '\0') {
+        RESETSTATE(state, STATE_FILE);
+      } else if (state->atprompt) {
+        if (STATESWITCH(state)) {
+          if (state->probe == state->netprobe)
+            console_add("ctxLink Probe not found, invalid IP address\n", STRFLG_ERROR);
+          else
+            console_add("Black Magic Probe not found\n", STRFLG_ERROR);
+          MARKSTATE(state);
+        }
+        set_idle_time(1000); /* repeat scan on timeout (but don't sleep the GUI thread) */
+      }
+      gdbmi_sethandled(0);
+      break;
+    case STATE_FILE:
+      if (!state->atprompt)
+        break;
+      if (STATESWITCH(state)) {
+        char temp[_MAX_PATH];
+        dwarf_cleanup(&dwarf_linetable, &dwarf_symboltable, &dwarf_filetable);
+        svd_clear();
+        /* create parameter filename from target filename, then read target-specific settings */
+        strlcpy(state->ParamFile, state->Filename, sizearray(state->ParamFile));
+        strlcat(state->ParamFile, ".bmcfg", sizearray(state->ParamFile));
+        load_settings(state->ParamFile, state->EntryPoint, sizearray(state->EntryPoint),
+                      &state->tpwr, &state->connect_srst, &state->autodownload,
+                      state->SVDfile, sizearray(state->SVDfile), &state->swo);
+        /* load target filename in GDB */
+        snprintf(state->cmdline, CMD_BUFSIZE, "-file-exec-and-symbols %s\n", enquote(temp, state->Filename, sizeof(temp)));
+        if (task_stdin(&state->task, state->cmdline))
+          console_input(state->cmdline);
+        state->atprompt = nk_false;
+        MARKSTATE(state);
+      } else if (gdbmi_isresult() != NULL) {
+        if (strncmp(gdbmi_isresult(), "done", 4) == 0) {
+          /* read the DWARF information (for function and variable lookup) */
+          FILE *fp = fopen(state->Filename, "rb");
+          if (fp != NULL) {
+            int address_size;
+            if (!dwarf_read(fp, &dwarf_linetable, &dwarf_symboltable, &dwarf_filetable, &address_size))
+              console_add("No DWARF debug information\n", STRFLG_ERROR);
+            fclose(fp);
+          }
+          /* read a CMSIS "SVD" file if any was provided */
+          if (strlen(state->SVDfile) > 0)
+            svd_load(state->SVDfile);
+          source_cursorfile = source_cursorline = 0;
+          source_execfile = source_execline = 0;
+          /* if already attached, skip a to re-loading the sources */
+          MOVESTATE(state, state->is_attached ? STATE_GET_SOURCES : STATE_TARGET_EXT);
+        } else {
+          if (strncmp(gdbmi_isresult(), "error", 5) == 0) {
+            strlcpy(state->cmdline, gdbmi_isresult(), CMD_BUFSIZE);
+            strlcat(state->cmdline, "\n", CMD_BUFSIZE);
+            console_add(state->cmdline, STRFLG_ERROR);
+          }
+          set_idle_time(1000); /* stay in file state */
+        }
+        gdbmi_sethandled(0);
+      }
+      break;
+    case STATE_TARGET_EXT:
+      if (!state->atprompt)
+        break;
+      if (STATESWITCH(state)) {
+        snprintf(state->cmdline, CMD_BUFSIZE, "-target-select extended-remote %s\n", state->port_gdb);
+        if (task_stdin(&state->task, state->cmdline))
+          console_input(state->cmdline);
+        state->atprompt = nk_false;
+        MARKSTATE(state);
+      } else if (gdbmi_isresult() != NULL) {
+        if (strncmp(gdbmi_isresult(), "connected", 9) == 0) {
+          MOVESTATE(state, STATE_MON_VERSION);
+        } else {
+          snprintf(state->cmdline, CMD_BUFSIZE, "Port %s busy or unavailable\n", state->port_gdb);
+          console_add(state->cmdline, STRFLG_ERROR);
+          MOVESTATE(state, STATE_SCAN_BMP);
+          set_idle_time(1000); /* drop back to scan (after on timeout) */
+        }
+        gdbmi_sethandled(0);
+      }
+      break;
+    case STATE_MON_VERSION:
+      if (!state->atprompt)
+        break;
+      if (STATESWITCH(state)) {
+        state->console_mark = stringlist_getlast(&consolestring_root, STRFLG_RESULT, 0);
+        assert(state->console_mark != NULL);
+        task_stdin(&state->task, "monitor version\n");
+        state->atprompt = nk_false;
+        MARKSTATE(state);
+      } else if (gdbmi_isresult() != NULL) {
+        if (strncmp(gdbmi_isresult(), "done", 4) == 0) {
+          int type;
+          assert(state->console_mark != NULL && state->console_mark->text != NULL);
+          assert(state->console_mark->flags & STRFLG_RESULT);
+          state->console_mark = state->console_mark->next;  /* skip the mark */
+          while (state->console_mark != NULL && (state->console_mark->flags & STRFLG_RESULT) == 0
+                 && (type = check_versionstring(state->console_mark->text)) == PROBE_UNKNOWN)
+            state->console_mark = state->console_mark->next;
+          if (type != PROBE_UNKNOWN) {
+            state->probe_type = type;
+            /* overrule defaults, if we know the probe */
+            if (state->probe_type == PROBE_ORG_BMP)
+              state->swo.mode = SWOMODE_MANCHESTER;
+            else if (state->probe_type == PROBE_CTXLINK)
+              state->swo.mode = SWOMODE_ASYNC;
+          }
+          MOVESTATE(state, STATE_MON_TPWR);
+          state->console_mark = NULL;
+        }
+        gdbmi_sethandled(0);
+      }
+      break;
+    case STATE_MON_TPWR:
+      if (!state->tpwr) {
+        MOVESTATE(state, STATE_MON_SCAN);
+      } else {
+        if (!state->atprompt)
+          break;
+        if (STATESWITCH(state)) {
+          task_stdin(&state->task, "monitor tpwr enable\n");
+          state->atprompt = nk_false;
+          MARKSTATE(state);
+        } else if (gdbmi_isresult() != NULL) {
+          if (strncmp(gdbmi_isresult(), "done", 4) == 0)
+            MOVESTATE(state, STATE_MON_SCAN);
+          else
+            set_idle_time(500); /* stay in current state, TPWR may take a little time */
+          gdbmi_sethandled(0);
+        }
+      }
+      break;
+    case STATE_MON_SCAN:
+      if (!state->atprompt)
+        break;
+      if (STATESWITCH(state)) {
+        task_stdin(&state->task, "monitor swdp_scan\n");
+        state->atprompt = nk_false;
+        MARKSTATE(state);
+        state->mcu_family[0] = '\0';
+        state->mcu_architecture[0] = '\0';
+      } else if (gdbmi_isresult() != NULL) {
+        if (strncmp(gdbmi_isresult(), "done", 4) == 0) {
+          /* save architecture */
+          const char *ptr;
+          STRINGLIST *item = stringlist_getlast(&consolestring_root, 0, STRFLG_RESULT);
+          assert(item != NULL && item->text != NULL);
+          ptr = item->text;
+          while (*ptr <= ' ' && *ptr != '\0')
+            ptr++;
+          /* expect: 1 STM32F10x medium density [M3/M4] */
+          if (isdigit(*ptr)) {
+            while (isdigit(*ptr))
+              ptr++;
+            while (*ptr <= ' ' && *ptr != '\0')
+              ptr++;
+            assert(*ptr != '\0');
+            strlcpy(state->mcu_family, ptr, sizearray(state->mcu_family));
+            /* split off architecture (if present) */
+            state->mcu_architecture[0] = '\0';
+            if ((ptr = strrchr(state->mcu_family, ' ')) != NULL && ptr[1] == 'M' && isdigit(ptr[2])) {
+              *(char*)ptr++ = '\0';
+              strlcpy(state->mcu_architecture, ptr, sizearray(state->mcu_architecture));
+            }
+          } else {
+            strlcpy(state->cmdline, ptr, CMD_BUFSIZE);
+            strlcat(state->cmdline, "\n", CMD_BUFSIZE);
+            console_add(state->cmdline, STRFLG_ERROR);
+          }
+        }
+        if (strlen(state->mcu_family) > 0) {
+          bmscript_load(state->mcu_family, state->mcu_architecture);
+          MOVESTATE(state, STATE_ASYNC_MODE);
+        } else {
+          set_idle_time(500);   /* stay in scan state, wait for more data */
+        }
+        gdbmi_sethandled(0);
+      }
+      break;
+    case STATE_ASYNC_MODE:
+      if (!state->atprompt)
+        break;
+      if (STATESWITCH(state)) {
+        strcpy(state->cmdline, "-gdb-set target-async 1\n");
+        if (task_stdin(&state->task, state->cmdline))
+          console_input(state->cmdline);
+        state->atprompt = nk_false;
+        MARKSTATE(state);
+      } else if (gdbmi_isresult() != NULL) {
+        MOVESTATE(state, STATE_ATTACH);
+        gdbmi_sethandled(0);
+      }
+      break;
+    case STATE_ATTACH:
+      if (check_stopped(&source_execfile, &source_execline)) {
+        source_cursorfile = source_execfile;
+        source_cursorline = source_execline;
+        state->atprompt = nk_true; /* in GDB 10, no prompt follows on error, so force it */
+      }
+      if (!state->atprompt)
+        break;
+      if (STATESWITCH(state)) {
+        strcpy(state->cmdline, "-target-attach 1\n");
+        if (task_stdin(&state->task, state->cmdline))
+          console_input(state->cmdline);
+        state->atprompt = nk_false;
+        MARKSTATE(state);
+      } else if (gdbmi_isresult() != NULL) {
+        if (strncmp(gdbmi_isresult(), "done", 4) == 0) {
+          state->is_attached = nk_true;
+          MOVESTATE(state, STATE_GET_SOURCES);
+        } else {
+          MOVESTATE(state, STATE_STOPPED);
+        }
+        gdbmi_sethandled(0);
+      }
+      break;
+    case STATE_GET_SOURCES:
+      if (!state->atprompt)
+        break;
+      if (STATESWITCH(state)) {
+        /* clear source files (if any were loaded); these will be reloaded
+           after the list of source files is refreshed */
+        sources_clear(0);
+        if (state->sourcefiles != NULL) {
+          free((void*)state->sourcefiles);
+          state->sourcefiles = NULL;
+        }
+        /* also get the list of source files from GDB (it might use a different
+           order of the file index numbers) */
+        strcpy(state->cmdline, "-file-list-exec-source-files\n");
+        if (task_stdin(&state->task, state->cmdline))
+          console_input(state->cmdline);
+        state->atprompt = nk_false;
+        MARKSTATE(state);
+      } else if (gdbmi_isresult() != NULL) {
+        if (strncmp(gdbmi_isresult(), "done", 4) == 0) {
+          sources_parse(gdbmi_isresult() + 5);  /* + 5 to skip "done" and comma */
+          state->sourcefiles = sources_getnames();     /* create array with names for the dropdown */
+          state->warn_source_tstamps = !check_sources_tstamps(state->Filename); /* check timestamps of sources against elf file */
+          MOVESTATE(state, STATE_MEMACCESS_1);
+        } else {
+          if (strncmp(gdbmi_isresult(), "error", 5) == 0) {
+            strlcpy(state->cmdline, gdbmi_isresult(), CMD_BUFSIZE);
+            strlcat(state->cmdline, "\n", CMD_BUFSIZE);
+            console_add(state->cmdline, STRFLG_ERROR);
+          }
+          set_idle_time(1000); /* stay in attach state */
+        }
+        gdbmi_sethandled(0);
+      }
+      break;
+    case STATE_MEMACCESS_1:
+      if (!state->atprompt)
+        break;
+      if (STATESWITCH(state)) {
+        task_stdin(&state->task, "set mem inaccessible-by-default off\n");
+        state->atprompt = nk_false;
+        MARKSTATE(state);
+      } else if (gdbmi_isresult() != NULL) {
+        /* GDB tends to "forget" this setting, so before running a script we
+           drop back to this state, but then proceed with the appropriate
+           script for the state */
+        MOVESTATE(state, (state->nextstate > 0) ? state->nextstate : STATE_MEMACCESS_2);
+        state->nextstate = -1;
+        gdbmi_sethandled(0);
+      }
+      break;
+    case STATE_MEMACCESS_2:
+      if (!state->atprompt)
+        break;
+      if (STATESWITCH(state)) {
+        if (bmscript_line_fmt("memremap", state->cmdline, NULL)) {
+          /* run first line from the script */
+          task_stdin(&state->task, state->cmdline);
+          state->atprompt = nk_false;
+          MARKSTATE(state);
+          console_replaceflags = STRFLG_LOG;  /* move LOG to SCRIPT, to hide script output by default */
+          console_xlateflags = STRFLG_SCRIPT;
+        } else {
+          MOVESTATE(state, state->force_download ? STATE_DOWNLOAD : STATE_VERIFY);
+        }
+      } else if (gdbmi_isresult() != NULL) {
+        /* run next line from the script (on the end of the script, move to
+           the next state) */
+        if (bmscript_line_fmt(NULL, state->cmdline, NULL)) {
+          task_stdin(&state->task, state->cmdline);
+          state->atprompt = nk_false;
+        } else {
+          console_replaceflags = console_xlateflags = 0;
+          MOVESTATE(state, state->force_download ? STATE_DOWNLOAD : STATE_VERIFY);
+        }
+        gdbmi_sethandled(0);
+      }
+      break;
+    case STATE_VERIFY:
+      if (!state->atprompt)
+        break;
+      if (STATESWITCH(state)) {
+        /* check whether the firmware CRC matches the file in GDB */
+        //??? bug: for LPC targets, checksum must be corrected in the ELF file first (but we do not know the target type)
+        task_stdin(&state->task, "compare-sections\n");
+        state->atprompt = nk_false;
+        MARKSTATE(state);
+      } else if (gdbmi_isresult() != NULL) {
+        STRINGLIST *item1, *item2 = NULL;
+        gdbmi_sethandled(0); /* first flag the result message as handled, to find the line preceding it */
+        item1 = stringlist_getlast(&consolestring_root, 0, STRFLG_HANDLED);
+        assert(item1 != NULL && item1->text != NULL);
+        if (strncmp(item1->text, "the loaded file", 15) == 0) {
+          item1->flags |= STRFLG_HANDLED;
+          item2 = stringlist_getlast(&consolestring_root, 0, STRFLG_HANDLED);
+          assert(item2 != NULL && item2->text != NULL);
+        }
+        if (item2 != NULL && strncmp(item2->text, "warning:", 8) == 0) {
+          MOVESTATE(state, STATE_DOWNLOAD);
+          if (!state->autodownload) {
+            /* make the mismatch stand out */
+            item1->flags =(item1->flags & ~STRFLG_LOG) | STRFLG_ERROR;
+            item2->flags =(item2->flags & ~STRFLG_LOG) | STRFLG_ERROR;
+          }
+        } else {
+          MOVESTATE(state, STATE_CHECK_MAIN);
+        }
+      }
+      break;
+    case STATE_DOWNLOAD:
+      if (!state->autodownload && !state->force_download) {
+        MOVESTATE(state, STATE_CHECK_MAIN);  /* skip this step if download is disabled */
+        break;
+      }
+      if (!state->atprompt)
+        break;
+      if (STATESWITCH(state)) {
+        task_stdin(&state->task, "-target-download\n");
+        state->atprompt = nk_false;
+        MARKSTATE(state);
+        state->force_download = nk_false;
+      } else if (gdbmi_isresult() != NULL) {
+        STRINGLIST *item = stringlist_getlast(&consolestring_root, STRFLG_RESULT, STRFLG_HANDLED);
+        assert(item != NULL);
+        gdbmi_sethandled(0);
+        if (strncmp(item->text, "error", 5) == 0)
+          item->flags = (item->flags & ~STRFLG_RESULT) | STRFLG_ERROR;
+        MOVESTATE(state, STATE_CHECK_MAIN);
+      }
+      break;
+    case STATE_CHECK_MAIN:
+      /* first try to find "main" in the DWARF information (if this fails,
+         we have for some reason failed to load/parse the DWARF information) */
+      if (strlen(state->EntryPoint) == 0)
+        strcpy(state->EntryPoint, "main");
+      if (STATESWITCH(state) && dwarf_sym_from_name(&dwarf_symboltable, state->EntryPoint, -1, -1) != NULL) {
+        //??? to do: also check whether "main" (or the chosen entry point) is a function
+        MOVESTATE(state, STATE_START);  /* main() found, restart program at main */
+        break;
+      }
+      if (!state->atprompt)
+        break;
+      if (STATESWITCH(state)) {
+        /* check whether the there is a function "main" */
+        assert(strlen(state->EntryPoint) != 0);
+        snprintf(state->cmdline, CMD_BUFSIZE, "info functions ^%s$\n", state->EntryPoint);
+        task_stdin(&state->task, state->cmdline);
+        state->atprompt = nk_false;
+        MARKSTATE(state);
+      } else if (gdbmi_isresult() != NULL) {
+        STRINGLIST *item;
+        const char *ptr;
+        gdbmi_sethandled(0); /* first flag the result message as handled, to find the line preceding it */
+        item = stringlist_getlast(&consolestring_root, 0, STRFLG_HANDLED);
+        assert(item != NULL && item->text != NULL);
+        ptr = strstr(item->text, state->EntryPoint);
+        if (ptr != NULL && (ptr == item->text || *(ptr - 1) == ' ')) {
+          MOVESTATE(state, STATE_START);    /* main() found, restart program at main */
+        } else {
+          check_stopped(&source_execfile, &source_execline);
+          source_cursorfile = source_execfile;
+          source_cursorline = source_execline;
+          MOVESTATE(state, STATE_STOPPED);  /* main() not found, stay stopped */
+          state->cont_is_run = nk_true;     /* but when "Cont" is pressed, "run" is performed */
+        }
+      }
+      break;
+    case STATE_START:
+      if (!state->atprompt)
+        break;
+      if (STATESWITCH(state)) {
+        assert(strlen(state->EntryPoint) != 0);
+        snprintf(state->cmdline, CMD_BUFSIZE, "-break-insert -t %s\n", state->EntryPoint);
+        task_stdin(&state->task, state->cmdline);
+        state->atprompt = nk_false;
+        MARKSTATE(state);
+      } else if (gdbmi_isresult() != NULL) {
+        MOVESTATE(state, STATE_EXEC_CMD);
+        state->stateparam[0] = STATEPARAM_EXEC_RESTART;
+        gdbmi_sethandled(0);
+        if (sermon_isopen())
+          sermon_clear(); /* erase any serial input that was received while starting up */
+      }
+      break;
+    case STATE_EXEC_CMD:
+      if (STATESWITCH(state)) {
+        switch (state->stateparam[0]) {
+        case STATEPARAM_EXEC_RESTART:
+        case STATEPARAM_EXEC_CONTINUE:
+          if (state->cont_is_run || state->stateparam[0] == STATEPARAM_EXEC_RESTART) {
+            strcpy(state->cmdline, "-exec-run --start\n");
+            state->cont_is_run = nk_false;  /* do this only once */
+          } else {
+            strcpy(state->cmdline, "-exec-continue\n");
+          }
+          break;
+        case STATEPARAM_EXEC_STOP:
+          strcpy(state->cmdline, "-exec-interrupt\n");
+          break;
+        case STATEPARAM_EXEC_NEXT:
+          strcpy(state->cmdline, "-exec-next\n");
+          break;
+        case STATEPARAM_EXEC_STEP:
+          strcpy(state->cmdline, "-exec-step\n");
+          break;
+        case STATEPARAM_EXEC_UNTIL:
+          sprintf(state->cmdline, "-exec-until %d\n", state->stateparam[1]);
+          break;
+        case STATEPARAM_EXEC_FINISH:
+          strcpy(state->cmdline, "-exec-finish\n");
+          break;
+        }
+        task_stdin(&state->task, state->cmdline);
+        state->atprompt = nk_false;
+        MARKSTATE(state);
+      } else if (gdbmi_isresult() != NULL) {
+        /* after "interrupt" command, still switch to state "running" so that
+           "check_stopped()" is called to update the source file and line */
+        if ((state->stateparam[0] == STATEPARAM_EXEC_STOP && strncmp(gdbmi_isresult(), "done", 4) == 0)
+            || strncmp(gdbmi_isresult(), "running", 7) == 0)
+          MOVESTATE(state, STATE_RUNNING);
+        gdbmi_sethandled(0);
+      }
+      break;
+    case STATE_HARDRESET:
+      if (!state->atprompt)
+        break;
+      if (STATESWITCH(state)) {
+        if (state->tpwr)
+          task_stdin(&state->task, "monitor tpwr disable\n");  /* will be enabled before re-attach */
+        else
+          task_stdin(&state->task, "monitor hard_srst\n");
+        state->atprompt = nk_false;
+        MARKSTATE(state);
+      } else if (gdbmi_isresult() != NULL) {
+        MOVESTATE(state, STATE_INIT);  /* regardless of the result, we restart */
+        if (state->tpwr)
+          set_idle_time(200);   /* make sure power is off for a minimum duration */
+        gdbmi_sethandled(0);
+      }
+      break;
+    case STATE_RUNNING:
+      MARKSTATE(state);
+      if (check_stopped(&source_execfile, &source_execline)) {
+        source_cursorfile = source_execfile;
+        source_cursorline = source_execline;
+        MOVESTATE(state, STATE_STOPPED);
+        state->refreshflags = REFRESH_LOCALS | REFRESH_WATCHES;
+        /* only refresh memory if format & count is set, and if memory view is open */
+        if (state->memdump.count > 0 && state->memdump.size > 0 && tab_states[TAB_MEMORY] == NK_MAXIMIZED)
+          state->refreshflags |= REFRESH_MEMORY;
+      }
+      break;
+    case STATE_STOPPED:
+      if (STATESWITCH(state)) {
+        gdbmi_sethandled(1);
+        MARKSTATE(state);
+      }
+      if (state->swo.enabled && state->swo.mode != SWOMODE_NONE && !state->swo.init_status) {
+        state->monitor_cmd_active = nk_true; /* to silence output of scripts */
+        RESETSTATE(state, STATE_SWOTRACE);
+      } else if (state->refreshflags & REFRESH_BREAKPOINTS) {
+        RESETSTATE(state, STATE_LIST_BREAKPOINTS);
+      } else if (state->refreshflags & REFRESH_WATCHES) {
+        RESETSTATE(state, STATE_LIST_WATCHES);
+      } else if (state->refreshflags & REFRESH_MEMORY) {
+        RESETSTATE(state, STATE_VIEWMEMORY);
+      } else if (check_running()) {
+        RESETSTATE(state, STATE_RUNNING);
+      }
+      if (state->warn_source_tstamps) {
+        console_add("Sources have more recent date/time stamps than the target\n", STRFLG_ERROR);
+        state->warn_source_tstamps = nk_false;  /* do it only once */
+      }
+      break;
+    case STATE_LIST_BREAKPOINTS:
+      if (!state->atprompt)
+        break;
+      if (STATESWITCH(state)) {
+        task_stdin(&state->task, "-break-list\n");
+        state->atprompt = nk_false;
+        MARKSTATE(state);
+      } else if (gdbmi_isresult() != NULL) {
+        if (breakpoint_parse(gdbmi_isresult()) && (state->refreshflags & REFRESH_CONSOLE)) {
+          state->refreshflags &= ~(REFRESH_BREAKPOINTS | REFRESH_CONSOLE);
+          MOVESTATE(state, STATE_STOPPED);
+          gdbmi_sethandled(1);
+        } else {
+          state->refreshflags &= ~REFRESH_CONSOLE;
+          gdbmi_sethandled(0);
+        }
+      }
+      break;
+    case STATE_LIST_LOCALS:
+      //??? enhancement: -stack-list-variables (show local variables & function arguments)
+      break;
+    case STATE_LIST_WATCHES:
+      if (!state->atprompt)
+        break;
+      if (STATESWITCH(state)) {
+        task_stdin(&state->task, "-var-update --all-values *\n");
+        state->atprompt = nk_false;
+        MARKSTATE(state);
+      } else if (gdbmi_isresult() != NULL) {
+        state->refreshflags &= ~REFRESH_WATCHES;
+        MOVESTATE(state, STATE_STOPPED);
+        watch_update(gdbmi_isresult());
+        gdbmi_sethandled(0);
+      }
+      break;
+    case STATE_VIEWMEMORY:
+      if (!state->atprompt)
+        break;
+      if (state->memdump.count == 0 && state->memdump.size == 0) {
+        MOVESTATE(state, STATE_STOPPED);
+        break;
+      }
+      if (STATESWITCH(state)) {
+        assert(state->memdump.expr != NULL && strlen(state->memdump.expr) > 0);
+        sprintf(state->cmdline, "-data-read-memory \"%s\" %c %d 1 %d\n",
+                state->memdump.expr, state->memdump.fmt, state->memdump.size, state->memdump.count);
+        task_stdin(&state->task, state->cmdline);
+        state->atprompt = nk_false;
+        MARKSTATE(state);
+      } else if (gdbmi_isresult() != NULL) {
+        if (memdump_parse(gdbmi_isresult(), &state->memdump)) {
+          state->refreshflags &= ~REFRESH_MEMORY;
+          MOVESTATE(state, STATE_STOPPED);
+          gdbmi_sethandled(1);
+        } else {
+          gdbmi_sethandled(0);
+        }
+      }
+      break;
+    case STATE_BREAK_TOGGLE:
+      if (!state->atprompt)
+        break;
+      if (STATESWITCH(state)) {
+        switch (state->stateparam[0]) {
+        case STATEPARAM_BP_ENABLE:
+          sprintf(state->cmdline, "-break-enable %d\n", state->stateparam[1]);
+          break;
+        case STATEPARAM_BP_DISABLE:
+          sprintf(state->cmdline, "-break-disable %d\n", state->stateparam[1]);
+          break;
+        case STATEPARAM_BP_ADD:
+          assert(sources != NULL);
+          sprintf(state->cmdline, "-break-insert %s:%d\n",
+                  sources[state->stateparam[1]].path, state->stateparam[2]);
+          break;
+        case STATEPARAM_BP_DELETE:
+          sprintf(state->cmdline, "-break-delete %d\n", state->stateparam[1]);
+          break;
+        default:
+          assert(0);
+        }
+        task_stdin(&state->task, state->cmdline);
+        state->atprompt = nk_false;
+        MARKSTATE(state);
+      } else if (gdbmi_isresult() != NULL) {
+        state->refreshflags |= REFRESH_BREAKPOINTS;
+        MOVESTATE(state, STATE_STOPPED);
+        gdbmi_sethandled(0);
+      }
+      break;
+    case STATE_WATCH_TOGGLE:
+      if (!state->atprompt)
+        break;
+      if (STATESWITCH(state)) {
+        char regalias[128];
+        switch (state->stateparam[0]) {
+        case STATEPARAM_WATCH_SET:
+          state->watchseq += 1;
+          if (svd_xlate_name(state->statesymbol, regalias, sizearray(regalias)) != 0)
+            snprintf(state->cmdline, CMD_BUFSIZE, "-var-create watch%u * \"%s\"\n", state->watchseq, regalias);
+          else
+            snprintf(state->cmdline, CMD_BUFSIZE, "-var-create watch%u * \"%s\"\n", state->watchseq, state->statesymbol);
+          break;
+        case STATEPARAM_WATCH_DEL:
+          snprintf(state->cmdline, CMD_BUFSIZE, "-var-delete watch%d\n", state->stateparam[1]);
+          break;
+        default:
+          assert(0);
+        }
+        task_stdin(&state->task, state->cmdline);
+        state->atprompt = nk_false;
+        MARKSTATE(state);
+      } else if (gdbmi_isresult() != NULL) {
+        const char *ptr = gdbmi_isresult();
+        int next_state = STATE_STOPPED;
+        if (strncmp(ptr, "done", 4) == 0) {
+          switch (state->stateparam[0]) {
+          case STATEPARAM_WATCH_SET:
+            ptr = skipwhite(ptr + 5);
+            state->stateparam[0] = watch_add(ptr, state->statesymbol);
+            if (state->stateparam[0] != 0 && state->stateparam[1] != 0)
+              next_state = STATE_WATCH_FORMAT;
+            break;
+          case STATEPARAM_WATCH_DEL:
+            watch_del(state->stateparam[1]);
+            break;
+          default:
+            assert(0);
+          }
+          state->refreshflags |= REFRESH_WATCHES;
+        }
+        MOVESTATE(state, next_state);
+        gdbmi_sethandled(0);
+      }
+      break;
+    case STATE_WATCH_FORMAT:
+      if (!state->atprompt)
+        break;
+      if (STATESWITCH(state)) {
+        const char *fmt = "natural";
+        switch ((char)state->stateparam[1]) {
+        case 'd':
+          fmt = "decimal";
+          break;
+        case 'o':
+          fmt = "octal";
+          break;
+        case 't':
+          fmt = "binary";
+          break;
+        case 'x':
+          fmt = "hexadecimal";
+          break;
+        }
+        snprintf(state->cmdline, CMD_BUFSIZE, "-var-set-format watch%u %s\n",
+                 (unsigned)state->stateparam[0], fmt);
+        task_stdin(&state->task, state->cmdline);
+        state->atprompt = nk_false;
+        MARKSTATE(state);
+      } else if (gdbmi_isresult() != NULL) {
+        MOVESTATE(state, STATE_STOPPED);
+        gdbmi_sethandled(0);
+      }
+      break;
+    case STATE_SWOTRACE:
+      state->swo.init_status = 1;  /* avoid dual automatic init */
+      if (!state->atprompt)
+        break;
+      if (STATESWITCH(state)) {
+        ctf_parse_cleanup();
+        ctf_decode_cleanup();
+        tracestring_clear();
+        tracelog_statusclear();
+        if (state->swo.mode == SWOMODE_NONE || !state->swo.enabled)
+          tracelog_statusmsg(TRACESTATMSG_BMP, "Disabled", -1);
+        ctf_error_notify(CTFERR_NONE, 0, NULL);
+        if (!state->swo.force_plain
+            && ctf_findmetadata(state->Filename, state->swo.metadata, sizearray(state->swo.metadata))
+            && ctf_parse_init(state->swo.metadata) && ctf_parse_run())
+        {
+          const CTF_STREAM *stream;
+          /* stream names overrule configured channel names */
+          for (int idx = 0; (stream = stream_by_seqnr(idx)) != NULL; idx++)
+            if (stream->name != NULL && strlen(stream->name) > 0)
+              channel_setname(idx, stream->name);
+        } else {
+          ctf_parse_cleanup();
+        }
+        if (state->swo.mode == SWOMODE_ASYNC)
+          sprintf(state->cmdline, "monitor traceswo %u\n", state->swo.bitrate); /* automatically select async mode in the BMP */
+        else
+          strlcpy(state->cmdline, "monitor traceswo\n", CMD_BUFSIZE);
+        task_stdin(&state->task, state->cmdline);
+        state->atprompt = nk_false;
+        MARKSTATE(state);
+      } else if (gdbmi_isresult() != NULL) {
+        /* check the reply of "monitor traceswo" to get the endpoint */
+        STRINGLIST *item = stringlist_getlast(&consolestring_root, STRFLG_STATUS, 0);
+        char *ptr;
+        assert(item != NULL);
+        if ((ptr = strchr(item->text, ':'))!= NULL && strtol(ptr + 1, &ptr, 16) == 5 && *ptr == ':') {
+          long ep = strtol(ptr + 1, NULL, 16);
+          if (ep > 0x80)
+            state->trace_endpoint = (unsigned char)ep;
+        }
+        /* initial setup (only needs to be done once) */
+        if (state->trace_status != TRACESTAT_OK) {
+          /* trace_init() does nothing if initialization had already succeeded */
+          if (state->probe == state->netprobe)
+            state->trace_status = trace_init(BMP_PORT_TRACE, state->IPaddr);
+          else
+            state->trace_status = trace_init(state->trace_endpoint, NULL);
+          if (state->trace_status != TRACESTAT_OK) {
+            console_add("Failed to initialize SWO tracing\n", STRFLG_ERROR);
+            if (state->probe_type == PROBE_UNKNOWN
+                && ((state->probe == state->netprobe && state->swo.mode != SWOMODE_ASYNC) || (state->probe != state->netprobe && state->swo.mode != SWOMODE_MANCHESTER)))
+              console_add("Check trace mode (manchester versus async)\n", STRFLG_ERROR);
+          } else {
+            trace_setdatasize(state->swo.datasize);
+          }
+        }
+        /* GDB may have reset the "mem inaccessible-by-default off" setting,
+           so we jump back to the state, after making sure that the state
+           that follows this is the one to run the SWO script */
+        state->nextstate = STATE_SWODEVICE;
+        MOVESTATE(state, STATE_MEMACCESS_1);
+        gdbmi_sethandled(0);
+      }
+      break;
+    case STATE_SWODEVICE:
+      if ((state->swo.mode != SWOMODE_MANCHESTER && state->swo.mode != SWOMODE_ASYNC) || state->swo.clock == 0) {
+        MOVESTATE(state, STATE_SWOCHANNELS);
+        break;
+      }
+      if (!state->atprompt)
+        break;
+      if (STATESWITCH(state)) {
+        if (bmscript_line_fmt("swo_device", state->cmdline, NULL)) {
+          /* run first line from the script */
+          task_stdin(&state->task, state->cmdline);
+          state->atprompt = nk_false;
+          MARKSTATE(state);
+          console_replaceflags = STRFLG_LOG;  /* move LOG to SCRRIPT, to hide script output by default */
+          console_xlateflags = STRFLG_SCRIPT;
+        } else {
+          MOVESTATE(state, STATE_SWOGENERIC);
+        }
+      } else if (gdbmi_isresult() != NULL) {
+        /* run next line from the script (on the end of the script, move to
+           the next state) */
+        if (bmscript_line_fmt(NULL, state->cmdline, NULL)) {
+          task_stdin(&state->task, state->cmdline);
+          state->atprompt = nk_false;
+        } else {
+          console_replaceflags = console_xlateflags = 0;
+          MOVESTATE(state, STATE_SWOGENERIC);
+        }
+        gdbmi_sethandled(0);
+      }
+      break;
+    case STATE_SWOGENERIC:
+      if ((state->swo.mode != SWOMODE_MANCHESTER && state->swo.mode != SWOMODE_ASYNC) || state->swo.clock == 0) {
+        MOVESTATE(state, STATE_SWOCHANNELS);
+        break;
+      }
+      if (!state->atprompt)
+        break;
+      if (STATESWITCH(state)) {
+        const DWARF_SYMBOLLIST *symbol = dwarf_sym_from_name(&dwarf_symboltable, "TRACESWO_BPS", -1, -1);
+        assert(state->swo.bitrate > 0 && state->swo.clock > 0);
+        state->scriptparams[0] = (state->swo.mode == SWOMODE_MANCHESTER) ? 1 : 2;
+        state->scriptparams[1] = state->swo.clock / state->swo.bitrate - 1;
+        state->scriptparams[2] = state->swo.bitrate;
+        state->scriptparams[3] = (symbol != NULL) ? (unsigned long)symbol->data_addr : ~0;
+        if (bmscript_line_fmt("swo_generic", state->cmdline, state->scriptparams)) {
+          /* run first line from the script */
+          task_stdin(&state->task, state->cmdline);
+          state->atprompt = nk_false;
+          MARKSTATE(state);
+          console_replaceflags = STRFLG_LOG;  /* move LOG to SCRRIPT, to hide script output by default */
+          console_xlateflags = STRFLG_SCRIPT;
+        } else {
+          MOVESTATE(state, STATE_SWOCHANNELS);
+        }
+      } else if (gdbmi_isresult() != NULL) {
+        /* run next line from the script (on the end of the script, move to
+           the next state) */
+        if (bmscript_line_fmt(NULL, state->cmdline, state->scriptparams)) {
+          task_stdin(&state->task, state->cmdline);
+          state->atprompt = nk_false;
+        } else {
+          console_replaceflags = console_xlateflags = 0;
+          MOVESTATE(state, STATE_SWOCHANNELS);
+        }
+        gdbmi_sethandled(0);
+      }
+      break;
+    case STATE_SWOCHANNELS:
+      state->swo.init_status = 1;
+      if (!state->atprompt)
+        break;
+      if (STATESWITCH(state)) {
+        const DWARF_SYMBOLLIST *symbol = dwarf_sym_from_name(&dwarf_symboltable, "TRACESWO_TER", -1, -1);
+        state->scriptparams[0] = 0;
+        state->scriptparams[1] = (symbol != NULL) ? (unsigned long)symbol->data_addr : ~0;
+        if (state->swo.mode != SWOMODE_NONE && state->swo.enabled) {
+          /* if SWO mode is disabled, simply turn all channels off (so skip
+             testing whether they should be on) */
+          for (int idx = 0; idx < NUM_CHANNELS; idx++)
+            if (channel_getenabled(idx))
+              state->scriptparams[0] |= (1 << idx);
+        }
+        if (bmscript_line_fmt("swo_channels", state->cmdline, state->scriptparams)) {
+          /* run first line from the script */
+          task_stdin(&state->task, state->cmdline);
+          state->atprompt = nk_false;
+          MARKSTATE(state);
+          console_replaceflags = STRFLG_LOG;  /* move LOG to SCRRIPT, to hide script output by default */
+          console_xlateflags = STRFLG_SCRIPT;
+        } else {
+          MOVESTATE(state, STATE_STOPPED);
+        }
+      } else if (gdbmi_isresult() != NULL) {
+        /* run next line from the script (on the end of the script, move to
+           the next state) */
+        if (bmscript_line_fmt(NULL, state->cmdline, state->scriptparams)) {
+          task_stdin(&state->task, state->cmdline);
+          state->atprompt = nk_false;
+        } else {
+          console_replaceflags = console_xlateflags = 0;
+          bmscript_clearcache();
+          MOVESTATE(state, STATE_STOPPED);
+        }
+        gdbmi_sethandled(0);
+      }
+      break;
+    case STATE_HOVER_SYMBOL:
+      if (!state->atprompt)
+        break;
+      if (strlen(state->statesymbol)== 0 || state->popup_active != POPUP_NONE) {
+        state->ttipvalue[0] = '\0';
+        MOVESTATE(state, STATE_STOPPED);
+        break;
+      }
+      if (STATESWITCH(state)) {
+        char regalias[128];
+        gdbmi_sethandled(1);
+        if (svd_xlate_name(state->statesymbol, regalias, sizearray(regalias)) != 0)
+          snprintf(state->cmdline, CMD_BUFSIZE, "-data-evaluate-expression %s\n", regalias);
+        else
+          snprintf(state->cmdline, CMD_BUFSIZE, "-data-evaluate-expression %s\n", state->statesymbol);
+        task_stdin(&state->task, state->cmdline);
+        state->atprompt = nk_false;
+        MARKSTATE(state);
+        state->ttipvalue[0] = '\0';
+      } else if (gdbmi_isresult() != NULL) {
+        const char *head = gdbmi_isresult();
+        if (strncmp(head, "done,", 5) == 0) {
+          const char *tail;
+          size_t len;
+          assert(*(head + 4) == ',');
+          head = skipwhite(head + 5);
+          assert(strncmp(head, "value=", 6) == 0);
+          head = skipwhite(head + 6);
+          assert(*head == '"');
+          tail = skip_string(head);
+          len = tail - head;
+          if (len >= sizearray(state->ttipvalue))
+            len = sizearray(state->ttipvalue) - 1;
+          strncpy(state->ttipvalue, head, len);
+          state->ttipvalue[len] = '\0';
+          format_string(state->ttipvalue);
+          format_value(state->ttipvalue, sizearray(state->ttipvalue));
+        }
+        MOVESTATE(state, STATE_STOPPED);
+        gdbmi_sethandled(0);
+      }
+      break;
+    } /* switch (curstate) */
+  } /* if (!is_idle()) */
+
+  if (state->curstate > STATE_GDB_TASK && !task_isrunning(&state->task))
+    RESETSTATE(state, STATE_QUIT);   /* GDB ended -> quit the front-end too */
+}
+
 int main(int argc, char *argv[])
 {
-  #define RESETSTATE(state) (prevstate = -1, curstate = (state))
-  enum { TAB_CONFIGURATION, TAB_BREAKPOINTS, TAB_WATCHES, TAB_MEMORY, TAB_SEMIHOSTING, TAB_SERMON, TAB_SWO, /* --- */ TAB_COUNT };
-  enum { SPLITTER_NONE, SPLITTER_VERTICAL, SPLITTER_HORIZONTAL, SIZER_MEMORY, SIZER_SEMIHOSTING, SIZER_SERIAL, SIZER_SWO };
-  enum { POPUP_NONE, POPUP_HELP, POPUP_INFO };
-  #define CMD_BUFSIZE       2048
-
   struct nk_context *ctx;
-  char txtFilename[_MAX_PATH], txtConfigFile[_MAX_PATH], txtGDBpath[_MAX_PATH],
-       txtParamFile[_MAX_PATH], txtSVDfile[_MAX_PATH];
-  char txtEntryPoint[64];
-  char txtIPaddr[64] = "";
-  char port_gdb[64] = "", port_sermon[64] = "";
-  char mcu_family[64], mcu_architecture[32];
-  char *cmdline;
-  int probe, usbprobes, netprobe;
-  const char **probelist;
-  int probe_type = PROBE_UNKNOWN;
+  APPSTATE appstate;
+  SPLITTERBAR splitter_hor, splitter_ver;
+  char txtConfigFile[_MAX_PATH];
   char valstr[128];
   int canvas_width, canvas_height;
   enum nk_collapse_states tab_states[TAB_COUNT];
-  float tab_heights[TAB_COUNT];
-  nk_bool opt_tpwr = nk_false;
-  nk_bool opt_allmsg = nk_false;
-  nk_bool opt_connect_srst = nk_false;
-  nk_bool opt_autodownload = nk_true;
-  int opt_fontsize = FONT_HEIGHT;
   char opt_fontstd[64] = "", opt_fontmono[64] = "";
-  SWOSETTINGS opt_swo;
-  MEMDUMP memdump;
-  float splitter_hor = 0.75, splitter_ver = 0.75;
-  char console_edit[256] = "", watch_edit[128] = "", help_edit[128] = "";
-  STRINGLIST consoleedit_root = { NULL, NULL, 0 };
-  const STRINGLIST *consoleedit_next, *console_mark;
-  TASK task;
-  int sermon_baud = 0, sermon_scroll = 0;
-  unsigned long tooltip_tstamp = 0;
-  char statesymbol[128], ttipvalue[256];
-  int curstate, prevstate, nextstate, stateparam[3];
-  int refreshflags, trace_status, warn_source_tstamps;
-  int atprompt, insplitter, console_activate, console_isactive, exitcode;
-  int cont_is_run, force_download, is_attached;
-  int monitor_cmd_active = 0, popup_active = POPUP_NONE;
-  int idx, result, highlight;
-  unsigned char trace_endpoint = BMP_EP_TRACE;
-  unsigned semihosting_lines, sermon_lines, swo_lines;
-  int prev_clicked_line;
-  unsigned watchseq;
-  unsigned long scriptparams[4];
-  const char **sourcefiles = NULL;
+  int exitcode;
+  int idx, result;
 
-  cmdline = malloc(CMD_BUFSIZE * sizeof(char));
+  /* global defaults */
+  memset(&appstate, 0, sizeof appstate);
+  appstate.prev_clicked_line = -1;
+  appstate.console_activate = 1;
+  appstate.trace_status = TRACESTAT_INIT_FAILED;
+  appstate.trace_endpoint = BMP_EP_TRACE;
+  appstate.popup_active = POPUP_NONE;
+  appstate.cmdline = malloc(CMD_BUFSIZE * sizeof(char));
+  if (appstate.cmdline == NULL)
+    return 1;
+  /* locate the configuration file for settings */
+  get_configfile(txtConfigFile, sizearray(txtConfigFile), "bmdebug.ini");
 
-  /* locate the configuration file */
-  if (folder_AppConfig(txtConfigFile, sizearray(txtConfigFile))) {
-    strlcat(txtConfigFile, DIR_SEPARATOR "BlackMagic", sizearray(txtConfigFile));
-    #if defined _WIN32
-      mkdir(txtConfigFile);
-    #else
-      mkdir(txtConfigFile, S_IRWXU | S_IRWXG | S_IROTH | S_IXOTH);
-    #endif
-    strlcat(txtConfigFile, DIR_SEPARATOR "bmdebug.ini", sizearray(txtConfigFile));
-  }
   #if defined _WIN32
-    ini_gets("Settings", "gdb", "arm-none-eabi-gdb.exe", txtGDBpath, sizearray(txtGDBpath), txtConfigFile);
+    ini_gets("Settings", "gdb", "arm-none-eabi-gdb.exe", appstate.GDBpath, sizearray(appstate.GDBpath), txtConfigFile);
   #else
-    ini_gets("Settings", "gdb", "arm-none-eabi-gdb", txtGDBpath, sizearray(txtGDBpath), txtConfigFile);
+    ini_gets("Settings", "gdb", "arm-none-eabi-gdb", appstate.GDBpath, sizearray(appstate.GDBpath), txtConfigFile);
   #endif
   ini_gets("Settings", "size", "", valstr, sizearray(valstr), txtConfigFile);
   if (sscanf(valstr, "%d %d", &canvas_width, &canvas_height) != 2 || canvas_width < 100 || canvas_height < 50) {
@@ -3915,44 +6087,43 @@ int main(int argc, char *argv[])
     canvas_height = WINDOW_HEIGHT;
   }
   ini_gets("Settings", "splitter", "", valstr, sizearray(valstr), txtConfigFile);
-  if (sscanf(valstr, "%f %f", &splitter_hor, &splitter_ver) != 2 || splitter_hor < 0.1 || splitter_ver < 0.1) {
-    splitter_hor = 0.75;
-    splitter_ver = 0.75;
-  }
-  for (idx = 0; idx < TAB_COUNT; idx++) {
-    char key[32];
-    int opened, size;
-    tab_states[idx] = (idx == TAB_MEMORY || idx == TAB_SEMIHOSTING || idx == TAB_SERMON || idx == TAB_SWO) ? NK_MINIMIZED : NK_MAXIMIZED;
-    tab_heights[idx] = 5 * ROW_HEIGHT;
-    sprintf(key, "view%d", idx);
-    ini_gets("Settings", key, "", cmdline, CMD_BUFSIZE, txtConfigFile);
-    result = sscanf(cmdline, "%d %d", &opened, &size);
-    if (result >= 1)
-      tab_states[idx] = opened;
-    if (result >= 2 && size > ROW_HEIGHT)
-      tab_heights[idx] = size;
-  }
-  opt_allmsg = (int)ini_getl("Settings", "allmessages", 0, txtConfigFile);
+  splitter_hor.ratio = splitter_ver.ratio = 0.0;
+  sscanf(valstr, "%f %f", &splitter_hor.ratio, &splitter_ver.ratio);
+  if (splitter_hor.ratio < 0.05 || splitter_hor.ratio > 0.95)
+    splitter_hor.ratio = 0.70;
+  if (splitter_ver.ratio < 0.05 || splitter_ver.ratio > 0.95)
+    splitter_ver.ratio = 0.70;
+  nk_splitter_init(&splitter_hor, canvas_width - 2 * SPACING, SEPARATOR_HOR, splitter_hor.ratio);
+  nk_splitter_init(&splitter_ver, canvas_height - 4 * SPACING, SEPARATOR_VER, splitter_ver.ratio);
+  config_read_tabstate("configuration", &tab_states[TAB_CONFIGURATION] , NULL, NK_MAXIMIZED, 5 * ROW_HEIGHT, txtConfigFile);
+  config_read_tabstate("breakpoints", &tab_states[TAB_BREAKPOINTS] , NULL, NK_MAXIMIZED, 5 * ROW_HEIGHT, txtConfigFile);
+  config_read_tabstate("watches", &tab_states[TAB_WATCHES] , NULL, NK_MAXIMIZED, 5 * ROW_HEIGHT, txtConfigFile);
+  config_read_tabstate("memory", &tab_states[TAB_MEMORY], &appstate.sizerbar_memory, NK_MINIMIZED, 5 * ROW_HEIGHT, txtConfigFile);
+  config_read_tabstate("semihsting", &tab_states[TAB_SEMIHOSTING], &appstate.sizerbar_semihosting, NK_MINIMIZED, 5 * ROW_HEIGHT, txtConfigFile);
+  config_read_tabstate("serialmon", &tab_states[TAB_SERMON], &appstate.sizerbar_serialmon, NK_MINIMIZED, 5 * ROW_HEIGHT, txtConfigFile);
+  config_read_tabstate("traceswo", &tab_states[TAB_SWO], &appstate.sizerbar_swo, NK_MINIMIZED, 5 * ROW_HEIGHT, txtConfigFile);
+  nk_sizer_init(&appstate.sizerbar_memory, appstate.sizerbar_memory.size, ROW_HEIGHT, SEPARATOR_VER);
+  nk_sizer_init(&appstate.sizerbar_semihosting, appstate.sizerbar_semihosting.size, ROW_HEIGHT, SEPARATOR_VER);
+  nk_sizer_init(&appstate.sizerbar_serialmon, appstate.sizerbar_serialmon.size, ROW_HEIGHT, SEPARATOR_VER);
+  nk_sizer_init(&appstate.sizerbar_swo, appstate.sizerbar_swo.size, ROW_HEIGHT, SEPARATOR_VER);
+  appstate.allmsg = (int)ini_getl("Settings", "allmessages", 0, txtConfigFile);
   opt_fontsize = (int)ini_getl("Settings", "fontsize", FONT_HEIGHT, txtConfigFile);
   ini_gets("Settings", "fontstd", "", opt_fontstd, sizearray(opt_fontstd), txtConfigFile);
   ini_gets("Settings", "fontmono", "", opt_fontmono, sizearray(opt_fontmono), txtConfigFile);
   /* selected interface */
-  probe = (int)ini_getl("Settings", "probe", 0, txtConfigFile);
-  ini_gets("Settings", "ip-address", "127.0.0.1", txtIPaddr, sizearray(txtIPaddr), txtConfigFile);
+  appstate.probe = (int)ini_getl("Settings", "probe", 0, txtConfigFile);
+  ini_gets("Settings", "ip-address", "127.0.0.1", appstate.IPaddr, sizearray(appstate.IPaddr), txtConfigFile);
   /* read saved recent commands */
   for (idx = 1; ; idx++) {
     char key[32];
     sprintf(key, "cmd%d", idx);
-    ini_gets("Commands", key, "", console_edit, sizearray(console_edit), txtConfigFile);
-    if (strlen(console_edit) == 0)
+    ini_gets("Commands", key, "", appstate.console_edit, sizearray(appstate.console_edit), txtConfigFile);
+    if (strlen(appstate.console_edit) == 0)
       break;
-    console_history_add(&consoleedit_root, console_edit, 1);
+    console_history_add(&appstate.consoleedit_root, appstate.console_edit, 1);
   }
 
-  txtFilename[0] = '\0';
-  txtParamFile[0] = '\0';
-  txtSVDfile[0] = '\0';
-  strcpy(txtEntryPoint, "main");
+  strcpy(appstate.EntryPoint, "main");
   for (idx = 1; idx < argc; idx++) {
     const char *ptr;
     if (IS_OPTION(argv[idx])) {
@@ -3983,7 +6154,7 @@ int main(int argc, char *argv[])
         ptr = &argv[idx][2];
         if (*ptr == '=' || *ptr == ':')
           ptr++;
-        strlcpy(txtGDBpath, ptr, sizearray(txtGDBpath));
+        strlcpy(appstate.GDBpath, ptr, sizearray(appstate.GDBpath));
         break;
       default:
         usage(argv[idx]);
@@ -3993,1075 +6164,106 @@ int main(int argc, char *argv[])
       /* filename on the command line must be in native format (using backslashes
          on Windows) */
       if (access(argv[idx], 0) == 0) {
-        strlcpy(txtFilename, argv[idx], sizearray(txtFilename));
-        translate_path(txtFilename, 0);
+        strlcpy(appstate.Filename, argv[idx], sizearray(appstate.Filename));
+        translate_path(appstate.Filename, 0);
       }
     }
   }
-  if (strlen(txtFilename) == 0) {
-    ini_gets("Session", "recent", "", txtFilename, sizearray(txtFilename), txtConfigFile);
+  if (strlen(appstate.Filename) == 0) {
+    ini_gets("Session", "recent", "", appstate.Filename, sizearray(appstate.Filename), txtConfigFile);
     /* filename from the configuration file is stored in the GDB format (convert
        it to native format to test whether it exists) */
-    translate_path(txtFilename, 1);
-    if (access(txtFilename, 0) != 0)
-      txtFilename[0] = '\0';
+    translate_path(appstate.Filename, 1);
+    if (access(appstate.Filename, 0) != 0)
+      appstate.Filename[0] = '\0';
     else
-      translate_path(txtFilename, 0); /* convert back to GDB format */
+      translate_path(appstate.Filename, 0); /* convert back to GDB format */
   }
-  assert(strchr(txtFilename, '\\') == 0); /* backslashes should already have been replaced */
+  assert(strchr(appstate.Filename, '\\') == 0); /* backslashes should already have been replaced */
   /* if a target filename is known, create the parameter filename from target
      filename and read target-specific options */
-  memset(&opt_swo, 0, sizeof(opt_swo));
-  opt_swo.mode = SWOMODE_NONE;
-  opt_swo.clock = 48000000;
-  opt_swo.bitrate = 100000;
-  opt_swo.datasize = 1;
-  if (strlen(txtFilename) > 0) {
-    strlcpy(txtParamFile, txtFilename, sizearray(txtParamFile));
-    strlcat(txtParamFile, ".bmcfg", sizearray(txtParamFile));
-    translate_path(txtParamFile, 1);
-    load_settings(txtParamFile, txtEntryPoint, sizearray(txtEntryPoint), &opt_tpwr,
-                  &opt_connect_srst, &opt_autodownload, txtSVDfile, sizearray(txtSVDfile),
-                  &opt_swo);
+  memset(&appstate.swo, 0, sizeof(appstate.swo));
+  appstate.swo.mode = SWOMODE_NONE;
+  appstate.swo.clock = 48000000;
+  appstate.swo.bitrate = 100000;
+  appstate.swo.datasize = 1;
+  if (strlen(appstate.Filename) > 0) {
+    strlcpy(appstate.ParamFile, appstate.Filename, sizearray(appstate.ParamFile));
+    strlcat(appstate.ParamFile, ".bmcfg", sizearray(appstate.ParamFile));
+    translate_path(appstate.ParamFile, 1);
+    load_settings(appstate.ParamFile, appstate.EntryPoint, sizearray(appstate.EntryPoint), &appstate.tpwr,
+                  &appstate.connect_srst, &appstate.autodownload, appstate.SVDfile, sizearray(appstate.SVDfile),
+                  &appstate.swo);
   }
-  if (opt_swo.mode == SWOMODE_NONE || !opt_swo.enabled)
+  if (appstate.swo.mode == SWOMODE_NONE || !appstate.swo.enabled)
     tracelog_statusmsg(TRACESTATMSG_BMP, "Disabled", -1);
-  if (strlen(opt_swo.metadata) > 0) {
+  if (strlen(appstate.swo.metadata) > 0) {
     ctf_parse_cleanup();
     ctf_decode_cleanup();
     ctf_error_notify(CTFERR_NONE, 0, NULL);
-    if (!ctf_parse_init(opt_swo.metadata) || !ctf_parse_run())
+    if (!ctf_parse_init(appstate.swo.metadata) || !ctf_parse_run())
       ctf_parse_cleanup();
   }
 
   /* collect debug probes, connect to the selected one */
-  usbprobes = get_bmp_count();
-  netprobe = (usbprobes > 0) ? usbprobes : 1;
-  probelist = malloc((netprobe+1)*sizeof(char*));
-  if (probelist != NULL) {
-    if (usbprobes == 0) {
-      probelist[0] = strdup("-");
-    } else {
-      char portname[64];
-      for (idx = 0; idx < usbprobes; idx++) {
-        find_bmp(idx, BMP_IF_GDB, portname, sizearray(portname));
-        probelist[idx] = strdup(portname);
-      }
-    }
-    probelist[netprobe] = strdup("TCP/IP");
-  }
-  if (probe == 99)
-    probe = netprobe;
-  else if (probe > usbprobes)
-    probe = 0;
+  appstate.probelist = get_probelist(&appstate.probe, &appstate.netprobe);
   tcpip_init();
 
-  task_init(&task);
-  insplitter = SPLITTER_NONE;
-  RESETSTATE(STATE_INIT);
-  memdump_init(&memdump);
-  prevstate = nextstate = -1;
-  refreshflags = 0;
-  console_hiddenflags = opt_allmsg ? 0 : STRFLG_NOTICE | STRFLG_RESULT | STRFLG_EXEC | STRFLG_MI_INPUT | STRFLG_TARGET | STRFLG_SCRIPT;
-  atprompt = 0;
-  console_activate = 1;
-  consoleedit_next = NULL;
-  cont_is_run = 0;
-  force_download = 0;
-  monitor_cmd_active = 0;
-  warn_source_tstamps = 0;
+  task_init(&appstate.task);
+  memdump_init(&appstate.memdump);
+  RESETSTATE(&appstate, STATE_INIT);
+  console_hiddenflags = appstate.allmsg ? 0 : STRFLG_NOTICE | STRFLG_RESULT | STRFLG_EXEC | STRFLG_MI_INPUT | STRFLG_TARGET | STRFLG_SCRIPT;
   source_cursorline = 0;
   source_execfile = -1;
   source_execline = 0;
-  prev_clicked_line = -1;
-  semihosting_lines = 0;
-  sermon_lines = 0;
-  swo_lines = 0;
-  watchseq = 0;
-  trace_status = TRACESTAT_INIT_FAILED;
 
   ctx = guidriver_init("BlackMagic Debugger", canvas_width, canvas_height,
                        GUIDRV_RESIZEABLE | GUIDRV_TIMER, opt_fontstd, opt_fontmono, opt_fontsize);
   nuklear_style(ctx);
 
-  while (curstate != STATE_QUIT) {
+  while (appstate.curstate != STATE_QUIT) {
+    appstate.waitidle = nk_true;
     /* handle state */
-    int waitidle;
-    if (!is_idle()) {
-      switch (curstate) {
-      case STATE_INIT:
-        /* kill GDB if it is running */
-        if (task_isrunning(&task))
-          task_close(&task);
-        curstate = STATE_GDB_TASK;
-        refreshflags = 0;
-        is_attached = 0;
-        atprompt = 0;
-        cont_is_run = 0;
-        break;
-      case STATE_GDB_TASK:
-        if (task_launch(txtGDBpath, "--interpreter=mi2", &task)) {
-          curstate = STATE_SCAN_BMP; /* GDB started, now find Black Magic Probe */
-        } else {
-          /* dialog to select GDB */
-          #if defined _WIN32
-            const char *filter = "Executables\0*.exe\0All files\0*.*\0";
-          #else
-            const char *filter = "Executables\0*\0All files\0*\0";
-          #endif
-          const char *s = noc_file_dialog_open(NOC_FILE_DIALOG_OPEN, filter,
-                                               NULL, txtGDBpath, "Select GDB Executable",
-                                               guidriver_apphandle());
-          if (s != NULL && strlen(s) < sizearray(txtGDBpath)) {
-            strcpy(txtGDBpath, s);
-            free((void*)s);
-            assert(curstate == STATE_GDB_TASK); /* drop back into this case after */
-          } else {
-            RESETSTATE(STATE_QUIT);  /* selection dialog was canceled, quit the front-end */
-          }
-        }
-        break;
-      case STATE_SCAN_BMP:
-        port_gdb[0] = '\0';
-        if (probe == netprobe) {
-          if (is_ip_address(txtIPaddr)) {
-            char portnr[20];
-            sprintf(portnr, ":%d", BMP_PORT_GDB);
-            strlcpy(port_gdb, txtIPaddr, sizearray(port_gdb));
-            strlcat(port_gdb, portnr, sizearray(port_gdb));
-          }
-        } else {
-          const char *ptr;
-          assert(probe < usbprobes || (probe == 0 && usbprobes == 0));
-          ptr = probelist[probe];
-          if (*ptr != '\0' && *ptr != '-') {
-            if (strncmp(ptr, "COM", 3)== 0 && strlen(ptr)>= 5) {
-              /* special case for Microsoft Windows, for COM ports >= 10 */
-              strlcpy(port_gdb, "\\\\.\\", sizearray(port_gdb));
-            }
-            strlcat(port_gdb, ptr, sizearray(port_gdb));
-          }
-        }
-        if (port_gdb[0] != '\0') {
-          curstate = STATE_FILE;
-        } else if (atprompt) {
-          if (prevstate != curstate) {
-            if (probe == netprobe)
-              console_add("ctxLink Probe not found, invalid IP address\n", STRFLG_ERROR);
-            else
-              console_add("Black Magic Probe not found\n", STRFLG_ERROR);
-            prevstate = curstate;
-          }
-          set_idle_time(1000); /* repeat scan on timeout (but don't sleep the GUI thread) */
-        }
-        gdbmi_sethandled(0);
-        break;
-      case STATE_FILE:
-        if (!atprompt)
-          break;
-        if (prevstate != curstate) {
-          char temp[_MAX_PATH];
-          dwarf_cleanup(&dwarf_linetable, &dwarf_symboltable, &dwarf_filetable);
-          svd_clear();
-          /* create parameter filename from target filename, then read target-specific settings */
-          strlcpy(txtParamFile, txtFilename, sizearray(txtParamFile));
-          strlcat(txtParamFile, ".bmcfg", sizearray(txtParamFile));
-          load_settings(txtParamFile, txtEntryPoint, sizearray(txtEntryPoint),
-                        &opt_tpwr, &opt_connect_srst, &opt_autodownload,
-                        txtSVDfile, sizearray(txtSVDfile), &opt_swo);
-          /* load target filename in GDB */
-          snprintf(cmdline, CMD_BUFSIZE, "-file-exec-and-symbols %s\n", enquote(temp, txtFilename, sizeof(temp)));
-          if (task_stdin(&task, cmdline))
-            console_input(cmdline);
-          atprompt = 0;
-          prevstate = curstate;
-        } else if (gdbmi_isresult() != NULL) {
-          if (strncmp(gdbmi_isresult(), "done", 4) == 0) {
-            /* read the DWARF information (for function and variable lookup) */
-            FILE *fp = fopen(txtFilename, "rb");
-            if (fp != NULL) {
-              int address_size;
-              if (!dwarf_read(fp, &dwarf_linetable, &dwarf_symboltable, &dwarf_filetable, &address_size))
-                console_add("No DWARF debug information\n", STRFLG_ERROR);
-              fclose(fp);
-            }
-            /* read a CMSIS "SVD" file if any was provided */
-            if (strlen(txtSVDfile) > 0)
-              svd_load(txtSVDfile);
-            source_cursorfile = source_cursorline = 0;
-            source_execfile = source_execline = 0;
-            /* if already attached, skip a to re-loading the sources */
-            curstate = is_attached ? STATE_GET_SOURCES : STATE_TARGET_EXT;
-          } else {
-            if (strncmp(gdbmi_isresult(), "error", 5) == 0) {
-              strlcpy(cmdline, gdbmi_isresult(), CMD_BUFSIZE);
-              strlcat(cmdline, "\n", CMD_BUFSIZE);
-              console_add(cmdline, STRFLG_ERROR);
-            }
-            set_idle_time(1000); /* stay in file state */
-          }
-          gdbmi_sethandled(0);
-        }
-        break;
-      case STATE_TARGET_EXT:
-        if (!atprompt)
-          break;
-        if (prevstate != curstate) {
-          snprintf(cmdline, CMD_BUFSIZE, "-target-select extended-remote %s\n", port_gdb);
-          if (task_stdin(&task, cmdline))
-            console_input(cmdline);
-          atprompt = 0;
-          prevstate = curstate;
-        } else if (gdbmi_isresult() != NULL) {
-          if (strncmp(gdbmi_isresult(), "connected", 9) == 0) {
-            curstate = STATE_MON_VERSION;
-          } else {
-            snprintf(cmdline, CMD_BUFSIZE, "Port %s busy or unavailable\n", port_gdb);
-            console_add(cmdline, STRFLG_ERROR);
-            curstate = STATE_SCAN_BMP;
-            set_idle_time(1000); /* drop back to scan (after on timeout) */
-          }
-          gdbmi_sethandled(0);
-        }
-        break;
-      case STATE_MON_VERSION:
-        if (!atprompt)
-          break;
-        if (prevstate != curstate) {
-          console_mark = stringlist_getlast(&consolestring_root, STRFLG_RESULT, 0);
-          assert(console_mark != NULL);
-          task_stdin(&task, "monitor version\n");
-          atprompt = 0;
-          prevstate = curstate;
-        } else if (gdbmi_isresult() != NULL) {
-          if (strncmp(gdbmi_isresult(), "done", 4) == 0) {
-            int type;
-            assert(console_mark != NULL && console_mark->text != NULL);
-            assert(console_mark->flags & STRFLG_RESULT);
-            console_mark = console_mark->next;  /* skip the mark */
-            while (console_mark != NULL && (console_mark->flags & STRFLG_RESULT) == 0
-                   && (type = check_versionstring(console_mark->text)) == PROBE_UNKNOWN)
-              console_mark = console_mark->next;
-            if (type != PROBE_UNKNOWN) {
-              probe_type = type;
-              /* overrule defaults, if we know the probe */
-              if (probe_type == PROBE_ORG_BMP)
-                opt_swo.mode = SWOMODE_MANCHESTER;
-              else if (probe_type == PROBE_CTXLINK)
-                opt_swo.mode = SWOMODE_ASYNC;
-            }
-            curstate = STATE_MON_TPWR;
-            console_mark = NULL;
-          }
-          gdbmi_sethandled(0);
-        }
-        break;
-      case STATE_MON_TPWR:
-        if (!opt_tpwr) {
-          curstate = STATE_MON_SCAN;
-        } else {
-          if (!atprompt)
-            break;
-          if (prevstate != curstate) {
-            task_stdin(&task, "monitor tpwr enable\n");
-            atprompt = 0;
-            prevstate = curstate;
-          } else if (gdbmi_isresult() != NULL) {
-            if (strncmp(gdbmi_isresult(), "done", 4) == 0)
-              curstate = STATE_MON_SCAN;
-            else
-              set_idle_time(500); /* stay in current state, TPWR may take a little time */
-            gdbmi_sethandled(0);
-          }
-        }
-        break;
-      case STATE_MON_SCAN:
-        if (!atprompt)
-          break;
-        if (prevstate != STATE_MON_SCAN) {
-          task_stdin(&task, "monitor swdp_scan\n");
-          atprompt = 0;
-          prevstate = curstate;
-          mcu_family[0] = '\0';
-          mcu_architecture[0] = '\0';
-        } else if (gdbmi_isresult() != NULL) {
-          if (strncmp(gdbmi_isresult(), "done", 4) == 0) {
-            /* save architecture */
-            const char *ptr;
-            STRINGLIST *item = stringlist_getlast(&consolestring_root, 0, STRFLG_RESULT);
-            assert(item != NULL && item->text != NULL);
-            ptr = item->text;
-            while (*ptr <= ' ' && *ptr != '\0')
-              ptr++;
-            /* expect: 1 STM32F10x medium density [M3/M4] */
-            if (isdigit(*ptr)) {
-              while (isdigit(*ptr))
-                ptr++;
-              while (*ptr <= ' ' && *ptr != '\0')
-                ptr++;
-              assert(*ptr != '\0');
-              strlcpy(mcu_family, ptr, sizearray(mcu_family));
-              /* split off architecture (if present) */
-              mcu_architecture[0] = '\0';
-              if ((ptr = strrchr(mcu_family, ' ')) != NULL && ptr[1] == 'M' && isdigit(ptr[2])) {
-                *(char*)ptr++ = '\0';
-                strlcpy(mcu_architecture, ptr, sizearray(mcu_architecture));
-              }
-            } else {
-              strlcpy(cmdline, ptr, CMD_BUFSIZE);
-              strlcat(cmdline, "\n", CMD_BUFSIZE);
-              console_add(cmdline, STRFLG_ERROR);
-            }
-          }
-          if (strlen(mcu_family) > 0) {
-            bmscript_load(mcu_family, mcu_architecture);
-            curstate = STATE_ASYNC_MODE;
-          } else {
-            set_idle_time(500);   /* stay in scan state, wait for more data */
-          }
-          gdbmi_sethandled(0);
-        }
-        break;
-      case STATE_ASYNC_MODE:
-        if (!atprompt)
-          break;
-        if (prevstate != curstate) {
-          strcpy(cmdline, "-gdb-set target-async 1\n");
-          if (task_stdin(&task, cmdline))
-            console_input(cmdline);
-          atprompt = 0;
-          prevstate = curstate;
-        } else if (gdbmi_isresult() != NULL) {
-          curstate = STATE_ATTACH;
-          gdbmi_sethandled(0);
-        }
-        break;
-      case STATE_ATTACH:
-        if (check_stopped(&source_execfile, &source_execline)) {
-          source_cursorfile = source_execfile;
-          source_cursorline = source_execline;
-          atprompt = 1; /* in GDB 10, no prompt follows on error, so force it */
-        }
-        if (!atprompt)
-          break;
-        if (prevstate != curstate) {
-          strcpy(cmdline, "-target-attach 1\n");
-          if (task_stdin(&task, cmdline))
-            console_input(cmdline);
-          atprompt = 0;
-          prevstate = curstate;
-        } else if (gdbmi_isresult() != NULL) {
-          if (strncmp(gdbmi_isresult(), "done", 4) == 0) {
-            is_attached = 1;
-            curstate = STATE_GET_SOURCES;
-          } else {
-            curstate = STATE_STOPPED;
-          }
-          gdbmi_sethandled(0);
-        }
-        break;
-      case STATE_GET_SOURCES:
-        if (!atprompt)
-          break;
-        if (prevstate != curstate) {
-          /* clear source files (if any were loaded); these will be reloaded
-             after the list of source files is refreshed */
-          sources_clear(0);
-          if (sourcefiles != NULL) {
-            free((void*)sourcefiles);
-            sourcefiles = NULL;
-          }
-          /* also get the list of source files from GDB (it might use a different
-             order of the file index numbers) */
-          strcpy(cmdline, "-file-list-exec-source-files\n");
-          if (task_stdin(&task, cmdline))
-            console_input(cmdline);
-          atprompt = 0;
-          prevstate = curstate;
-        } else if (gdbmi_isresult() != NULL) {
-          if (strncmp(gdbmi_isresult(), "done", 4) == 0) {
-            sources_parse(gdbmi_isresult() + 5);  /* + 5 to skip "done" and comma */
-            sourcefiles = sources_getnames();     /* create array with names for the dropdown */
-            warn_source_tstamps = !check_sources_tstamps(txtFilename); /* check timestamps of sources against elf file */
-            curstate = STATE_MEMACCESS_1;
-          } else {
-            if (strncmp(gdbmi_isresult(), "error", 5) == 0) {
-              strlcpy(cmdline, gdbmi_isresult(), CMD_BUFSIZE);
-              strlcat(cmdline, "\n", CMD_BUFSIZE);
-              console_add(cmdline, STRFLG_ERROR);
-            }
-            set_idle_time(1000); /* stay in attach state */
-          }
-          gdbmi_sethandled(0);
-        }
-        break;
-      case STATE_MEMACCESS_1:
-        if (!atprompt)
-          break;
-        if (prevstate != curstate) {
-          task_stdin(&task, "set mem inaccessible-by-default off\n");
-          atprompt = 0;
-          prevstate = curstate;
-        } else if (gdbmi_isresult() != NULL) {
-          /* GDB tends to "forget" this setting, so before running a script we
-             drop back to this state, but then proceed with the appropriate
-             script for the state */
-          curstate = (nextstate > 0) ? nextstate : STATE_MEMACCESS_2;
-          nextstate = -1;
-          gdbmi_sethandled(0);
-        }
-        break;
-      case STATE_MEMACCESS_2:
-        if (!atprompt)
-          break;
-        if (prevstate != curstate) {
-          if (bmscript_line_fmt("memremap", cmdline, NULL)) {
-            /* run first line from the script */
-            task_stdin(&task, cmdline);
-            atprompt = 0;
-            prevstate = curstate;
-            console_replaceflags = STRFLG_LOG;  /* move LOG to SCRIPT, to hide script output by default */
-            console_xlateflags = STRFLG_SCRIPT;
-          } else {
-            curstate = force_download ? STATE_DOWNLOAD : STATE_VERIFY;
-          }
-        } else if (gdbmi_isresult() != NULL) {
-          /* run next line from the script (on the end of the script, move to
-             the next state) */
-          if (bmscript_line_fmt(NULL, cmdline, NULL)) {
-            task_stdin(&task, cmdline);
-            atprompt = 0;
-          } else {
-            console_replaceflags = console_xlateflags = 0;
-            curstate = force_download ? STATE_DOWNLOAD : STATE_VERIFY;
-          }
-          gdbmi_sethandled(0);
-        }
-        break;
-      case STATE_VERIFY:
-        if (!atprompt)
-          break;
-        if (prevstate != curstate) {
-          /* check whether the firmware CRC matches the file in GDB */
-          //??? for LPC targets, checksum must be corrected in the ELF file first
-          task_stdin(&task, "compare-sections\n");
-          atprompt = 0;
-          prevstate = curstate;
-        } else if (gdbmi_isresult() != NULL) {
-          STRINGLIST *item1, *item2 = NULL;
-          gdbmi_sethandled(0); /* first flag the result message as handled, to find the line preceding it */
-          item1 = stringlist_getlast(&consolestring_root, 0, STRFLG_HANDLED);
-          assert(item1 != NULL && item1->text != NULL);
-          if (strncmp(item1->text, "the loaded file", 15) == 0) {
-            item1->flags |= STRFLG_HANDLED;
-            item2 = stringlist_getlast(&consolestring_root, 0, STRFLG_HANDLED);
-            assert(item2 != NULL && item2->text != NULL);
-          }
-          if (item2 != NULL && strncmp(item2->text, "warning:", 8) == 0) {
-            curstate = STATE_DOWNLOAD;
-            if (!opt_autodownload) {
-              /* make the mismatch stand out */
-              item1->flags =(item1->flags & ~STRFLG_LOG) | STRFLG_ERROR;
-              item2->flags =(item2->flags & ~STRFLG_LOG) | STRFLG_ERROR;
-            }
-          } else {
-            curstate = STATE_CHECK_MAIN;
-          }
-        }
-        break;
-      case STATE_DOWNLOAD:
-        if (!opt_autodownload && !force_download) {
-          curstate = STATE_CHECK_MAIN;  /* skip this step if download is disabled */
-          break;
-        }
-        if (!atprompt)
-          break;
-        if (prevstate != curstate) {
-          task_stdin(&task, "-target-download\n");
-          atprompt = 0;
-          prevstate = curstate;
-          force_download = 0;
-        } else if (gdbmi_isresult() != NULL) {
-          STRINGLIST *item = stringlist_getlast(&consolestring_root, STRFLG_RESULT, STRFLG_HANDLED);
-          assert(item != NULL);
-          gdbmi_sethandled(0);
-          if (strncmp(item->text, "error", 5) == 0)
-            item->flags = (item->flags & ~STRFLG_RESULT) | STRFLG_ERROR;
-          curstate = STATE_CHECK_MAIN;
-        }
-        break;
-      case STATE_CHECK_MAIN:
-        /* first try to find "main" in the DWARF information (if this fails,
-           we have for some reason failed to load/parse the DWARF information) */
-        if (strlen(txtEntryPoint) == 0)
-          strcpy(txtEntryPoint, "main");
-        if (prevstate != curstate && dwarf_sym_from_name(&dwarf_symboltable, txtEntryPoint, -1, -1) != NULL) {
-          //??? also check whether "main" (or the chosen entry point) is a function
-          curstate = STATE_START;     /* main() found, restart program at main */
-          break;
-        }
-        if (!atprompt)
-          break;
-        if (prevstate != curstate) {
-          /* check whether the there is a function "main" */
-          assert(strlen(txtEntryPoint) != 0);
-          snprintf(cmdline, CMD_BUFSIZE, "info functions ^%s$\n", txtEntryPoint);
-          task_stdin(&task, cmdline);
-          atprompt = 0;
-          prevstate = curstate;
-        } else if (gdbmi_isresult() != NULL) {
-          STRINGLIST *item;
-          const char *ptr;
-          gdbmi_sethandled(0); /* first flag the result message as handled, to find the line preceding it */
-          item = stringlist_getlast(&consolestring_root, 0, STRFLG_HANDLED);
-          assert(item != NULL && item->text != NULL);
-          ptr = strstr(item->text, txtEntryPoint);
-          if (ptr != NULL && (ptr == item->text || *(ptr - 1) == ' ')) {
-            curstate = STATE_START;     /* main() found, restart program at main */
-          } else {
-            check_stopped(&source_execfile, &source_execline);
-            source_cursorfile = source_execfile;
-            source_cursorline = source_execline;
-            curstate = STATE_STOPPED;   /* main() not found, stay stopped */
-            cont_is_run = 1;            /* but when "Cont" is pressed, "run" is performed */
-          }
-        }
-        break;
-      case STATE_START:
-        if (!atprompt)
-          break;
-        if (prevstate != curstate) {
-          assert(strlen(txtEntryPoint) != 0);
-          snprintf(cmdline, CMD_BUFSIZE, "-break-insert -t %s\n", txtEntryPoint);
-          task_stdin(&task, cmdline);
-          atprompt = 0;
-          prevstate = curstate;
-        } else if (gdbmi_isresult() != NULL) {
-          curstate = STATE_EXEC_CMD;
-          stateparam[0] = STATEPARAM_EXEC_RESTART;
-          gdbmi_sethandled(0);
-          if (sermon_isopen())
-            sermon_clear(); /* erase any serial input that was received while starting up */
-        }
-        break;
-      case STATE_EXEC_CMD:
-        if (prevstate != curstate) {
-          switch (stateparam[0]) {
-          case STATEPARAM_EXEC_RESTART:
-          case STATEPARAM_EXEC_CONTINUE:
-            if (cont_is_run || stateparam[0] == STATEPARAM_EXEC_RESTART) {
-              strcpy(cmdline, "-exec-run --start\n");
-              cont_is_run = 0;  /* do this only once */
-            } else {
-              strcpy(cmdline, "-exec-continue\n");
-            }
-            break;
-          case STATEPARAM_EXEC_STOP:
-            strcpy(cmdline, "-exec-interrupt\n");
-            break;
-          case STATEPARAM_EXEC_NEXT:
-            strcpy(cmdline, "-exec-next\n");
-            break;
-          case STATEPARAM_EXEC_STEP:
-            strcpy(cmdline, "-exec-step\n");
-            break;
-          case STATEPARAM_EXEC_UNTIL:
-            sprintf(cmdline, "-exec-until %d\n", stateparam[1]);
-            break;
-          case STATEPARAM_EXEC_FINISH:
-            strcpy(cmdline, "-exec-finish\n");
-            break;
-          }
-          task_stdin(&task, cmdline);
-          atprompt = 0;
-          prevstate = curstate;
-        } else if (gdbmi_isresult() != NULL) {
-          /* after "interrupt" command, still switch to state "running" so that
-             "check_stopped()" is called to update the source file and line */
-          if ((stateparam[0] == STATEPARAM_EXEC_STOP && strncmp(gdbmi_isresult(), "done", 4) == 0)
-              || strncmp(gdbmi_isresult(), "running", 7) == 0)
-            curstate = STATE_RUNNING;
-          gdbmi_sethandled(0);
-        }
-        break;
-      case STATE_HARDRESET:
-        if (!atprompt)
-          break;
-        if (prevstate != curstate) {
-          if (opt_tpwr)
-            task_stdin(&task, "monitor tpwr disable\n");  /* will be enabled before re-attach */
-          else
-            task_stdin(&task, "monitor hard_srst\n");
-          atprompt = 0;
-          prevstate = curstate;
-        } else if (gdbmi_isresult() != NULL) {
-          curstate = STATE_INIT;  /* regardless of the result, we restart */
-          if (opt_tpwr)
-            set_idle_time(200);   /* make sure power is off for a minimum duration */
-          gdbmi_sethandled(0);
-        }
-        break;
-      case STATE_RUNNING:
-        prevstate = curstate;
-        if (check_stopped(&source_execfile, &source_execline)) {
-          source_cursorfile = source_execfile;
-          source_cursorline = source_execline;
-          curstate = STATE_STOPPED;
-          refreshflags = REFRESH_LOCALS | REFRESH_WATCHES;
-          /* only refresh memory if format & count is set, and if memory view is open */
-          if (memdump.count > 0 && memdump.size > 0 && tab_states[TAB_MEMORY] == NK_MAXIMIZED)
-            refreshflags |= REFRESH_MEMORY;
-        }
-        break;
-      case STATE_STOPPED:
-        if (prevstate != curstate) {
-          gdbmi_sethandled(1);
-          prevstate = curstate;
-        }
-        if (opt_swo.enabled && opt_swo.mode != SWOMODE_NONE && !opt_swo.init_status) {
-          monitor_cmd_active = 1; /* to silence output of scripts */
-          RESETSTATE(STATE_SWOTRACE);
-        } else if (refreshflags & REFRESH_BREAKPOINTS) {
-          RESETSTATE(STATE_LIST_BREAKPOINTS);
-        } else if (refreshflags & REFRESH_WATCHES) {
-          RESETSTATE(STATE_LIST_WATCHES);
-        } else if (refreshflags & REFRESH_MEMORY) {
-          RESETSTATE(STATE_VIEWMEMORY);
-        } else if (check_running()) {
-          RESETSTATE(STATE_RUNNING);
-        }
-        if (warn_source_tstamps) {
-          console_add("Sources have more recent date/time stamps than the target\n", STRFLG_ERROR);
-          warn_source_tstamps = 0;
-        }
-        break;
-      case STATE_LIST_BREAKPOINTS:
-        if (!atprompt)
-          break;
-        if (prevstate != curstate) {
-          task_stdin(&task, "-break-list\n");
-          atprompt = 0;
-          prevstate = curstate;
-        } else if (gdbmi_isresult() != NULL) {
-          if (breakpoint_parse(gdbmi_isresult()) && (refreshflags & REFRESH_CONSOLE)) {
-            refreshflags &= ~(REFRESH_BREAKPOINTS | REFRESH_CONSOLE);
-            curstate = STATE_STOPPED;
-            gdbmi_sethandled(1);
-          } else {
-            refreshflags &= ~REFRESH_CONSOLE;
-            gdbmi_sethandled(0);
-          }
-        }
-        break;
-      case STATE_LIST_LOCALS:
-        //??? -stack-list-variables (show local variables & function arguments)
-        break;
-      case STATE_LIST_WATCHES:
-        if (!atprompt)
-          break;
-        if (prevstate != curstate) {
-          task_stdin(&task, "-var-update --all-values *\n");
-          atprompt = 0;
-          prevstate = curstate;
-        } else if (gdbmi_isresult() != NULL) {
-          refreshflags &= ~REFRESH_WATCHES;
-          curstate = STATE_STOPPED;
-          watch_update(gdbmi_isresult());
-          gdbmi_sethandled(0);
-        }
-        break;
-      case STATE_VIEWMEMORY:
-        if (!atprompt)
-          break;
-        if (memdump.count == 0 && memdump.size == 0) {
-          curstate = STATE_STOPPED;
-          break;
-        }
-        if (prevstate != curstate) {
-          assert(memdump.expr != NULL && strlen(memdump.expr) > 0);
-          sprintf(cmdline, "-data-read-memory \"%s\" %c %d 1 %d\n",
-                  memdump.expr, memdump.fmt, memdump.size, memdump.count);
-          task_stdin(&task, cmdline);
-          atprompt = 0;
-          prevstate = curstate;
-        } else if (gdbmi_isresult() != NULL) {
-          if (memdump_parse(gdbmi_isresult(), &memdump)) {
-            refreshflags &= ~REFRESH_MEMORY;
-            curstate = STATE_STOPPED;
-            gdbmi_sethandled(1);
-          } else {
-            gdbmi_sethandled(0);
-          }
-        }
-        break;
-      case STATE_BREAK_TOGGLE:
-        if (!atprompt)
-          break;
-        if (prevstate != curstate) {
-          switch (stateparam[0]) {
-          case STATEPARAM_BP_ENABLE:
-            sprintf(cmdline, "-break-enable %d\n", stateparam[1]);
-            break;
-          case STATEPARAM_BP_DISABLE:
-            sprintf(cmdline, "-break-disable %d\n", stateparam[1]);
-            break;
-          case STATEPARAM_BP_ADD:
-            assert(sources != NULL);
-            sprintf(cmdline, "-break-insert %s:%d\n", sources[stateparam[1]].path, stateparam[2]);
-            break;
-          case STATEPARAM_BP_DELETE:
-            sprintf(cmdline, "-break-delete %d\n", stateparam[1]);
-            break;
-          default:
-            assert(0);
-          }
-          task_stdin(&task, cmdline);
-          atprompt = 0;
-          prevstate = curstate;
-        } else if (gdbmi_isresult() != NULL) {
-          refreshflags |= REFRESH_BREAKPOINTS;
-          curstate = STATE_STOPPED;
-          gdbmi_sethandled(0);
-        }
-        break;
-      case STATE_WATCH_TOGGLE:
-        if (!atprompt)
-          break;
-        if (prevstate != curstate) {
-          char regalias[128];
-          switch (stateparam[0]) {
-          case STATEPARAM_WATCH_SET:
-            watchseq += 1;
-            if (svd_xlate_name(statesymbol, regalias, sizearray(regalias)) != 0)
-              snprintf(cmdline, CMD_BUFSIZE, "-var-create watch%u * \"%s\"\n", watchseq, regalias);
-            else
-              snprintf(cmdline, CMD_BUFSIZE, "-var-create watch%u * \"%s\"\n", watchseq, statesymbol);
-            break;
-          case STATEPARAM_WATCH_DEL:
-            snprintf(cmdline, CMD_BUFSIZE, "-var-delete watch%d\n", stateparam[1]);
-            break;
-          default:
-            assert(0);
-          }
-          task_stdin(&task, cmdline);
-          atprompt = 0;
-          prevstate = curstate;
-        } else if (gdbmi_isresult() != NULL) {
-          const char *ptr = gdbmi_isresult();
-          int next_state = STATE_STOPPED;
-          if (strncmp(ptr, "done", 4) == 0) {
-            switch (stateparam[0]) {
-            case STATEPARAM_WATCH_SET:
-              ptr = skipwhite(ptr + 5);
-              stateparam[0] = watch_add(ptr, statesymbol);
-              if (stateparam[0] != 0 && stateparam[1] != 0)
-                next_state = STATE_WATCH_FORMAT;
-              break;
-            case STATEPARAM_WATCH_DEL:
-              watch_del(stateparam[1]);
-              break;
-            default:
-              assert(0);
-            }
-            refreshflags |= REFRESH_WATCHES;
-          }
-          curstate = next_state;
-          gdbmi_sethandled(0);
-        }
-        break;
-      case STATE_WATCH_FORMAT:
-        if (!atprompt)
-          break;
-        if (prevstate != curstate) {
-          const char *fmt = "natural";
-          switch ((char)stateparam[1]) {
-          case 'd':
-            fmt = "decimal";
-            break;
-          case 'o':
-            fmt = "octal";
-            break;
-          case 't':
-            fmt = "binary";
-            break;
-          case 'x':
-            fmt = "hexadecimal";
-            break;
-          }
-          snprintf(cmdline, CMD_BUFSIZE, "-var-set-format watch%u %s\n",(unsigned)stateparam[0], fmt);
-          task_stdin(&task, cmdline);
-          atprompt = 0;
-          prevstate = curstate;
-        } else if (gdbmi_isresult() != NULL) {
-          curstate = STATE_STOPPED;
-          gdbmi_sethandled(0);
-        }
-        break;
-      case STATE_SWOTRACE:
-        opt_swo.init_status = 1;  /* avoid dual automatic init */
-        if (!atprompt)
-          break;
-        if (prevstate != curstate) {
-          ctf_parse_cleanup();
-          ctf_decode_cleanup();
-          tracestring_clear();
-          tracelog_statusclear();
-          if (opt_swo.mode == SWOMODE_NONE || !opt_swo.enabled)
-            tracelog_statusmsg(TRACESTATMSG_BMP, "Disabled", -1);
-          ctf_error_notify(CTFERR_NONE, 0, NULL);
-          if (!opt_swo.force_plain
-              && ctf_findmetadata(txtFilename, opt_swo.metadata, sizearray(opt_swo.metadata))
-              && ctf_parse_init(opt_swo.metadata) && ctf_parse_run())
-          {
-            const CTF_STREAM *stream;
-            /* stream names overrule configured channel names */
-            for (idx = 0; (stream = stream_by_seqnr(idx)) != NULL; idx++)
-              if (stream->name != NULL && strlen(stream->name) > 0)
-                channel_setname(idx, stream->name);
-          } else {
-            ctf_parse_cleanup();
-          }
-          if (opt_swo.mode == SWOMODE_ASYNC)
-            sprintf(cmdline, "monitor traceswo %u\n", opt_swo.bitrate); /* automatically select async mode in the BMP */
-          else
-            strlcpy(cmdline, "monitor traceswo\n", CMD_BUFSIZE);
-          task_stdin(&task, cmdline);
-          atprompt = 0;
-          prevstate = curstate;
-        } else if (gdbmi_isresult() != NULL) {
-          /* check the reply of "monitor traceswo" to get the endpoint */
-          STRINGLIST *item = stringlist_getlast(&consolestring_root, STRFLG_STATUS, 0);
-          char *ptr;
-          assert(item != NULL);
-          if ((ptr = strchr(item->text, ':'))!= NULL && strtol(ptr + 1, &ptr, 16) == 5 && *ptr == ':') {
-            long ep = strtol(ptr + 1, NULL, 16);
-            if (ep > 0x80)
-              trace_endpoint = (unsigned char)ep;
-          }
-          /* initial setup (only needs to be done once) */
-          if (trace_status != TRACESTAT_OK) {
-            /* trace_status() does nothing if initialization had already succeeded */
-            if (probe == netprobe)
-              trace_status = trace_init(BMP_PORT_TRACE, txtIPaddr);
-            else
-              trace_status = trace_init(trace_endpoint, NULL);
-            if (trace_status != TRACESTAT_OK) {
-              console_add("Failed to initialize SWO tracing\n", STRFLG_ERROR);
-              if (probe_type == PROBE_UNKNOWN
-                  && ((probe == netprobe && opt_swo.mode != SWOMODE_ASYNC) || (probe != netprobe && opt_swo.mode != SWOMODE_MANCHESTER)))
-                console_add("Check trace mode (manchester versus async)\n", STRFLG_ERROR);
-            } else {
-              trace_setdatasize(opt_swo.datasize);
-            }
-          }
-          /* GDB may have reset the "mem inaccessible-by-default off" setting,
-             so we jump back to the state, after making sure that the state
-             that follows this is the one to run the SWO script */
-          nextstate = STATE_SWODEVICE;
-          curstate = STATE_MEMACCESS_1;
-          gdbmi_sethandled(0);
-        }
-        break;
-      case STATE_SWODEVICE:
-        if ((opt_swo.mode != SWOMODE_MANCHESTER && opt_swo.mode != SWOMODE_ASYNC) || opt_swo.clock == 0) {
-          curstate = STATE_SWOCHANNELS;
-          break;
-        }
-        if (!atprompt)
-          break;
-        if (prevstate != curstate) {
-          if (bmscript_line_fmt("swo_device", cmdline, NULL)) {
-            /* run first line from the script */
-            task_stdin(&task, cmdline);
-            atprompt = 0;
-            prevstate = curstate;
-            console_replaceflags = STRFLG_LOG;  /* move LOG to SCRRIPT, to hide script output by default */
-            console_xlateflags = STRFLG_SCRIPT;
-          } else {
-            curstate = STATE_SWOGENERIC;
-          }
-        } else if (gdbmi_isresult() != NULL) {
-          /* run next line from the script (on the end of the script, move to
-             the next state) */
-          if (bmscript_line_fmt(NULL, cmdline, NULL)) {
-            task_stdin(&task, cmdline);
-            atprompt = 0;
-          } else {
-            console_replaceflags = console_xlateflags = 0;
-            curstate = STATE_SWOGENERIC;
-          }
-          gdbmi_sethandled(0);
-        }
-        break;
-      case STATE_SWOGENERIC:
-        if ((opt_swo.mode != SWOMODE_MANCHESTER && opt_swo.mode != SWOMODE_ASYNC) || opt_swo.clock == 0) {
-          curstate = STATE_SWOCHANNELS;
-          break;
-        }
-        if (!atprompt)
-          break;
-        if (prevstate != curstate) {
-          const DWARF_SYMBOLLIST *symbol = dwarf_sym_from_name(&dwarf_symboltable, "TRACESWO_BPS", -1, -1);
-          assert(opt_swo.bitrate > 0 && opt_swo.clock > 0);
-          scriptparams[0] = (opt_swo.mode == SWOMODE_MANCHESTER) ? 1 : 2;
-          scriptparams[1] = opt_swo.clock / opt_swo.bitrate - 1;
-          scriptparams[2] = opt_swo.bitrate;
-          scriptparams[3] = (symbol != NULL) ? (unsigned long)symbol->data_addr : ~0;
-          if (bmscript_line_fmt("swo_generic", cmdline, scriptparams)) {
-            /* run first line from the script */
-            task_stdin(&task, cmdline);
-            atprompt = 0;
-            prevstate = curstate;
-            console_replaceflags = STRFLG_LOG;  /* move LOG to SCRRIPT, to hide script output by default */
-            console_xlateflags = STRFLG_SCRIPT;
-          } else {
-            curstate = STATE_SWOCHANNELS;
-          }
-        } else if (gdbmi_isresult() != NULL) {
-          /* run next line from the script (on the end of the script, move to
-             the next state) */
-          if (bmscript_line_fmt(NULL, cmdline, scriptparams)) {
-            task_stdin(&task, cmdline);
-            atprompt = 0;
-          } else {
-            console_replaceflags = console_xlateflags = 0;
-            curstate = STATE_SWOCHANNELS;
-          }
-          gdbmi_sethandled(0);
-        }
-        break;
-      case STATE_SWOCHANNELS:
-        opt_swo.init_status = 1;
-        if (!atprompt)
-          break;
-        if (prevstate != curstate) {
-          const DWARF_SYMBOLLIST *symbol = dwarf_sym_from_name(&dwarf_symboltable, "TRACESWO_TER", -1, -1);
-          scriptparams[0] = 0;
-          scriptparams[1] = (symbol != NULL) ? (unsigned long)symbol->data_addr : ~0;
-          if (opt_swo.mode != SWOMODE_NONE && opt_swo.enabled) {
-            /* if SWO mode is disabled, simply turn all channels off (so skip
-               testing whether they should be on) */
-            for (idx = 0; idx < NUM_CHANNELS; idx++)
-              if (channel_getenabled(idx))
-                scriptparams[0] |= (1 << idx);
-          }
-          if (bmscript_line_fmt("swo_channels", cmdline, scriptparams)) {
-            /* run first line from the script */
-            task_stdin(&task, cmdline);
-            atprompt = 0;
-            prevstate = curstate;
-            console_replaceflags = STRFLG_LOG;  /* move LOG to SCRRIPT, to hide script output by default */
-            console_xlateflags = STRFLG_SCRIPT;
-          } else {
-            curstate = STATE_STOPPED;
-          }
-        } else if (gdbmi_isresult() != NULL) {
-          /* run next line from the script (on the end of the script, move to
-             the next state) */
-          if (bmscript_line_fmt(NULL, cmdline, scriptparams)) {
-            task_stdin(&task, cmdline);
-            atprompt = 0;
-          } else {
-            console_replaceflags = console_xlateflags = 0;
-            bmscript_clearcache();
-            curstate = STATE_STOPPED;
-          }
-          gdbmi_sethandled(0);
-        }
-        break;
-      case STATE_HOVER_SYMBOL:
-        if (!atprompt)
-          break;
-        if (strlen(statesymbol)== 0 || popup_active != POPUP_NONE) {
-          ttipvalue[0] = '\0';
-          curstate = STATE_STOPPED;
-          break;
-        }
-        if (prevstate != curstate) {
-          char regalias[128];
-          gdbmi_sethandled(1);
-          if (svd_xlate_name(statesymbol, regalias, sizearray(regalias)) != 0)
-            snprintf(cmdline, CMD_BUFSIZE, "-data-evaluate-expression %s\n", regalias);
-          else
-            snprintf(cmdline, CMD_BUFSIZE, "-data-evaluate-expression %s\n", statesymbol);
-          task_stdin(&task, cmdline);
-          atprompt = 0;
-          prevstate = curstate;
-          ttipvalue[0] = '\0';
-        } else if (gdbmi_isresult() != NULL) {
-          const char *head = gdbmi_isresult();
-          if (strncmp(head, "done,", 5) == 0) {
-            const char *tail;
-            size_t len;
-            assert(*(head + 4) == ',');
-            head = skipwhite(head + 5);
-            assert(strncmp(head, "value=", 6) == 0);
-            head = skipwhite(head + 6);
-            assert(*head == '"');
-            tail = skip_string(head);
-            len = tail - head;
-            if (len >= sizearray(ttipvalue))
-              len = sizearray(ttipvalue) - 1;
-            strncpy(ttipvalue, head, len);
-            ttipvalue[len] = '\0';
-            format_string(ttipvalue);
-            format_value(ttipvalue, sizearray(ttipvalue));
-          }
-          curstate = STATE_STOPPED;
-          gdbmi_sethandled(0);
-        }
-        break;
-      } /* switch (curstate) */
-    } /* if (!is_idle()) */
-    if (curstate > STATE_GDB_TASK && !task_isrunning(&task))
-      RESETSTATE(STATE_QUIT);   /* GDB ended -> quit the front-end too */
+    handle_stateaction(&appstate, tab_states);
 
     /* parse GDB output (stderr first, because the prompt is given in stdout) */
-    waitidle = 1;
-    while (task_stderr(&task, cmdline, CMD_BUFSIZE) > 0) {
+    while (task_stderr(&appstate.task, appstate.cmdline, CMD_BUFSIZE) > 0) {
       int flag = STRFLG_ERROR;
       /* silence a meaningless error (downgrade it to "notice") */
-      if (strstr(cmdline,"path for the index cache") != NULL)
+      if (strstr(appstate.cmdline,"path for the index cache") != NULL)
         flag = STRFLG_NOTICE;
-      console_add(cmdline, flag);
-      waitidle = 0;
+      console_add(appstate.cmdline, flag);
+      appstate.waitidle = nk_false;  /* output was added, so not idle */
     }
-    while (task_stdout(&task, cmdline, CMD_BUFSIZE) > 0) {
+    while (task_stdout(&appstate.task, appstate.cmdline, CMD_BUFSIZE) > 0) {
       int flags = 0;
-      if (curstate < STATE_START)
+      if (appstate.curstate < STATE_START)
         flags |= STRFLG_STARTUP;
-      if (monitor_cmd_active)
+      if (appstate.monitor_cmd_active)
         flags |= STRFLG_MON_OUT;  /* so output goes to the main console instead of semihosting view */
-      if (popup_active != POPUP_NONE)
-        helptext_add(&helptext_root, cmdline);
-      if (popup_active == POPUP_NONE && console_add(cmdline, flags)) {
-        atprompt = 1;
-        console_activate = 1;
-        monitor_cmd_active = 0;
+      if (appstate.popup_active != POPUP_NONE)
+        helptext_add(&helptext_root, appstate.cmdline);
+      if (appstate.popup_active == POPUP_NONE && console_add(appstate.cmdline, flags)) {
+        appstate.atprompt = nk_true;
+        appstate.console_activate = 1;
+        appstate.monitor_cmd_active = nk_false;
       }
-      waitidle = 0;
+      appstate.waitidle = nk_false;
     }
 
     /* handle user input */
     nk_input_begin(ctx);
-    if (!guidriver_poll(waitidle)) /* if text was added to the console, don't wait in guidriver_poll(); system is NOT idle */
+    if (!guidriver_poll(appstate.waitidle)) /* if text was added to the console, don't wait in guidriver_poll(); system is NOT idle */
       break;
     nk_input_end(ctx);
 
     /* GUI */
     guidriver_appsize(&canvas_width, &canvas_height);
     if (nk_begin(ctx, "MainPanel", nk_rect(0, 0, canvas_width, canvas_height), NK_WINDOW_NO_SCROLLBAR)) {
-      #define SEPARATOR_HOR 4
-      #define SEPARATOR_VER 4
-      #define SPACING       8
-      float splitter_columns[3];
-      struct nk_rect bounds;
-      int mouse_hover = 0;
+      nk_splitter_resize(&splitter_hor, canvas_width - 2 * SPACING, RESIZE_TOPLEFT);
+      nk_splitter_resize(&splitter_ver, canvas_height - 4 * SPACING, RESIZE_TOPLEFT);
+      nk_hsplitter_layout(ctx, &splitter_hor, canvas_height - 2 * SPACING);
 
-      splitter_columns[0] = (canvas_width - SEPARATOR_HOR - 2 * SPACING) * splitter_hor;
-      splitter_columns[1] = SEPARATOR_HOR;
-      splitter_columns[2] = (canvas_width - SEPARATOR_HOR - 2 * SPACING) - splitter_columns[0];
-      nk_layout_row(ctx, NK_STATIC, canvas_height - 2 * SPACING, 3, splitter_columns);
       ctx->style.window.padding.x = 2;
       ctx->style.window.padding.y = 2;
       ctx->style.window.group_padding.x = 0;
@@ -5069,900 +6271,63 @@ int main(int argc, char *argv[])
 
       /* left column */
       if (nk_group_begin(ctx, "left", NK_WINDOW_NO_SCROLLBAR)) {
-        float splitter_rows[2]; /* splitter between source view & GDB console */
 
-        splitter_rows[0] = (canvas_height - SEPARATOR_VER - 4 * SPACING) * splitter_ver;
-        splitter_rows[1] = (canvas_height - SEPARATOR_VER - 4 * SPACING) - splitter_rows[0];
-
-        /* file browser section */
-        nk_layout_row_dynamic(ctx, splitter_rows[0], 1);
+        /* source view + control buttons */
+        nk_layout_row_dynamic(ctx, nk_vsplitter_rowheight(&splitter_ver, 0), 1);
         if (nk_group_begin(ctx, "filebrowser", NK_WINDOW_NO_SCROLLBAR|NK_WINDOW_BORDER)) {
-          float combo_width;
+          /* button bar */
           nk_layout_row_begin(ctx, NK_STATIC, ROW_HEIGHT, 7);
-          nk_layout_row_push(ctx, BUTTON_WIDTH);
-          if (button_tooltip(ctx, "reset", NK_KEY_CTRL_F2, (curstate != STATE_RUNNING),
-                             "Reload and restart the program (Ctrl+F2)")) {
-            if (strlen(txtFilename) > 0 && access(txtFilename, 0) == 0)
-              save_settings(txtParamFile, txtEntryPoint, opt_tpwr, opt_connect_srst,
-                            opt_autodownload, txtSVDfile, &opt_swo);
-            RESETSTATE(STATE_FILE);
-          }
-          nk_layout_row_push(ctx, BUTTON_WIDTH);
-          if (curstate == STATE_RUNNING) {
-            if (button_tooltip(ctx, "stop", NK_KEY_CTRL_F5, nk_true, "Interrupt the program (Ctrl+F5)")
-                || nk_input_is_key_pressed(&ctx->input, NK_KEY_COPY)) /* Ctrl+C = break (plus "copy to clipboard") */
-            {
-              RESETSTATE(STATE_EXEC_CMD);
-              stateparam[0] = STATEPARAM_EXEC_STOP;
-            }
-          } else {
-            if (button_tooltip(ctx, "cont", NK_KEY_F5, (curstate != STATE_RUNNING), "Continue running (F5)"))
-            {
-              RESETSTATE(STATE_EXEC_CMD);
-              stateparam[0] = STATEPARAM_EXEC_CONTINUE;
-            }
-          }
-          nk_layout_row_push(ctx, BUTTON_WIDTH);
-          if (button_tooltip(ctx, "next", NK_KEY_F10, (curstate != STATE_RUNNING), "Step over (F10)"))
-          {
-            RESETSTATE(STATE_EXEC_CMD);
-            stateparam[0] = STATEPARAM_EXEC_NEXT;
-          }
-          nk_layout_row_push(ctx, BUTTON_WIDTH);
-          if (button_tooltip(ctx, "step", NK_KEY_F11, (curstate != STATE_RUNNING), "Step into (F11)"))
-          {
-            RESETSTATE(STATE_EXEC_CMD);
-            stateparam[0] = STATEPARAM_EXEC_STEP;
-          }
-          nk_layout_row_push(ctx, BUTTON_WIDTH);
-          if (button_tooltip(ctx, "finish", NK_KEY_SHIFT_F11, (curstate != STATE_RUNNING), "Step out of function (Shift+F11)"))
-          {
-            RESETSTATE(STATE_EXEC_CMD);
-            stateparam[0] = STATEPARAM_EXEC_FINISH;
-          }
-          nk_layout_row_push(ctx, BUTTON_WIDTH);
-          if (button_tooltip(ctx, "until", NK_KEY_F7, (curstate != STATE_RUNNING), "Run until cursor (F7)"))
-          {
-            RESETSTATE(STATE_EXEC_CMD);
-            stateparam[0] = STATEPARAM_EXEC_UNTIL;
-            stateparam[1] = source_cursorline;
-          }
-          combo_width = splitter_columns[0] - 6 * (BUTTON_WIDTH + 5);
-          nk_layout_row_push(ctx, combo_width);
-          if (sources_count > 0) {
-            int curfile = source_cursorfile;
-            if (curfile < 0 || (unsigned)curfile >= sources_count)
-              curfile = 0;
-            assert(sourcefiles != NULL);
-            source_cursorfile = nk_combo(ctx, sourcefiles, sources_count, curfile,
-                                         (int)COMBOROW_CY, nk_vec2(combo_width, 10*ROW_HEIGHT));
-            if (source_cursorfile != curfile)
-              source_cursorline = 1;  /* reset scroll */
-          }
+          button_bar(ctx, &appstate, nk_hsplitter_colwidth(&splitter_hor, 0));
           nk_layout_row_end(ctx);
-          if (source_cursorfile >= 0 && source_cursorfile < sources_count) {
-            int linecount = source_linecount(source_cursorfile);
-            if (source_cursorline > linecount)
-              source_cursorline = linecount;
-          }
-          nk_layout_row_dynamic(ctx, splitter_rows[0] - ROW_HEIGHT - 4, 1);
-          bounds = nk_widget_bounds(ctx);
-          source_widget(ctx, "source", opt_fontsize, curstate == STATE_RUNNING);
-          if (curstate == STATE_STOPPED) {
-            /* handle input for the source view only when not running */
-            if (nk_input_mouse_clicked(&ctx->input, NK_BUTTON_LEFT, bounds)) {
-              int row, col;
-              source_mouse2char(ctx, "source", opt_fontsize, bounds, &row, &col);
-              if (col == 0) {
-                /* click in the margin: set/clear/enable/disable breakpoint
-                   - if there is no breakpoint on this line -> add a breakpoint
-                   - if there is an enabled breakpoint on this line -> disable it
-                   - if there is a disabled breakpoint on this line -> check
-                     whether the current line is the same as the one previously
-                     clicked on; if yes -> delete; if no: -> enable */
-                BREAKPOINT *bp = breakpoint_lookup(source_cursorfile, row);
-                if (bp == NULL) {
-                  /* no breakpoint yet -> add (but check first whether that can
-                     be done) */
-                  if (source_cursorfile < sources_count) {
-                    RESETSTATE(STATE_BREAK_TOGGLE);
-                    stateparam[0] = STATEPARAM_BP_ADD;
-                    stateparam[1] = source_cursorfile;
-                    stateparam[2] = row;
-                  }
-                } else if (bp->enabled) {
-                  /* enabled breakpoint -> disable */
-                  RESETSTATE(STATE_BREAK_TOGGLE);
-                  stateparam[0] = STATEPARAM_BP_DISABLE;
-                  stateparam[1] = bp->number;
-                } else if (prev_clicked_line != row) {
-                  /* disabled breakpoint & not a double click -> enable */
-                  RESETSTATE(STATE_BREAK_TOGGLE);
-                  stateparam[0] = STATEPARAM_BP_ENABLE;
-                  stateparam[1] = bp->number;
-                } else {
-                  /* disabled breakpoint & double click -> enable */
-                  RESETSTATE(STATE_BREAK_TOGGLE);
-                  stateparam[0] = STATEPARAM_BP_DELETE;
-                  stateparam[1] = bp->number;
-                }
-              } else {
-                /* set the cursor line */
-                if (row > 0 && row <= source_linecount(source_cursorfile))
-                  source_cursorline = row;
-              }
-              prev_clicked_line = row;
-            } else if (nk_input_is_mouse_hovering_rect(&ctx->input, bounds)) {
-              int row, col;
-              char sym[64];
-              source_mouse2char(ctx, "source", opt_fontsize, bounds, &row, &col);
-              if (row != prev_clicked_line)
-                prev_clicked_line = -1; /* mouse leaves the line clicked on, erase "repeat click" */
-              if (source_getsymbol(sym, sizearray(sym), row, col)) {
-                /* we are hovering over a symbol; if the symbol hovered over is
-                   different from the previous one -> clear the tooltip value */
-                if (strcmp(sym, statesymbol) != 0) {
-                  ttipvalue[0] = '\0';
-                  tooltip_tstamp = 0;
-                  strlcpy(statesymbol, sym, sizearray(statesymbol));
-                  /* if the new symbol is valid -> start timeout for hovering tooltip */
-                  if (statesymbol[0] != '\0' && curstate == STATE_STOPPED)
-                    tooltip_tstamp = timestamp();
-                } else if (tooltip_tstamp != 0) {
-                  unsigned long tstamp = timestamp();
-                  if (tstamp - tooltip_tstamp >= TOOLTIP_DELAY) {
-                    RESETSTATE(STATE_HOVER_SYMBOL);
-                    tooltip_tstamp = 0; /* reset, to this case is only dropped into once */
-                  }
-                }
-                /* if the tooltip value is valid, show it */
-                if (ttipvalue[0] != '\0')
-                  nk_tooltip(ctx, ttipvalue);
-              } else {
-                ttipvalue[0] = '\0';
-              }
-            }
-          }
+
+          /* source code view (including handling hovering over symbols and
+             breakpoint toggling */
+          nk_layout_row_dynamic(ctx, nk_vsplitter_rowheight(&splitter_ver, 0) - 4, 1);
+          sourcecode_view(ctx, &appstate);
           nk_group_end(ctx);
         }
 
         /* vertical splitter */
-        nk_layout_row_dynamic(ctx, SEPARATOR_VER, 1);
-        bounds = nk_widget_bounds(ctx);
-        if (nk_input_is_mouse_hovering_rect(&ctx->input, bounds))
-          mouse_hover |= CURSOR_UPDOWN;
-        nk_symbol(ctx, NK_SYMBOL_CIRCLE_SOLID, NK_TEXT_ALIGN_CENTERED | NK_TEXT_ALIGN_MIDDLE | NK_SYMBOL_REPEAT(3));
-        if ((mouse_hover & CURSOR_UPDOWN) && nk_input_is_mouse_pressed(&ctx->input, NK_BUTTON_LEFT))
-          insplitter = SPLITTER_VERTICAL; /* in vertical splitter */
-        else if (insplitter != SPLITTER_NONE && !nk_input_is_mouse_down(&ctx->input, NK_BUTTON_LEFT))
-          insplitter = SPLITTER_NONE;
-        if (insplitter == SPLITTER_VERTICAL)
-          splitter_ver = (splitter_rows[0] + ctx->input.mouse.delta.y) / (canvas_height - SEPARATOR_VER - 4 * SPACING);
+        nk_vsplitter(ctx, &splitter_ver);
 
-        /* console space */
-        nk_layout_row_dynamic(ctx, splitter_rows[1], 1);
-        if (nk_group_begin(ctx, "console", NK_WINDOW_NO_SCROLLBAR|NK_WINDOW_BORDER)) {
-          nk_layout_row_dynamic(ctx, splitter_rows[1] - ROW_HEIGHT - SPACING, 1);
-          console_widget(ctx, "console-out", opt_fontsize);
-          nk_layout_row_dynamic(ctx, ROW_HEIGHT, 1);
-          if ((curstate < STATE_START && !atprompt) || curstate == STATE_RUNNING) {
-            /* while initializing (or running), say "please wait" and disable entering a command */
-            if (curstate < STATE_START)
-              strlcpy(console_edit, "Initializing. Please wait...", sizearray(console_edit));
-            else if (curstate == STATE_RUNNING)
-              strlcpy(console_edit, "Running... (Press Ctrl+C to interrupt)", sizearray(console_edit));
-            nk_edit_string_zero_terminated(ctx, NK_EDIT_FIELD|NK_EDIT_READ_ONLY|NK_EDIT_NO_CURSOR,
-                                           console_edit, sizearray(console_edit), nk_filter_ascii);
-            console_edit[0] = '\0';
-          } else {
-            /* true edit line */
-            if (console_activate) {
-              nk_edit_focus(ctx, (console_activate == 2) ? NK_EDIT_GOTO_END_ON_ACTIVATE : 0);
-              console_activate = 1;
-            }
-            result = nk_edit_string_zero_terminated(ctx, NK_EDIT_FIELD|NK_EDIT_SIG_ENTER|NK_EDIT_CLIPBOARD,
-                                                    console_edit, sizearray(console_edit), nk_filter_ascii);
-            console_isactive = ((result & NK_EDIT_ACTIVE) != 0);
-            if (result & NK_EDIT_COMMITED) {
-              char *ptr;
-              for (ptr = strchr(console_edit, '\0'); ptr > console_edit && *(ptr - 1) <= ' '; )
-                *--ptr = '\0'; /* strip trailing whitespace */
-              /* some commands are handled internally (fully or partially) */
-              if (handle_display_cmd(console_edit, stateparam, statesymbol, sizearray(statesymbol))) {
-                RESETSTATE(STATE_WATCH_TOGGLE);
-                tab_states[TAB_WATCHES] = NK_MAXIMIZED; /* make sure the watch view to open */
-              } else if ((result = handle_file_load_reset(console_edit, txtFilename, sizearray(txtFilename))) != 0) {
-                force_download = 0;
-                if (result == HARD_RESET) {
-                  RESETSTATE(STATE_HARDRESET);
-                } else if (result == LOAD_CUR_ELF) {
-                  force_download = 1;
-                  RESETSTATE(STATE_MEMACCESS_1);
-                } else {
-                  if (result == LOAD_FILE_ELF || result == RESET_LOAD)
-                    force_download = 1;
-                  RESETSTATE(STATE_FILE);
-                }
-                /* save target-specific settings in the parameter file before
-                   switching to the new file (new options are loaded in the
-                   STATE_FILE case) */
-                if (strlen(txtFilename) > 0 && access(txtFilename, 0) == 0)
-                  save_settings(txtParamFile, txtEntryPoint, opt_tpwr,
-                                opt_connect_srst, opt_autodownload, txtSVDfile,
-                                &opt_swo);
-              } else if ((result = handle_serial_cmd(console_edit, port_sermon,&sermon_baud, opt_swo.metadata, sizearray(opt_swo.metadata))) != 0) {
-                if (result == 1) {
-                  if (sermon_isopen())
-                    sermon_close();
-                  sermon_open(port_sermon, sermon_baud);
-                  if (sermon_isopen()) {
-                    sermon_setmetadata(opt_swo.metadata);
-                    if (strlen(opt_swo.metadata) > 0) {
-                      ctf_parse_cleanup();
-                      ctf_decode_cleanup();
-                      ctf_error_notify(CTFERR_NONE, 0, NULL);
-                      if (!ctf_parse_init(opt_swo.metadata) || !ctf_parse_run())
-                        ctf_parse_cleanup();
-                    }
-                    serial_info_mode(NULL);
-                    tab_states[TAB_SERMON] = NK_MAXIMIZED;  /* make sure the serial monitor view is open */
-                  } else {
-                    console_add("Failed to configure the port.\n", STRFLG_STATUS);
-                  }
-                } else if (result == 2 && sermon_isopen()) {
-                  sermon_close();
-                } else if (result == 3) {
-                  serial_info_mode(NULL);
-                }
-              } else if ((result = handle_trace_cmd(console_edit, &opt_swo)) != 0) {
-                if (result == 1) {
-                  monitor_cmd_active = 1; /* to silence output of scripts */
-                  if (opt_swo.enabled)
-                    RESETSTATE(STATE_SWOTRACE);
-                  else
-                    RESETSTATE(STATE_SWOCHANNELS);  /* special case: disabling SWO tracing disables all channels */
-                } else if (result == 2) {
-                  monitor_cmd_active = 1; /* to silence output of scripts */
-                  RESETSTATE(STATE_SWOCHANNELS);
-                } else if (result == 3) {
-                  trace_info_mode(&opt_swo, 1, NULL);
-                }
-                tab_states[TAB_SWO] = NK_MAXIMIZED;  /* make sure the SWO tracing view is open */
-              } else if (handle_x_cmd(console_edit, &memdump)) {
-                if (memdump.count > 0 && memdump.size > 0) {
-                  /* if in stopped state, perform the memory view command right
-                     away, otherwise make sure it is scheduled */
-                  if (curstate == STATE_STOPPED)
-                    RESETSTATE(STATE_VIEWMEMORY);
-                  else
-                    refreshflags |= REFRESH_MEMORY;
-                  tab_states[TAB_MEMORY] = NK_MAXIMIZED;  /* make sure the memory dump view is open */
-                }
-              } else if (!handle_list_cmd(console_edit, &dwarf_symboltable, &dwarf_filetable)
-                         && !handle_find_cmd(console_edit)
-                         && !handle_help_cmd(console_edit, &helptext_root, &popup_active)
-                         && !handle_info_cmd(console_edit, &helptext_root, &popup_active, &opt_swo))
-              {
-                char translated[sizearray(console_edit)];
-                /* check monitor command, to avoid that the output should goes
-                   to the semihosting view */
-                monitor_cmd_active = is_monitor_cmd(console_edit);
-                strlcat(console_edit, "\n", sizearray(console_edit));
-                /* translate any register names in the command */
-                strcpy(translated, console_edit);
-                svd_xlate_all_names(translated, sizearray(translated));
-                if (task_stdin(&task, translated))
-                  console_input(console_edit);
-              }
-              /* check for a list of breakpoint commands, so that we can refresh
-                 the breakpoint list after the command executed */
-              if (TERM_EQU(console_edit, "b", 1) ||
-                  TERM_EQU(console_edit, "break", 5) ||
-                  TERM_EQU(console_edit, "watch", 5) ||
-                  TERM_EQU(console_edit, "del", 3) ||
-                  TERM_EQU(console_edit, "delete", 6) ||
-                  TERM_EQU(console_edit, "clear", 5) ||
-                  TERM_EQU(console_edit, "disable", 7) ||
-                  TERM_EQU(console_edit, "enable", 6))
-                refreshflags |= REFRESH_BREAKPOINTS | REFRESH_CONSOLE;
-              /* save console_edit in a recent command list */
-              stringlist_add_head(&consoleedit_root, console_edit, 0);
-              consoleedit_next = NULL;
-              console_edit[0] = '\0';
-            }
-          } /* if (curstate < STATE_START) */
-          nk_group_end(ctx);
-        }
+        /* console space (plus handling of internal/enhanced commands) */
+        nk_layout_row_dynamic(ctx, nk_vsplitter_rowheight(&splitter_ver, 1), 1);
+        console_view(ctx, &appstate, tab_states, nk_vsplitter_rowheight(&splitter_ver, 1));
         nk_group_end(ctx);
       }
 
       /* column splitter */
-      bounds = nk_widget_bounds(ctx);
-      if (nk_input_is_mouse_hovering_rect(&ctx->input, bounds))
-        mouse_hover |= CURSOR_LEFTRIGHT;
-      nk_symbol(ctx, NK_SYMBOL_CIRCLE_SOLID, NK_TEXT_ALIGN_CENTERED | NK_TEXT_ALIGN_MIDDLE | NK_SYMBOL_VERTICAL | NK_SYMBOL_REPEAT(3));
-      if ((mouse_hover & CURSOR_LEFTRIGHT) && nk_input_is_mouse_pressed(&ctx->input, NK_BUTTON_LEFT))
-        insplitter = SPLITTER_HORIZONTAL; /* in horizontal splitter */
-      else if (insplitter != SPLITTER_NONE && !nk_input_is_mouse_down(&ctx->input, NK_BUTTON_LEFT))
-        insplitter = SPLITTER_NONE;
-      if (insplitter == SPLITTER_HORIZONTAL)
-        splitter_hor = (splitter_columns[0] + ctx->input.mouse.delta.x) / (canvas_width - SEPARATOR_HOR - 2 * SPACING);
+      nk_hsplitter(ctx, &splitter_hor);
 
       /* right column */
       if (nk_group_begin(ctx, "right", NK_WINDOW_BORDER)) {
-        if (nk_tree_state_push(ctx, NK_TREE_TAB, "Configuration", &tab_states[TAB_CONFIGURATION])) {
-          #define LABEL_WIDTH (2.5 * opt_fontsize)
-          float edtwidth, newprobe;
-          char basename[_MAX_PATH], *p;
-          bounds = nk_widget_bounds(ctx);
-          edtwidth = bounds.w - LABEL_WIDTH - BROWSEBTN_WIDTH - (2 * 5);
-          /* debug probe (and IP address) */
-          nk_layout_row_begin(ctx, NK_STATIC, ROW_HEIGHT, 2);
-          nk_layout_row_push(ctx, LABEL_WIDTH);
-          nk_label(ctx, "Probe", NK_TEXT_ALIGN_LEFT | NK_TEXT_ALIGN_MIDDLE);
-          nk_layout_row_push(ctx, edtwidth);
-          bounds = nk_widget_bounds(ctx);
-          newprobe = nk_combo(ctx, probelist, netprobe+1, probe, (int)COMBOROW_CY, nk_vec2(bounds.w, 4.5*ROW_HEIGHT));
-          if (newprobe == netprobe) {
-            int reconnect = 0;
-            nk_layout_row_begin(ctx, NK_STATIC, ROW_HEIGHT, 3);
-            nk_layout_row_push(ctx, LABEL_WIDTH);
-            nk_label(ctx, "IP", NK_TEXT_ALIGN_LEFT | NK_TEXT_ALIGN_MIDDLE);
-            nk_layout_row_push(ctx, edtwidth);
-            result = editctrl_tooltip(ctx, NK_EDIT_FIELD|NK_EDIT_SIG_ENTER|NK_EDIT_CLIPBOARD,
-                                      txtIPaddr, sizearray(txtIPaddr), nk_filter_ascii,
-                                      "IP address of the ctxLink");
-            if ((result & NK_EDIT_COMMITED) != 0 && is_ip_address(txtIPaddr))
-              reconnect = 1;
-            nk_layout_row_push(ctx, BROWSEBTN_WIDTH);
-            if (button_symbol_tooltip(ctx, NK_SYMBOL_TRIPLE_DOT, NK_KEY_NONE, "Scan network for ctxLink probes.")) {
-              #if defined WIN32 || defined _WIN32
-                HCURSOR hcur = SetCursor(LoadCursor(NULL, IDC_WAIT));
-              #endif
-              unsigned long addr;
-              int count = scan_network(&addr, 1);
-              #if defined WIN32 || defined _WIN32
-                SetCursor(hcur);
-              #endif
-              if (count == 1) {
-                sprintf(txtIPaddr, "%lu.%lu.%lu.%lu",
-                       addr & 0xff, (addr >> 8) & 0xff, (addr >> 16) & 0xff, (addr >> 24) & 0xff);
-                reconnect = 1;
-              } else {
-                strlcpy(txtIPaddr, "none found", sizearray(txtIPaddr));
-              }
-            }
-            if (reconnect)
-              RESETSTATE(STATE_SCAN_BMP);
-          }
-          if (newprobe != probe) {
-            probe = newprobe;
-            RESETSTATE(STATE_SCAN_BMP);
-          }
-          /* GDB */
-          p = strrchr(txtGDBpath, DIRSEP_CHAR);
-          strlcpy(basename,(p == NULL)? txtGDBpath : p + 1, sizearray(basename));
-          nk_layout_row_begin(ctx, NK_STATIC, ROW_HEIGHT, 3);
-          nk_layout_row_push(ctx, LABEL_WIDTH);
-          nk_label(ctx, "GDB", NK_TEXT_LEFT);
-          nk_layout_row_push(ctx, edtwidth);
-          editctrl_tooltip(ctx, NK_EDIT_FIELD | NK_EDIT_READ_ONLY,
-                           basename, sizearray(basename), nk_filter_ascii, txtGDBpath);
-          nk_layout_row_push(ctx, BROWSEBTN_WIDTH);
-          if (nk_button_symbol(ctx, NK_SYMBOL_TRIPLE_DOT)) {
-            const char *s;
-            s = noc_file_dialog_open(NOC_FILE_DIALOG_OPEN,
-                                     "Executables\0*.elf;*.\0All files\0*.*\0",
-                                     NULL, txtGDBpath, "Select GDB program",
-                                     guidriver_apphandle());
-            if (s != NULL && strlen(s) < sizearray(txtGDBpath)) {
-              strcpy(txtGDBpath, s);
-              free((void*)s);
-              task_close(&task);  /* terminate running instance of GDB */
-              RESETSTATE(STATE_INIT);
-            }
-          }
-          nk_layout_row_end(ctx);
-          /* target executable */
-          p = strrchr(txtFilename, '/');
-          strlcpy(basename, (p == NULL) ? txtFilename : p + 1, sizearray(basename));
-          nk_layout_row_begin(ctx, NK_STATIC, ROW_HEIGHT, 3);
-          nk_layout_row_push(ctx, LABEL_WIDTH);
-          nk_label(ctx, "File", NK_TEXT_LEFT);
-          nk_layout_row_push(ctx, edtwidth);
-          editctrl_tooltip(ctx, NK_EDIT_FIELD | NK_EDIT_READ_ONLY,
-                           basename, sizearray(basename), nk_filter_ascii, txtFilename);
-          nk_layout_row_push(ctx, BROWSEBTN_WIDTH);
-          if (nk_button_symbol(ctx, NK_SYMBOL_TRIPLE_DOT)) {
-            const char *s;
-            translate_path(txtFilename, 1);
-            s = noc_file_dialog_open(NOC_FILE_DIALOG_OPEN,
-                                     "ELF Executables\0*.elf;*.bin;*.\0All files\0*.*\0",
-                                     NULL, txtFilename, "Select ELF Executable",
-                                     guidriver_apphandle());
-            if (s != NULL && strlen(s) < sizearray(txtFilename)) {
-              strcpy(txtFilename, s);
-              translate_path(txtFilename, 0);
-              free((void*)s);
-              if (curstate > STATE_FILE)
-                RESETSTATE(STATE_FILE);
-            }
-          }
-          nk_layout_row_end(ctx);
-          /* target entry point */
-          nk_layout_row_begin(ctx, NK_STATIC, ROW_HEIGHT, 2);
-          nk_layout_row_push(ctx, LABEL_WIDTH);
-          nk_label(ctx, "Entry point", NK_TEXT_LEFT);
-          nk_layout_row_push(ctx, edtwidth + BROWSEBTN_WIDTH);
-          result = editctrl_tooltip(ctx, NK_EDIT_FIELD|NK_EDIT_SIG_ENTER|NK_EDIT_CLIPBOARD,
-                                    txtEntryPoint, sizearray(txtEntryPoint), nk_filter_ascii,
-                                    "The name of the entry point function (if not \"main\")");
-          nk_layout_row_end(ctx);
-          if (result & NK_EDIT_ACTIVATED)
-            console_activate = 0;
-          /* CMSIS SVD file */
-          p = strrchr(txtSVDfile, '/');
-          strlcpy(basename, (p == NULL) ? txtSVDfile : p + 1, sizearray(basename));
-          nk_layout_row_begin(ctx, NK_STATIC, ROW_HEIGHT, 3);
-          nk_layout_row_push(ctx, LABEL_WIDTH);
-          nk_label(ctx, "SVD", NK_TEXT_LEFT);
-          nk_layout_row_push(ctx, edtwidth);
-          editctrl_tooltip(ctx, NK_EDIT_FIELD | NK_EDIT_READ_ONLY,
-                           basename, sizearray(basename), nk_filter_ascii, txtSVDfile);
-          nk_layout_row_push(ctx, BROWSEBTN_WIDTH);
-          if (nk_button_symbol(ctx, NK_SYMBOL_TRIPLE_DOT)) {
-            const char *s;
-            translate_path(txtSVDfile, 1);
-            s = noc_file_dialog_open(NOC_FILE_DIALOG_OPEN,
-                                     "CMSIS SVD files\0*.svd\0All files\0*.*\0",
-                                     NULL, txtSVDfile, "Select CMSIS SVD file",
-                                     guidriver_apphandle());
-            if (s != NULL && strlen(s) < sizearray(txtSVDfile)) {
-              strcpy(txtSVDfile, s);
-              free((void*)s);
-              if (curstate > STATE_GET_SOURCES) {
-                svd_clear();
-                if (strlen(txtSVDfile) >0)
-                  svd_load(txtSVDfile);
-              }
-              translate_path(txtSVDfile, 0);
-            }
-          }
-          nk_layout_row_end(ctx);
-          /* source directory */
-          //??? -environment-directory -r path "path" ...
-          /* TPWR option */
-          nk_layout_row_dynamic(ctx, ROW_HEIGHT, 1);
-          if (checkbox_tooltip(ctx, "Power Target (3.3V)", &opt_tpwr, "Let the debug probe provide power to the target")) {
-            if (!opt_tpwr)
-              task_stdin(&task, "monitor tpwr disable\n");
-            if (opt_tpwr && curstate != STATE_MON_SCAN)
-              task_stdin(&task, "monitor tpwr enable\n");
-            if (curstate == STATE_MON_SCAN)
-               RESETSTATE(STATE_MON_TPWR);
-          }
-          /* reset during connect */
-          nk_layout_row_dynamic(ctx, ROW_HEIGHT, 1);
-          if (checkbox_tooltip(ctx, "Reset target during connect", &opt_connect_srst, "Keep target MCU reset while debug probe attaches")) {
-            if (opt_connect_srst)
-              task_stdin(&task, "monitor connect_srst enable\n");
-            else
-              task_stdin(&task, "monitor connect_srst disable\n");
-            RESETSTATE(STATE_MON_SCAN);
-          }
-          /* auto-download */
-          nk_layout_row_dynamic(ctx, ROW_HEIGHT, 1);
-          checkbox_tooltip(ctx, "Download to target on mismatch", &opt_autodownload,
-                           "Download firmware to the target MCU if it is different from the code currently in it");
-          /* show all GDB output */
-          nk_layout_row_dynamic(ctx, ROW_HEIGHT, 1);
-          if (checkbox_tooltip(ctx, "Show all GDB messages", &opt_allmsg, "Do not filter GDB output in the console to only relevant messages"))
-            console_hiddenflags = opt_allmsg ? 0 : STRFLG_NOTICE | STRFLG_RESULT | STRFLG_EXEC | STRFLG_MI_INPUT | STRFLG_TARGET;
-          nk_tree_state_pop(ctx);
-        } /* config */
-
-        if (nk_tree_state_push(ctx, NK_TREE_TAB, "Breakpoints", &tab_states[TAB_BREAKPOINTS])) {
-          BREAKPOINT *bp;
-          char label[300];
-          float width = 0;
-          struct nk_user_font const *font = ctx->style.font;
-          /* find longest breakpoint description */
-          for (bp = breakpoint_root.next; bp != NULL; bp = bp->next) {
-            float w;
-            if (bp->flags & BKPTFLG_FUNCTION) {
-              assert(bp->name != NULL);
-              strlcpy(label, bp->name, sizearray(label));
-            } else if (source_getname(bp->filenr) != NULL) {
-              snprintf(label, sizearray(label), "%s : %d", source_getname(bp->filenr), bp->linenr);
-            }
-            w = font->width(font->userdata, font->height, label, strlen(label)) + 10;
-            if (w > width)
-              width = w;
-          }
-          for (bp = breakpoint_root.next; bp != NULL; bp = bp->next) {
-            int en;
-            nk_layout_row_begin(ctx, NK_STATIC, ROW_HEIGHT, 3);
-            nk_layout_row_push(ctx, LABEL_WIDTH);
-            snprintf(label, sizearray(label), "%d", bp->number);
-            en = bp->enabled;
-            if (nk_checkbox_label(ctx, label, &en)) {
-              RESETSTATE(STATE_BREAK_TOGGLE);
-              stateparam[0] = (en == 0) ? STATEPARAM_BP_DISABLE : STATEPARAM_BP_ENABLE;
-              stateparam[1] = bp->number;
-            }
-            nk_layout_row_push(ctx, width);
-            if (bp->flags & BKPTFLG_FUNCTION) {
-              assert(bp->name != NULL);
-              strlcpy(label, bp->name, sizearray(label));
-            } else if (source_getname(bp->filenr) != NULL) {
-              snprintf(label, sizearray(label), "%s : %d", source_getname(bp->filenr), bp->linenr);
-            } else {
-              strlcpy(label, "??", sizearray(label));
-            }
-            nk_label(ctx, label, NK_TEXT_LEFT);
-            nk_layout_row_push(ctx, ROW_HEIGHT);
-            if (nk_button_symbol(ctx, NK_SYMBOL_X)) {
-              RESETSTATE(STATE_BREAK_TOGGLE);
-              stateparam[0] = STATEPARAM_BP_DELETE;
-              stateparam[1] = bp->number;
-            }
-          }
-          if (width == 0) {
-            /* this means that there are no breakpoints */
-            nk_layout_row_dynamic(ctx, ROW_HEIGHT, 1);
-            nk_label(ctx, "No breakpoints", NK_TEXT_ALIGN_CENTERED | NK_TEXT_ALIGN_MIDDLE);
-          }
-          nk_tree_state_pop(ctx);
-        } /* breakpoints */
-
-        if (nk_tree_state_push(ctx, NK_TREE_TAB, "Watches", &tab_states[TAB_WATCHES])) {
-          WATCH *watch;
-          float namewidth, valwidth, w;
-          char label[20];
-          struct nk_user_font const *font = ctx->style.font;
-          /* find longest watch expression and value */
-          namewidth = 0;
-          valwidth = 2 * ROW_HEIGHT;
-          for (watch = watch_root.next; watch != NULL; watch = watch->next) {
-            assert(watch->expr != NULL);
-            w = font->width(font->userdata, font->height, watch->expr, strlen(watch->expr)) + 10;
-            if (w > namewidth)
-              namewidth = w;
-            if (watch->value != NULL) {
-              w = font->width(font->userdata, font->height, watch->value, strlen(watch->value)) + 10;
-              if (w > valwidth)
-                valwidth = w;
-            }
-          }
-          for (watch = watch_root.next; watch != NULL; watch = watch->next) {
-            nk_layout_row_begin(ctx, NK_STATIC, ROW_HEIGHT, 4);
-            nk_layout_row_push(ctx, LABEL_WIDTH);
-            snprintf(label, sizearray(label), "%u", watch->seqnr); /* print sequence number for undisplay command */
-            nk_label(ctx, label, NK_TEXT_LEFT);
-            nk_layout_row_push(ctx, namewidth);
-            nk_label(ctx, watch->expr, NK_TEXT_LEFT);
-            nk_layout_row_push(ctx, valwidth);
-            if (watch->value != NULL) {
-              //??? ability to change the format
-              if (watch->flags & WATCHFLG_CHANGED)
-                nk_label_colored(ctx, watch->value, NK_TEXT_LEFT, nk_rgb(255, 100, 128));
-              else
-                nk_label(ctx, watch->value, NK_TEXT_LEFT);
-            } else {
-              nk_label(ctx, "?", NK_TEXT_LEFT);
-            }
-            nk_layout_row_push(ctx, ROW_HEIGHT);
-            if (nk_button_symbol(ctx, NK_SYMBOL_X)) {
-              RESETSTATE(STATE_WATCH_TOGGLE);
-              stateparam[0] = STATEPARAM_WATCH_DEL;
-              stateparam[1] = watch->seqnr;
-            }
-          }
-          if (namewidth <= 0.1) {
-            /* this means there are no watches */
-            nk_layout_row_dynamic(ctx, ROW_HEIGHT, 1);
-            nk_label(ctx, "No watches", NK_TEXT_ALIGN_CENTERED | NK_TEXT_ALIGN_MIDDLE);
-          }
-          nk_layout_row_begin(ctx, NK_STATIC, ROW_HEIGHT, 3);
-          nk_layout_row_push(ctx, LABEL_WIDTH);
-          w = namewidth + valwidth + ctx->style.window.spacing.x;
-          if (w < 150)
-            w = 150;
-          nk_layout_row_push(ctx, w);
-          result = nk_edit_string_zero_terminated(ctx, NK_EDIT_FIELD|NK_EDIT_SIG_ENTER|NK_EDIT_CLIPBOARD,
-                                                  watch_edit, sizearray(watch_edit), nk_filter_ascii);
-          nk_layout_row_push(ctx, ROW_HEIGHT);
-          if ((nk_button_symbol(ctx, NK_SYMBOL_PLUS) || (result & NK_EDIT_COMMITED)) && curstate == STATE_STOPPED && strlen(watch_edit) > 0) {
-            RESETSTATE(STATE_WATCH_TOGGLE);
-            stateparam[0] = STATEPARAM_WATCH_SET;
-            stateparam[1] = 0;
-            strlcpy(statesymbol, watch_edit, sizearray(statesymbol));
-            watch_edit[0] = '\0';
-          } else if (result & NK_EDIT_ACTIVATED) {
-            console_activate = 0;
-          }
-          nk_tree_state_pop(ctx);
-        } /* watches */
-
-        /* memory view */
-        result = tab_states[TAB_MEMORY];  /* save old state */
-        if (nk_tree_state_push(ctx, NK_TREE_TAB, "Memory", &tab_states[TAB_MEMORY])) {
-          /* if previous state for the memory was closed, force an update of the memory view */
-          if (result == NK_MINIMIZED) {
-            /* if in stopped state, perform the memory view command right away,
-               otherwise make sure it is scheduled */
-            if (curstate == STATE_STOPPED)
-              RESETSTATE(STATE_VIEWMEMORY);
-            else
-              refreshflags |= REFRESH_MEMORY;
-          }
-          if (memdump.data != NULL) {
-            memdump_widget(ctx, &memdump, tab_heights[TAB_MEMORY], ROW_HEIGHT);
-            /* make view height resizeable */
-            nk_layout_row_dynamic(ctx, SEPARATOR_VER, 1);
-            bounds = nk_widget_bounds(ctx);
-            if (nk_input_is_mouse_hovering_rect(&ctx->input, bounds))
-              mouse_hover |= CURSOR_UPDOWN;
-            nk_symbol(ctx, NK_SYMBOL_CIRCLE_SOLID, NK_TEXT_ALIGN_CENTERED | NK_TEXT_ALIGN_MIDDLE | NK_SYMBOL_REPEAT(3));
-            if (nk_input_is_mouse_hovering_rect(&ctx->input, bounds) && nk_input_is_mouse_pressed(&ctx->input, NK_BUTTON_LEFT))
-              insplitter = SIZER_MEMORY; /* in memory-dump sizer */
-            else if (insplitter != SPLITTER_NONE && !nk_input_is_mouse_down(&ctx->input, NK_BUTTON_LEFT))
-              insplitter = SPLITTER_NONE;
-            if (insplitter == SIZER_MEMORY) {
-              tab_heights[TAB_MEMORY] += ctx->input.mouse.delta.y;
-              if (tab_heights[TAB_MEMORY] < ROW_HEIGHT)
-                tab_heights[TAB_MEMORY] = ROW_HEIGHT;
-            }
-          } else {
-            nk_layout_row_dynamic(ctx, ROW_HEIGHT, 1);
-            if (memdump.message != NULL)
-              nk_label_colored(ctx, memdump.message, NK_TEXT_ALIGN_CENTERED | NK_TEXT_ALIGN_MIDDLE, nk_rgb(255, 100, 128));
-            else
-              nk_label(ctx, "Use \"x\" command to view memory", NK_TEXT_ALIGN_CENTERED | NK_TEXT_ALIGN_MIDDLE);
-          }
-          nk_tree_state_pop(ctx);
-        }
-
-        /* semihosting */
-        /* highlight tab text if new content arrives and the tab is closed */
-        highlight = !tab_states[TAB_SEMIHOSTING] && stringlist_count(&semihosting_root) != semihosting_lines;
-        if (highlight)
-          nk_style_push_color(ctx,&ctx->style.tab.text, nk_rgb(255, 255, 160));
-        result = nk_tree_state_push(ctx, NK_TREE_TAB, "Semihosting output", &tab_states[TAB_SEMIHOSTING]);
-        if (highlight)
-          nk_style_pop_color(ctx);
-        if (result) {
-          nk_layout_row_dynamic(ctx, tab_heights[TAB_SEMIHOSTING], 1);
-          nk_style_push_color(ctx, &ctx->style.window.fixed_background.data.color, nk_rgba(20, 29, 38, 225));
-          if (nk_group_begin(ctx, "semihosting", 0)) {
-            STRINGLIST *item;
-            semihosting_lines = 0;
-            for (item = semihosting_root.next; item != NULL; item = item->next) {
-              nk_layout_row_dynamic(ctx, opt_fontsize, 1);
-              nk_label(ctx, item->text, NK_TEXT_LEFT);
-              semihosting_lines += 1;
-            }
-            nk_group_end(ctx);
-          }
-          nk_style_pop_color(ctx);
-          /* make view height resizeable */
-          nk_layout_row_dynamic(ctx, SEPARATOR_VER, 1);
-          bounds = nk_widget_bounds(ctx);
-          if (nk_input_is_mouse_hovering_rect(&ctx->input, bounds))
-            mouse_hover |= CURSOR_UPDOWN;
-          nk_symbol(ctx, NK_SYMBOL_CIRCLE_SOLID, NK_TEXT_ALIGN_CENTERED | NK_TEXT_ALIGN_MIDDLE | NK_SYMBOL_REPEAT(3));
-          if (nk_input_is_mouse_hovering_rect(&ctx->input, bounds) && nk_input_is_mouse_pressed(&ctx->input, NK_BUTTON_LEFT))
-            insplitter = SIZER_SEMIHOSTING; /* in semihosting sizer */
-          else if (insplitter != SPLITTER_NONE && !nk_input_is_mouse_down(&ctx->input, NK_BUTTON_LEFT))
-            insplitter = SPLITTER_NONE;
-          if (insplitter == SIZER_SEMIHOSTING) {
-            tab_heights[TAB_SEMIHOSTING] += ctx->input.mouse.delta.y;
-            if (tab_heights[TAB_SEMIHOSTING] < ROW_HEIGHT)
-              tab_heights[TAB_SEMIHOSTING] = ROW_HEIGHT;
-          }
-          nk_tree_state_pop(ctx);
-        } /* semihosting (Target output) */
-
-        /* serial monitor view */
-        /* highlight tab text if new content arrives and the tab is closed */
-        highlight = !tab_states[TAB_SERMON] && sermon_countlines() != sermon_lines;
-        if (highlight)
-          nk_style_push_color(ctx,&ctx->style.tab.text, nk_rgb(255, 255, 160));
-        result = nk_tree_state_push(ctx, NK_TREE_TAB, "Serial console", &tab_states[TAB_SERMON]);
-        if (highlight)
-          nk_style_pop_color(ctx);
-        if (result) {
-          nk_layout_row_dynamic(ctx, tab_heights[TAB_SERMON], 1);
-          bounds = nk_layout_widget_bounds(ctx);
-          nk_style_push_color(ctx, &ctx->style.window.fixed_background.data.color, nk_rgba(20, 29, 38, 225));
-          if (nk_group_begin(ctx, "serial", 0)) {
-            struct nk_user_font const *font = ctx->style.font;
-            int linecount = 0;
-            float lineheight = 0;
-            const char *text;
-            sermon_rewind();
-            while ((text = sermon_next()) != NULL) {
-              int textwidth, textlength;
-              nk_layout_row_begin(ctx, NK_STATIC, opt_fontsize, 1);
-              if (lineheight < 0.01) {
-                struct nk_rect rcline = nk_layout_widget_bounds(ctx);
-                lineheight = rcline.h;
-              }
-              textlength = strlen(text);
-              assert(font != NULL && font->width != NULL);
-              textwidth = (int)font->width(font->userdata, font->height, text, textlength) + 10;
-              nk_layout_row_push(ctx, textwidth);
-              nk_text(ctx, text, textlength, NK_TEXT_LEFT);
-              nk_layout_row_end(ctx);
-              linecount += 1;
-            }
-            if (!sermon_isopen()) {
-              struct nk_color clr = nk_rgb(255, 80, 100);
-              nk_layout_row_dynamic(ctx, opt_fontsize, 1);
-              nk_label_colored(ctx, "No port opened", NK_TEXT_LEFT, clr);
-              linecount += 1;
-            }
-            nk_group_end(ctx);
-            if (linecount != sermon_lines && lineheight > 0.01) {
-              /* scroll to end */
-              int widgetlines = (int)((bounds.h - 2 * ctx->style.window.padding.y) / lineheight);
-              sermon_scroll = (int)((linecount - widgetlines) * lineheight);
-              if (sermon_scroll < 0)
-                sermon_scroll = 0;
-              sermon_lines = linecount;
-              nk_group_set_scroll(ctx, "serial", 0, sermon_scroll);
-            }
-          }
-          nk_style_pop_color(ctx);
-          /* make view height resizeable */
-          nk_layout_row_dynamic(ctx, SEPARATOR_VER, 1);
-          bounds = nk_widget_bounds(ctx);
-          if (nk_input_is_mouse_hovering_rect(&ctx->input, bounds))
-            mouse_hover |= CURSOR_UPDOWN;
-          nk_symbol(ctx, NK_SYMBOL_CIRCLE_SOLID, NK_TEXT_ALIGN_CENTERED | NK_TEXT_ALIGN_MIDDLE | NK_SYMBOL_REPEAT(3));
-          if (nk_input_is_mouse_hovering_rect(&ctx->input, bounds) && nk_input_is_mouse_pressed(&ctx->input, NK_BUTTON_LEFT))
-            insplitter = SIZER_SERIAL; /* in serial-view sizer */
-          else if (insplitter != SPLITTER_NONE && !nk_input_is_mouse_down(&ctx->input, NK_BUTTON_LEFT))
-            insplitter = SPLITTER_NONE;
-          if (insplitter == SIZER_SERIAL) {
-            tab_heights[TAB_SERMON] += ctx->input.mouse.delta.y;
-            if (tab_heights[TAB_SERMON] < ROW_HEIGHT)
-              tab_heights[TAB_SERMON] = ROW_HEIGHT;
-          }
-          nk_tree_state_pop(ctx);
-        } /* serial output */
-
-        /* SWO trace output */
-        /* highlight tab text if new content arrives and the tab is closed */
-        highlight = !tab_states[TAB_SWO] && tracestring_count() != swo_lines;
-        if (highlight)
-          nk_style_push_color(ctx,&ctx->style.tab.text, nk_rgb(255, 255, 160));
-        result = nk_tree_state_push(ctx, NK_TREE_TAB, "SWO tracing", &tab_states[TAB_SWO]);
-        if (highlight)
-          nk_style_pop_color(ctx);
-        if (result) {
-          tracestring_process(trace_status == TRACESTAT_OK);
-          nk_layout_row_dynamic(ctx, tab_heights[TAB_SWO], 1);
-          tracelog_widget(ctx, "tracelog", opt_fontsize, -1, NULL, 0);
-          swo_lines = tracestring_count();
-          /* make view height resizeable */
-          nk_layout_row_dynamic(ctx, SEPARATOR_VER, 1);
-          bounds = nk_widget_bounds(ctx);
-          if (nk_input_is_mouse_hovering_rect(&ctx->input, bounds))
-            mouse_hover |= CURSOR_UPDOWN;
-          nk_symbol(ctx, NK_SYMBOL_CIRCLE_SOLID, NK_TEXT_ALIGN_CENTERED | NK_TEXT_ALIGN_MIDDLE | NK_SYMBOL_REPEAT(3));
-          if (nk_input_is_mouse_hovering_rect(&ctx->input, bounds) && nk_input_is_mouse_pressed(&ctx->input, NK_BUTTON_LEFT))
-            insplitter = SIZER_SWO; /* in swo sizer */
-          else if (insplitter != SPLITTER_NONE && !nk_input_is_mouse_down(&ctx->input, NK_BUTTON_LEFT))
-            insplitter = SPLITTER_NONE;
-          if (insplitter == SIZER_SWO) {
-            tab_heights[TAB_SWO] += ctx->input.mouse.delta.y;
-            if (tab_heights[TAB_SWO] < ROW_HEIGHT)
-              tab_heights[TAB_SWO] = ROW_HEIGHT;
-          }
-          nk_tree_state_pop(ctx);
-        } /* SWO tracing */
+        panel_configuration(ctx, &appstate, &tab_states[TAB_CONFIGURATION]);
+        panel_breakpoints(ctx, &appstate, &tab_states[TAB_BREAKPOINTS]);
+        panel_watches(ctx, &appstate, &tab_states[TAB_WATCHES]);
+        panel_memory(ctx, &appstate, &tab_states[TAB_MEMORY]);
+        panel_semihosting(ctx, &appstate, &tab_states[TAB_SEMIHOSTING]);
+        panel_serialmonitor(ctx, &appstate, &tab_states[TAB_SERMON]);
+        panel_traceswo(ctx, &appstate, &tab_states[TAB_SWO]);
 
         nk_group_end(ctx);
       } /* right column */
 
-      if (popup_active != POPUP_NONE) {
-        struct nk_rect rc;
-        float w = opt_fontsize * 40, h = canvas_height * 0.75;
-        if (w > canvas_width - 20)  /* clip "ideal" help window size of canvas size */
-          w = canvas_width - 20;
-        rc = nk_rect((canvas_width - w) / 2, (canvas_height - h) / 2, w, h);
-        if (nk_popup_begin(ctx, NK_POPUP_STATIC, "Help", NK_WINDOW_NO_SCROLLBAR, rc)) {
-          static const float bottomrow_ratio[] = {0.15, 0.68, 0.17};
-          nk_layout_row_dynamic(ctx, h - 1.75*ROW_HEIGHT, 1);
-          textview_widget(ctx, "help", helptext_root.next, opt_fontsize);
-          nk_layout_row(ctx, NK_DYNAMIC, ROW_HEIGHT, 3, bottomrow_ratio);
-          nk_label(ctx, (popup_active == POPUP_INFO) ? "More info" : "More help", NK_TEXT_LEFT);
-          nk_edit_focus(ctx, 0);
-          result = nk_edit_string_zero_terminated(ctx, NK_EDIT_FIELD|NK_EDIT_SIG_ENTER|NK_EDIT_CLIPBOARD,
-                                                  help_edit, sizearray(help_edit), nk_filter_ascii);
-          if ((result & NK_EDIT_COMMITED) != 0 && strlen(help_edit) > 0) {
-            stringlist_clear(&helptext_root);
-            if (strncmp(help_edit, "help", 4) != 0 && strncmp(help_edit, "info", 4) != 0) {
-              /* insert "help" or "info" before the command */
-              memmove(help_edit + 5, help_edit, strlen(help_edit) + 1);
-              memmove(help_edit, (popup_active == POPUP_INFO) ? "info " : "help ", 5);
-            }
-            if (!handle_help_cmd(help_edit, &helptext_root, &popup_active)
-                && !handle_info_cmd(help_edit, &helptext_root, &popup_active, &opt_swo))
-            {
-              strlcat(help_edit, "\n", sizearray(help_edit));
-              if (task_stdin(&task, help_edit))
-                gdbmi_sethandled(0); /* clear result on new input */
-            }
-            help_edit[0] = '\0';
-          }
-          if (nk_button_label(ctx, "Close") || nk_input_is_key_pressed(&ctx->input, NK_KEY_ESCAPE)) {
-            popup_active = POPUP_NONE;
-            atprompt = 1;
-            help_edit[0] = '\0';
-            stringlist_clear(&helptext_root);
-            nk_popup_close(ctx);
-          }
-          nk_popup_end(ctx);
-        } else {
-          popup_active = POPUP_NONE;
-          atprompt = 1;
-        }
-      }
-
       /* keyboard input (for main view) */
-      if (popup_active == POPUP_NONE) {
-        //??? handle scrolling keys, tab-completion and history for the help/info popup as well
-        if (nk_input_is_key_pressed(&ctx->input, NK_KEY_UP) && source_cursorline > 1) {
-          source_cursorline--;
-        } else if (nk_input_is_key_pressed(&ctx->input, NK_KEY_DOWN) && source_cursorline < source_linecount(source_cursorfile)) {
-          source_cursorline++;
-        } else if (nk_input_is_key_pressed(&ctx->input, NK_KEY_SCROLL_UP)) {
-          source_cursorline -= source_vp_rows;
-          if (source_cursorline < 1)
-            source_cursorline = 1;
-        } else if (nk_input_is_key_pressed(&ctx->input, NK_KEY_SCROLL_DOWN)) {
-          int linecount = source_linecount(source_cursorfile);
-          source_cursorline += source_vp_rows;
-          if (source_cursorline > linecount)
-            source_cursorline = linecount;
-        } else if (nk_input_is_key_pressed(&ctx->input, NK_KEY_SCROLL_TOP)) {
-          source_cursorline = 1;
-        } else if (nk_input_is_key_pressed(&ctx->input, NK_KEY_SCROLL_BOTTOM)) {
-          source_cursorline = source_linecount(source_cursorfile);
-        } else if (nk_input_is_key_pressed(&ctx->input, NK_KEY_FIND)) {
-          strlcpy(console_edit, "find ", sizearray(console_edit));
-          console_activate = 2;
-        } else if (nk_input_is_key_pressed(&ctx->input, NK_KEY_F3)) {
-          handle_find_cmd("find");  /* find next */
-        } else if (nk_input_is_key_pressed(&ctx->input, NK_KEY_GOTO)) {
-          strlcpy(console_edit, "list ", sizearray(console_edit));
-          console_activate = 2;
-        } else if (console_isactive & nk_input_is_key_pressed(&ctx->input, NK_KEY_PAR_UP)) {
-          consoleedit_next = console_history_step(&consoleedit_root, consoleedit_next, 0);
-          if (consoleedit_next != NULL)
-            strlcpy(console_edit, consoleedit_next->text, sizearray(console_edit));
-        } else if (console_isactive & nk_input_is_key_pressed(&ctx->input, NK_KEY_PAR_DOWN)) {
-          consoleedit_next = console_history_step(&consoleedit_root, consoleedit_next, 1);
-          if (consoleedit_next != NULL)
-            strlcpy(console_edit, consoleedit_next->text, sizearray(console_edit));
-        } else if (nk_input_is_key_pressed(&ctx->input, NK_KEY_REFRESH)) {
-          consoleedit_next = console_history_match(&consoleedit_root, consoleedit_next, console_edit, sizearray(console_edit));
-          if (consoleedit_next != NULL) {
-            strlcpy(console_edit, consoleedit_next->text, sizearray(console_edit));
-            console_activate = 2;
-          }
-        } else if (nk_input_is_key_pressed(&ctx->input, NK_KEY_TAB)) {
-          if (console_autocomplete(console_edit, sizearray(console_edit), &dwarf_symboltable))
-            console_activate = 2;
-        } else if (nk_input_is_key_pressed(&ctx->input, NK_KEY_ESCAPE)) {
-          console_edit[0] = '\0';
-          console_activate = 2;
-        }
-      }
+      if (appstate.popup_active == POPUP_NONE)
+        handle_kbdinput_main(ctx, &appstate);
+      else
+        help_popup(ctx, &appstate, canvas_width, canvas_height);
 
-      pointer_setstyle(mouse_hover);
+      /* mouse cursor shape */
+      if (appstate.sizerbar_memory.hover || appstate.sizerbar_semihosting.hover
+          || appstate.sizerbar_serialmon.hover || appstate.sizerbar_swo.hover)
+        pointer_setstyle(CURSOR_UPDOWN);
+      else if (splitter_ver.hover)
+        pointer_setstyle(CURSOR_UPDOWN);
+      else if (splitter_hor.hover)
+        pointer_setstyle(CURSOR_LEFTRIGHT);
+      else
+        pointer_setstyle(CURSOR_NORMAL);
     } /* window */
 
     nk_end(ctx);
@@ -5970,57 +6335,54 @@ int main(int argc, char *argv[])
     /* Draw */
     guidriver_render(nk_rgb(30,30,30));
   }
-  exitcode = task_close(&task);
+  exitcode = task_close(&appstate.task);
 
   /* save parameter file */
-  if (strlen(txtFilename) > 0 && access(txtFilename, 0) == 0)
-    save_settings(txtParamFile, txtEntryPoint, opt_tpwr, opt_connect_srst,
-                  opt_autodownload, txtSVDfile, &opt_swo);
+  if (strlen(appstate.Filename) > 0 && access(appstate.Filename, 0) == 0)
+    save_settings(appstate.ParamFile, appstate.EntryPoint, appstate.tpwr, appstate.connect_srst,
+                  appstate.autodownload, appstate.SVDfile, &appstate.swo);
 
   /* save settings */
-  ini_puts("Settings", "gdb", txtGDBpath, txtConfigFile);
+  ini_puts("Settings", "gdb", appstate.GDBpath, txtConfigFile);
   sprintf(valstr, "%d %d", canvas_width, canvas_height);
   ini_puts("Settings", "size", valstr, txtConfigFile);
-  sprintf(valstr, "%.2f %.2f", splitter_hor, splitter_ver);
+  sprintf(valstr, "%.2f %.2f", splitter_hor.ratio, splitter_ver.ratio);
   ini_puts("Settings", "splitter", valstr, txtConfigFile);
-  for (idx = 0; idx < TAB_COUNT; idx++) {
-    char key[32];
-    sprintf(key, "view%d", idx);
-    sprintf(valstr, "%d %d", tab_states[idx], (int)tab_heights[idx]);
-    ini_puts("Settings", key, valstr, txtConfigFile);
-  }
-  ini_putl("Settings", "allmessages", opt_allmsg, txtConfigFile);
+  config_write_tabstate("configuration", tab_states[TAB_CONFIGURATION] , NULL, txtConfigFile);
+  config_write_tabstate("breakpoints", tab_states[TAB_BREAKPOINTS] , NULL, txtConfigFile);
+  config_write_tabstate("watches", tab_states[TAB_WATCHES] , NULL, txtConfigFile);
+  config_write_tabstate("memory", tab_states[TAB_MEMORY], &appstate.sizerbar_memory, txtConfigFile);
+  config_write_tabstate("semihsting", tab_states[TAB_SEMIHOSTING], &appstate.sizerbar_semihosting, txtConfigFile);
+  config_write_tabstate("serialmon", tab_states[TAB_SERMON], &appstate.sizerbar_serialmon, txtConfigFile);
+  config_write_tabstate("traceswo", tab_states[TAB_SWO], &appstate.sizerbar_swo, txtConfigFile);
+  ini_putl("Settings", "allmessages", appstate.allmsg, txtConfigFile);
   ini_putl("Settings", "fontsize", opt_fontsize, txtConfigFile);
   ini_puts("Settings", "fontstd", opt_fontstd, txtConfigFile);
   ini_puts("Settings", "fontmono", opt_fontmono, txtConfigFile);
-  ini_puts("Session", "recent", txtFilename, txtConfigFile);
+  ini_puts("Session", "recent", appstate.Filename, txtConfigFile);
   /* save history of commands */
   idx = 1;
-  for (consoleedit_next = consoleedit_root.next; consoleedit_next != NULL; consoleedit_next = consoleedit_next->next) {
+  for (appstate.consoleedit_next = appstate.consoleedit_root.next; appstate.consoleedit_next != NULL; appstate.consoleedit_next = appstate.consoleedit_next->next) {
     char key[32];
     sprintf(key, "cmd%d", idx);
-    ini_puts("Commands", key, consoleedit_next->text, txtConfigFile);
+    ini_puts("Commands", key, appstate.consoleedit_next->text, txtConfigFile);
     if (idx++ > 50)
       break;  /* limit the number of memorized commands */
   }
   /* save selected debug probe */
-  if (is_ip_address(txtIPaddr))
-    ini_puts("Settings", "ip-address", txtIPaddr, txtConfigFile);
-  ini_putl("Settings", "probe", (probe == netprobe) ? 99 : probe, txtConfigFile);
-  if (probelist != NULL) {
-    for (idx = 0; idx < netprobe + 1; idx++)
-      free((void*)probelist[idx]);
-    free((void*)probelist);
-  }
+  if (is_ip_address(appstate.IPaddr))
+    ini_puts("Settings", "ip-address", appstate.IPaddr, txtConfigFile);
+  ini_putl("Settings", "probe", (appstate.probe == appstate.netprobe) ? 99 : appstate.probe, txtConfigFile);
 
-  free(cmdline);
+  free(appstate.cmdline);
+  clear_probelist(appstate.probelist, appstate.netprobe);
   guidriver_close();
   stringlist_clear(&consolestring_root);
-  stringlist_clear(&consoleedit_root);
+  stringlist_clear(&appstate.consoleedit_root);
   stringlist_clear(&semihosting_root);
   breakpoint_clear();
   svd_clear();
-  memdump_cleanup(&memdump);
+  memdump_cleanup(&appstate.memdump);
   console_clear();
   sources_clear(nk_true);
   bmscript_clear();

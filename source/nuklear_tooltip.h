@@ -34,9 +34,10 @@ nk_bool button_tooltip(struct nk_context *ctx, const char *title,
 nk_bool button_symbol_tooltip(struct nk_context *ctx, enum nk_symbol_type symbol,
                               enum nk_keys hotkey, const char *tiptext);
 nk_bool checkbox_tooltip(struct nk_context *ctx, const char *label,
-                         nk_bool *active, const char *tiptext);
+                         nk_bool *active, nk_flags align, const char *tiptext);
 nk_flags editctrl_tooltip(struct nk_context *ctx, nk_flags flags,
                           char *buffer, int max, nk_plugin_filter filter,
                           const char *tiptext);
 
 #endif /* _NK_TOOLTIP_H */
+

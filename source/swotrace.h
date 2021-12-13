@@ -65,7 +65,7 @@ void   tracestring_add(unsigned channel, const unsigned char *buffer, size_t len
 void   tracestring_clear(void);
 int    tracestring_isempty(void);
 unsigned tracestring_count(void);
-void   tracestring_process(int enabled);
+int    tracestring_process(int enabled);
 int    trace_save(const char *filename);
 int    tracestring_find(const char *text, int curline);
 int    tracestring_findtimestamp(double timestamp);

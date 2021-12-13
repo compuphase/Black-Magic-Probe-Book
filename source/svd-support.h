@@ -2,7 +2,7 @@
  * Functions for reading and parsing CMSIS SVD files with MCU-specific register
  * definitions.
  *
- * Copyright 2020 CompuPhase
+ * Copyright 2020-2021 CompuPhase
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -25,7 +25,13 @@ int  svd_xlate_name(const char *symbol, char *alias, size_t alias_size);
 int  svd_xlate_all_names(char *text, size_t maxsize);
 
 const char *svd_mcu_prefix(void);
-const char *svd_peripheral(unsigned index, unsigned long *address);
-const char *svd_register(const char *peripheral, unsigned index, unsigned long *offset);
+const char *svd_peripheral(unsigned index, unsigned long *address, const char **description);
+const char *svd_register(const char *peripheral, unsigned index, unsigned long *offset,
+                         int *range, const char **description);
+const char *svd_bitfield(const char *peripheral, const char *regname, unsigned index,
+                         short *low_bit, short *high_bit, const char **description);
+
+int svd_lookup(const char *symbol, int index, const char **periph_name, const char **reg_name,
+               unsigned long *address, const char **description);
 
 #endif /* _SVD_SUPPORT_H */

@@ -322,11 +322,13 @@ struct nk_context* guidriver_init(const char *caption, int width, int height, in
   glfwMakeContextCurrent(winApp);
 
   /* add window icon */
-  memset(icons, 0, sizeof icons);
-  error = lodepng_decode32(&icons[0].pixels, (unsigned*)&icons[0].width, (unsigned*)&icons[0].height, appicon_data, appicon_datasize);
-  if (!error)
-    glfwSetWindowIcon(winApp, 1, icons);
-  free(icons[0].pixels);
+  #if GLFW_VERSION_MAJOR >= 3 && GLFW_VERSION_MINOR >= 2
+    memset(icons, 0, sizeof icons);
+    error = lodepng_decode32(&icons[0].pixels, (unsigned*)&icons[0].width, (unsigned*)&icons[0].height, appicon_data, appicon_datasize);
+    if (!error)
+      glfwSetWindowIcon(winApp, 1, icons);
+    free(icons[0].pixels);
+  #endif
 
   ctx = nk_glfw3_init(winApp, NK_GLFW3_INSTALL_CALLBACKS);
   if ((fontstd != NULL && strlen(fontstd) > 0 && font_locate(path, sizeof path, fontstd, ""))

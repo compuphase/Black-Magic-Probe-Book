@@ -10,9 +10,10 @@
 
 #include "picoro.h"
 
-#pragma GCC push_options
-#pragma GCC optimize ("O0")
-
+#if defined __GNUC__
+  #pragma GCC push_options
+  #pragma GCC optimize ("O0")
+#endif
 #define COROUTINE_STACK	16	/* in KiB */
 
 
@@ -163,5 +164,6 @@ void coroutine_start(void) {
 	coroutine_main(stack);
 }
 
-/* eof */
-#pragma GCC pop_options
+#if defined __GNUC__
+  #pragma GCC pop_options
+#endif
