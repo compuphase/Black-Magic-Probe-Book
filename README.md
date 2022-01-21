@@ -1,6 +1,6 @@
 # Embedded Debugging with the Black Magic Probe
 <img src="https://github.com/compuphase/Black-Magic-Probe-Book/blob/master/doc/BlackMagicProbe-front-cover.jpg" alt="Book cover" width="400" align="right">
-This guide covers setting up and using the [Black Magic Probe](https://github.com/blackmagic-debug/blackmagic/). The Black Magic Probe is a relatively cheap JTAG/SWD probe for ARM Cortex micro-controllers. A distinguishing feature of the Black Magic Probe is that it embeds a GDB server. As a result, the GNU Debugger can directly connect to the Black Magic Probe.<br>
+This guide covers setting up and using the <a href="https://github.com/blackmagic-debug/blackmagic/">Black Magic Probe</a>. The Black Magic Probe is a relatively cheap JTAG/SWD probe for ARM Cortex micro-controllers. A distinguishing feature of the Black Magic Probe is that it embeds a GDB server. As a result, the GNU Debugger can directly connect to the Black Magic Probe.<br>
 
 While setting up and using the Black Magic Probe has also been covered in wikis and blogs, I found that those description often only scratched the surface of the subject. With this guide, I set out to give a more comprehensive account. Later, I also added specific notes on [ctxLink](http://www.sidprice.com/ctxlink/), a derivative of the Black Magic Probe that offers a WiFi connection.
 ## Utilities
