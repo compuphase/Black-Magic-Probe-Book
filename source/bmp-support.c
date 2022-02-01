@@ -557,11 +557,30 @@ int bmp_fullerase(void)
   return 1;
 }
 
+static unsigned long download_numsteps = 0;
+static unsigned long download_step = 0;
+void bmp_progress_reset(unsigned long numsteps)
+{
+  download_step = 0;
+  download_numsteps = numsteps;
+}
+void bmp_progress_step(unsigned long step)
+{
+  download_step += step;
+  if (download_step > download_numsteps)
+    download_step = download_numsteps;
+}
+void bmp_progress_get(unsigned long *step, unsigned long *range)
+{
+  if (step != NULL)
+    *step = download_step;
+  if (range != NULL)
+    *range = download_numsteps;
+}
+
 int bmp_download(FILE *fp)
 {
-  char *cmd;
-  int rgn, rcvd, pktsize;
-
+  bmp_progress_reset(0);
   if (!bmp_isopen()) {
     notice(BMPERR_NOCONNECT, "Not connected to Black Magic Probe");
     return 0;
@@ -570,24 +589,29 @@ int bmp_download(FILE *fp)
     notice(BMPERR_NOFLASH, "No Flash memory record");
     return 0;
   }
-  pktsize = (PacketSize > 0) ? PacketSize : 64;
-  cmd = malloc((pktsize + 16) * sizeof(char));
+  int pktsize = (PacketSize > 0) ? PacketSize : 64;
+  char *cmd = malloc((pktsize + 16) * sizeof(char));
   if (cmd == NULL) {
     notice(BMPERR_MEMALLOC, "Memory allocation error");
     return 0;
   }
 
   assert(fp != NULL);
-  for (rgn = 0; rgn < FlashRgnCount; rgn++) {
-    int segment, type;
+  unsigned long progress_range = 0;
+  for (int rgn = 0; rgn < FlashRgnCount; rgn++) {
+    int segment, type, rcvd;
     unsigned long topaddr, flashsectors, paddr, vaddr, fileoffs, filesize;
     /* walk through all segments in the ELF file that fall into this region */
     topaddr = 0;
-    for (segment = 0; elf_segment_by_index(fp, segment, &type, &fileoffs, &filesize, NULL, &paddr, NULL) == ELFERR_NONE; segment++)
-      if (type == 1 && paddr >= FlashRgn[rgn].address && paddr < FlashRgn[rgn].address + FlashRgn[rgn].size)
+    for (segment = 0; elf_segment_by_index(fp, segment, &type, &fileoffs, &filesize, NULL, &paddr, NULL) == ELFERR_NONE; segment++) {
+      if (type == 1 && paddr >= FlashRgn[rgn].address && paddr < FlashRgn[rgn].address + FlashRgn[rgn].size) {
         topaddr = paddr + filesize;
+        progress_range += filesize;
+      }
+    }
     if (topaddr == 0)
       continue; /* no segment fitting in this Flash sector */
+    bmp_progress_reset(progress_range+1);
     /* erase the Flash memory */
     assert(topaddr <= FlashRgn[rgn].address + FlashRgn[rgn].size);
     flashsectors = ((topaddr - FlashRgn[rgn].address + (FlashRgn[rgn].blocksize - 1)) / FlashRgn[rgn].blocksize);
@@ -603,6 +627,7 @@ int bmp_download(FILE *fp)
       free(cmd);
       return 0;
     }
+    bmp_progress_step(1);
     /* walk through all segments again, to download the payload */
     for (segment = 0; elf_segment_by_index(fp, segment, &type, &fileoffs, &filesize, &vaddr, &paddr, NULL) == ELFERR_NONE; segment++) {
       unsigned char *data;
@@ -619,7 +644,7 @@ int bmp_download(FILE *fp)
       yield((void*)(intptr_t)1);
       fseek(fp, fileoffs, SEEK_SET);
       fread(data, 1, filesize, fp);
-      for (pos = 0; pos < filesize; pos += numbytes) {
+      for (pos = numbytes = 0; pos < filesize; pos += numbytes) {
         unsigned prefixlen;
         sprintf(cmd, "vFlashWrite:%x:", (unsigned)(paddr + pos));
         prefixlen = strlen(cmd) + 4;  /* +1 for '$', +3 for '#nn' checksum */
@@ -650,6 +675,8 @@ int bmp_download(FILE *fp)
           free(cmd);
           return 0;
         }
+        bmp_progress_step(numbytes);
+        yield((void*)(intptr_t)1);
       }
       free(data);
     }

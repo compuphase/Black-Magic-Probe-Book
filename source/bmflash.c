@@ -3,7 +3,7 @@
  * the Black Magic Probe on a system. This utility is built with Nuklear for a
  * cross-platform GUI.
  *
- * Copyright 2019-2021 CompuPhase
+ * Copyright 2019-2022 CompuPhase
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -56,6 +56,7 @@
 
 #include "guidriver.h"
 #include "noc_file_dialog.h"
+#include "nuklear_mousepointer.h"
 #include "nuklear_style.h"
 #include "nuklear_tooltip.h"
 #include "bmcommon.h"
@@ -98,7 +99,7 @@
 
 #define FONT_HEIGHT     14              /* default font size */
 #define WINDOW_WIDTH    (34 * opt_fontsize)
-#define WINDOW_HEIGHT   (25 * opt_fontsize)
+#define WINDOW_HEIGHT   (26 * opt_fontsize)
 #define ROW_HEIGHT      (2 * opt_fontsize)
 #define COMBOROW_CY     (0.9 * opt_fontsize)
 #define BROWSEBTN_WIDTH (1.5 * opt_fontsize)
@@ -578,6 +579,7 @@ static int writelog(const char *filename, const char *serial)
       strlcpy(substr, key, sizearray(substr));
       strlcat(substr, ": ", sizearray(substr));
       strlcat(substr, value, sizearray(substr));
+      strlcat(substr, ", ", sizearray(substr));
     }
   }
   strlcat(line, substr, sizearray(line));
@@ -641,7 +643,7 @@ static int help_popup(struct nk_context *ctx)
     "The MCU family must be set for post-processing the ELF file or\n"
     "performing additional configurations before the download. It is\n"
     "currently needed for the LPC family by NXP. For other micro-\n"
-    "controllers, this field should be set to \"generic\"\n\n"
+    "controllers, this field should be set to \"standard\"\n\n"
     "The \"Power Target\" option can be set to drive the power-sense pin\n"
     "with 3.3V (to power the target).\n\n"
     "The \"Full Flash Erase\" option erases all Flash sectors in the MCU.\n"
@@ -781,6 +783,7 @@ typedef struct tagAPPSTATE {
   nk_bool fullerase;            /**< option: erase entire flash before download */
   nk_bool connect_srst;         /**< option: keep in reset during connect */
   nk_bool write_log;            /**< option: record downloads in log file */
+  nk_bool print_time;           /**< option: print download time */
   int skip_download;            /**< do download+verify procedure without actually downloading */
   char IPaddr[64];              /**< IP address for network probe */
   char PostProcess[_MAX_PATH];  /**< path to post-process program */
@@ -798,6 +801,7 @@ typedef struct tagAPPSTATE {
   FILE *fpTgt;                  /**< target file */
   FILE *fpWork;                 /**< intermediate work file */
   coro coro_download;           /**< co-routine handle */
+  clock_t tstamp_start;         /**< time-stamp of start of download procedure */
 } APPSTATE;
 
 enum {
@@ -836,9 +840,9 @@ enum {
   STATE_FULLERASE,
 };
 
-static const char *architectures[] = { "Generic", "LPC8xx", "LPC11xx", "LPC15xx",
+static const char *architectures[] = { "Standard", "LPC8xx", "LPC11xx", "LPC15xx",
                                        "LPC17xx", "LPC21xx", "LPC22xx", "LPC23xx",
-                                       "LPC24xx", "LPC43xx"};
+                                       "LPC24xx", "LPC43xx" };
 
 static int load_targetparams(const char *filename, APPSTATE *state)
 {
@@ -849,6 +853,7 @@ static int load_targetparams(const char *filename, APPSTATE *state)
 
   state->connect_srst = (nk_bool)ini_getl("Settings", "connect-srst", 0, filename);
   state->write_log = (nk_bool)ini_getl("Settings", "write-log", 0, filename);
+  state->print_time = (nk_bool)ini_getl("Settings", "print-time", 0, filename);
   char field[200];
   ini_gets("Flash", "architecture", "", field, sizearray(field), filename);
   for (state->architecture = 0; state->architecture < sizearray(architectures); state->architecture++)
@@ -974,6 +979,8 @@ static void panel_options(struct nk_context *ctx, APPSTATE *state,
                      "Keep target MCU reset while debug probe attaches");
     checkbox_tooltip(ctx, "Keep log of downloads", &state->write_log, NK_TEXT_LEFT,
                      "Write successful downloads to a log file");
+    checkbox_tooltip(ctx, "Print download time", &state->print_time, NK_TEXT_LEFT,
+                     "Print how long the download took upon completion");
 
     nk_tree_state_pop(ctx);
   }
@@ -1042,6 +1049,7 @@ static int handle_stateaction(APPSTATE *state, enum nk_collapse_states tab_state
     tcpip_init();
     bmp_setcallback(bmp_callback);
     bmp_connect(state->probe, (state->probe == state->netprobe) ? state->IPaddr : NULL);
+    bmp_progress_reset(0);
     state->curstate = STATE_IDLE;
     waitidle = 0;
     break;
@@ -1078,6 +1086,7 @@ static int handle_stateaction(APPSTATE *state, enum nk_collapse_states tab_state
         field[0] = '\0';
       ini_putl("Settings", "connect-srst", state->connect_srst, state->ParamFile);
       ini_putl("Settings", "write-log", state->write_log, state->ParamFile);
+      ini_putl("Settings", "print-time", state->print_time, state->ParamFile);
       ini_puts("Flash", "architecture", field, state->ParamFile);
       ini_putl("Flash", "tpwr", state->tpwr, state->ParamFile);
       ini_putl("Flash", "full-erase", state->fullerase, state->ParamFile);
@@ -1090,6 +1099,7 @@ static int handle_stateaction(APPSTATE *state, enum nk_collapse_states tab_state
       sprintf(field, "%s:%s:%d:%s", state->Serial, state->SerialSize, state->SerialFmt, state->SerialIncr);
       ini_puts("Serialize", "serial", field, state->ParamFile);
       state->curstate = STATE_ATTACH;
+      state->tstamp_start = clock();
     } else {
       log_addstring("^1Failed to open the ELF file\n");
       state->curstate = STATE_IDLE;
@@ -1098,6 +1108,7 @@ static int handle_stateaction(APPSTATE *state, enum nk_collapse_states tab_state
     break;
 
   case STATE_ATTACH:
+    bmp_progress_reset(0);
     result = bmp_connect(state->probe, (state->probe == state->netprobe) ? state->IPaddr : NULL);
     if (result) {
       char mcufamily[32];
@@ -1208,6 +1219,7 @@ static int handle_stateaction(APPSTATE *state, enum nk_collapse_states tab_state
         result = 0; /* preset for the case that the resumable() fails */
       }
       if (state->coro_download != NULL && resumable(state->coro_download)) {
+        pointer_setstyle(CURSOR_WAIT);
         result = (intptr_t)resume(state->coro_download,
                                   (state->fpWork != NULL) ? state->fpWork : state->fpTgt);
         if (result == 0) {
@@ -1215,7 +1227,7 @@ static int handle_stateaction(APPSTATE *state, enum nk_collapse_states tab_state
           state->curstate = STATE_IDLE;
         }
       } else {
-        //??? enhancement: add notice for download speed
+        pointer_setstyle(CURSOR_NORMAL);
         state->coro_download = NULL;
         state->curstate = result ? STATE_VERIFY : STATE_IDLE;
       }
@@ -1245,6 +1257,12 @@ static int handle_stateaction(APPSTATE *state, enum nk_collapse_states tab_state
       bmp_runscript("memremap", architectures[state->architecture], NULL, NULL);
     result = bmp_verify((state->fpWork != NULL)? state->fpWork : state->fpTgt);
     state->curstate = result ? STATE_FINISH : STATE_IDLE;
+    if (result && state->print_time) {
+      char msg[100];
+      clock_t tstamp_stop = clock();
+      sprintf(msg, "Completed in %.1f seconds\n", (double)(tstamp_stop - state->tstamp_start) / CLOCKS_PER_SEC);
+      log_addstring(msg);
+    }
     waitidle = 0;
     break;
 
@@ -1305,6 +1323,7 @@ static int handle_stateaction(APPSTATE *state, enum nk_collapse_states tab_state
     break;
 
   case STATE_ERASE_OPTBYTES:
+    bmp_progress_reset(0);
     if (bmp_connect(state->probe, (state->probe == state->netprobe) ? state->IPaddr : NULL)
         && bmp_attach(state->tpwr, state->connect_srst, NULL, 0, NULL, 0))
     {
@@ -1318,6 +1337,7 @@ static int handle_stateaction(APPSTATE *state, enum nk_collapse_states tab_state
     break;
 
   case STATE_SET_CRP:
+    bmp_progress_reset(0);
     if (bmp_connect(state->probe, (state->probe == state->netprobe) ? state->IPaddr : NULL)
         && bmp_attach(state->tpwr, state->connect_srst, NULL, 0, NULL, 0))
     {
@@ -1331,6 +1351,7 @@ static int handle_stateaction(APPSTATE *state, enum nk_collapse_states tab_state
     break;
 
   case STATE_FULLERASE:
+    bmp_progress_reset(0);
     if (bmp_connect(state->probe, (state->probe == state->netprobe) ? state->IPaddr : NULL)
         && bmp_attach(state->tpwr, state->connect_srst, NULL, 0, NULL, 0))
     {
@@ -1473,7 +1494,7 @@ int main(int argc, char *argv[])
       }
       nk_layout_row_end(ctx);
 
-      nk_layout_row_dynamic(ctx, (LOGVIEW_ROWS+3.5)*ROW_HEIGHT, 1);
+      nk_layout_row_dynamic(ctx, (LOGVIEW_ROWS+4)*ROW_HEIGHT, 1);
       if (nk_group_begin(ctx, "options", 0)) {
         panel_options(ctx, &appstate, tab_states);
         panel_serialize(ctx, &appstate, tab_states);
@@ -1481,6 +1502,12 @@ int main(int argc, char *argv[])
         if (nk_tree_state_push(ctx, NK_TREE_TAB, "Status", &tab_states[TAB_STATUS])) {
           nk_layout_row_dynamic(ctx, LOGVIEW_ROWS*ROW_HEIGHT, 1);
           log_widget(ctx, "status", logtext, opt_fontsize, &loglines);
+
+          nk_layout_row_dynamic(ctx, ROW_HEIGHT*0.45, 1);
+          nk_size progress, progress_range;
+          bmp_progress_get(&progress, &progress_range);
+          nk_progress(ctx, &progress, progress_range, NK_FIXED);
+
           nk_tree_state_pop(ctx);
         }
 

@@ -66,6 +66,10 @@ int bmp_fullerase(void);
 int bmp_download(FILE *fp);
 int bmp_verify(FILE *fp);
 
+void bmp_progress_reset(unsigned long numsteps);
+void bmp_progress_step(unsigned long step);
+void bmp_progress_get(unsigned long *step, unsigned long *range);
+
 int bmp_enabletrace(int async_bitrate, unsigned char *endpoint);
 
 int bmp_restart(void);

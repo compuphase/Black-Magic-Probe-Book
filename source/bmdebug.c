@@ -735,6 +735,7 @@ static int console_autocomplete(char *text, size_t textsize, const DWARF_SYMBOLL
     { "break", "b", "%func %file" },
     { "clear", NULL, "%func %file" },
     { "command", NULL, NULL },
+    { "compare-sections", NULL, NULL },
     { "cond", NULL, NULL },
     { "continue", "c", NULL },
     { "delete", NULL, NULL },
