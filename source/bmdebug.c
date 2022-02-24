@@ -2,7 +2,7 @@
  * GDB front-end with specific support for the Black Magic Probe.
  * This utility is built with Nuklear for a cross-platform GUI.
  *
- * Copyright 2019-2021 CompuPhase
+ * Copyright 2019-2022 CompuPhase
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -264,51 +264,93 @@ static const char *skipwhite(const char *text)
   return text;
 }
 
-static char *strtokenize(char **mark, char *string, char delimiter)
+static int strtokenize(const char *token, int *length, char delimiter)
 {
-  char *p;
-
-  assert(mark != NULL);
-  p = (string != NULL) ? string : *mark;
-  if (p == NULL || *p == '\0')
-    return NULL;
-
-  *mark = strchr(p, delimiter);
-  if (*mark != NULL)
-    *(*mark)++ = '\0';
-  else
-    *mark = p + strlen(p);
-  return p;
+  assert(token != NULL);
+  assert(length != NULL);
+  const char *p = strchr(token, delimiter);
+  *length = (p != NULL) ? (int)(p - token) : strlen(token);
+  return p != NULL;
 }
 
-static int helptext_add(STRINGLIST *root, char *text)
+static int helptext_add(STRINGLIST *root, char *text, int reformat)
 {
-  char *start;
+  char *start, *linebuffer;
+  unsigned linebuf_size = 1024;
+  int xtraflags = 0;
+
+  linebuffer = malloc(linebuf_size * sizeof(char));
+  if (linebuffer == NULL)
+    return 0;
+  *linebuffer = '\0';
 
   assert(text != NULL);
   start = (char*)skipwhite(text);
   while (start != NULL && *start != '\0') {
-    int xtraflags;
     if (*start == '^') {
       /* end of the standard console output, remove any text already handled and quit */
       if (start != text)
         memmove(text, start, strlen(start)+ 1);
+      free((void*)linebuffer);
       return 0;
     }
 
     /* handle only standard console output, ignore any "log" strings */
     if (*start == '~' || *start == '@') {
-      char *tok, *mark = NULL;
-      char *ptr = (char*)gdbmi_leader(start, &xtraflags, &start);
+      const char *ptr = gdbmi_leader(start, &xtraflags, &start);
       /* after gdbmi_leader(), there may again be '\n' characters in the resulting string */
-      for (tok = strtokenize(&mark, ptr, '\n'); tok != NULL; tok = strtokenize(&mark, NULL, '\n'))
-        stringlist_add(root, tok, xtraflags);
+      const char *tok = ptr;
+      int toklen, tokresult;
+      do {
+        tokresult = strtokenize(tok, &toklen, '\n');
+        if (toklen > 0) {
+          int len = strlen(linebuffer);
+          if (len + toklen + 2 >= linebuf_size) {
+            /* grow buffer size */
+            linebuf_size *= 2;
+            char *newbuffer = malloc(linebuf_size * sizeof(char));
+            if (newbuffer != NULL) {
+              strcpy(newbuffer, linebuffer);
+              free((void*)linebuffer);
+              linebuffer = newbuffer;
+            }
+          }
+          if (len + toklen + 2 < linebuf_size) {
+            memcpy(linebuffer + len, tok, toklen);
+            linebuffer[len + toklen] = '\0';
+          }
+        }
+        if (tokresult) {
+          /* reformat using some heuristics */
+          int linebreak = FALSE;
+          int len = strlen(linebuffer);
+          if (!reformat
+              || len == 0                                                 /* line break for fully empty strings */
+              || linebuffer[len - 1] == '.' || linebuffer[len - 1] == ':' /* line break if phrase ends with a period or colon */
+              || strpbrk(linebuffer, "[|]") != NULL                       /* line break if special characters appear in the string */
+              || stringlist_count(root) < 2)                              /* never concatenate the first two characters */
+            linebreak = TRUE;
+          if (linebreak) {
+            stringlist_add(root, linebuffer, xtraflags);
+            *linebuffer = '\0';
+          } else {
+            /* more text likely follows, add a space character */
+            strlcat(linebuffer, " ", linebuf_size);
+          }
+          tok += toklen + 1; /* skip delimiter */
+        }
+      } while (tokresult);
     } else {
       gdbmi_leader(start, &xtraflags, &start);
     }
     if (start != NULL)
-      start =(char*)skipwhite(start);
+      start = (char*)skipwhite(start);
   }
+
+  if (strlen(linebuffer) > 0)
+    stringlist_add(root, linebuffer, xtraflags);
+
+  free((void*)linebuffer);
   return 1;
 }
 
@@ -717,7 +759,7 @@ static int console_add(const char *text, int flags)
 
 static void console_input(const char *text)
 {
-  gdbmi_sethandled(0); /* clear result on new input */
+  gdbmi_sethandled(FALSE); /* clear result on new input */
   assert(text != NULL);
   console_add(text, STRFLG_INPUT);
 }
@@ -798,8 +840,8 @@ static int console_autocomplete(char *text, size_t textsize, const DWARF_SYMBOLL
     word = text;
   else
     word = (char*)skipwhite(word);
-  if (strlen(word) == 0)
-    return 0; /* no start of a word; nothing to autocomplete */
+  if (strlen(word) == 0 && word == text)
+    return 0; /* no text -> nothing to autocomplete */
 
   skip = cache_skip;
   if (word == text) {
@@ -2352,38 +2394,74 @@ static int is_idle(void)
 static int opt_fontsize = FONT_HEIGHT;
 
 
-static void textview_widget(struct nk_context *ctx, const char *id,
-                            const STRINGLIST *content, float rowheight)
+static int textview_widget(struct nk_context *ctx, const char *id,
+                           const STRINGLIST *content, float rowheight)
 {
-  struct nk_user_font const *font = ctx->style.font;
+  int linecount = 0;
 
   /* dark background on group */
-  nk_style_push_color(ctx,&ctx->style.window.fixed_background.data.color, nk_rgba(20, 29, 38, 225));
+  nk_style_push_color(ctx, &ctx->style.window.fixed_background.data.color, nk_rgba(20, 29, 38, 225));
+  nk_style_push_vec2(ctx, &ctx->style.window.group_padding, nk_vec2(6, 4));
   if (nk_group_begin(ctx, id, NK_WINDOW_BORDER)) {
-    int linecount = 0;
+    struct nk_user_font const *font = ctx->style.font;
+    float linewidth = 0;
     const STRINGLIST *item;
     for (item = content; item != NULL; item = item->next) {
-      float textwidth;
+      /* do a word-wrap routine */
+      int indent = 0;
       assert(item->text != NULL);
-      nk_layout_row_begin(ctx, NK_STATIC, rowheight, 1);
-      assert(font != NULL && font->width != NULL);
-      textwidth = font->width(font->userdata, font->height, item->text, strlen(item->text)) + 10;
-      nk_layout_row_push(ctx, textwidth);
-      nk_label(ctx, item->text, NK_TEXT_LEFT);
-      nk_layout_row_end(ctx);
-      linecount += 1;
+      const char *head = item->text;
+      do {
+        nk_layout_row_begin(ctx, NK_STATIC, rowheight, 1 + (indent > 0));
+        if (linewidth < 0.1) {
+          struct nk_rect rcline = nk_layout_widget_bounds(ctx);
+          linewidth = rcline.w;
+        }
+        const char *tail = head + strlen(head);
+        float textwidth;
+        for ( ;; ) {
+          assert(font != NULL && font->width != NULL);
+          textwidth = font->width(font->userdata, font->height, head, (int)(tail - head));
+          if (textwidth <= linewidth - indent)
+            break;
+          while (tail != head && *(tail - 1) > ' ')
+            tail -= 1;
+          if (tail == head) {
+            tail = head + strlen(head); /* a non-breakable very long word -> panic */
+            break;
+          }
+          tail -= 1;  /* also skip the ' ' we stopped on */
+        }
+        if (indent > 0) {
+          nk_layout_row_push(ctx, indent);
+          nk_spacing(ctx, 1);
+        }
+        nk_layout_row_push(ctx, textwidth + 4);
+        nk_text(ctx, head, (int)(tail - head), NK_TEXT_LEFT);
+        nk_layout_row_end(ctx);
+        /* prepare for next part to the string */
+        linecount += 1;
+        if (strstr(head, " -- ") != NULL)
+          indent = 40;
+        head = tail;
+        if (*head == ' ')
+          head += 1;
+      } while (*head != NULL);
     }
     /* if there are no lines at all, show that there is no information */
     if (linecount == 0) {
       nk_layout_row_dynamic(ctx, rowheight, 1);
       nk_label(ctx, "No information on this topic.", NK_TEXT_LEFT);
+      linecount += 1;
     }
     /* add an empty line to fill up any remaining space below */
     nk_layout_row_dynamic(ctx, rowheight, 1);
     nk_spacing(ctx, 1);
     nk_group_end(ctx);
   }
+  nk_style_pop_vec2(ctx);
   nk_style_pop_color(ctx);
+  return linecount;
 }
 
 /* console_widget() draws the text in the console window and scrolls to the last
@@ -2735,6 +2813,7 @@ enum {
   STATE_INIT,
   STATE_GDB_TASK,
   STATE_SCAN_BMP,
+  STATE_GDBVERSION,
   STATE_FILE,
   STATE_TARGET_EXT,
   STATE_MON_VERSION,
@@ -2791,7 +2870,7 @@ enum {
 #define REFRESH_LOCALS      0x0002
 #define REFRESH_WATCHES     0x0004
 #define REFRESH_MEMORY      0x0008
-#define REFRESH_CONSOLE     0x8000  /* input comes from a console, check for extra "done" result */
+#define IGNORE_DOUBLE_DONE  0x8000  /* input comes from a console, check for extra "done" result */
 
 #define MSG_BMP_NOT_FOUND   0x0001
 
@@ -3080,7 +3159,22 @@ static int handle_help_cmd(char *command, STRINGLIST *textroot, int *active)
   assert(command != NULL);
   assert(textroot != NULL);
   assert(active != NULL);
-  command = (char*)skipwhite(command);
+
+  /* delete leading white-space */
+  char *ptr = (char*)skipwhite(command);
+  if (ptr != command)
+    memmove(command, ptr, strlen(ptr) + 1);
+  /* move a trailing "help" to the beginning (so "serial help" becomes "help serial"
+     but make an exception for "monitor" */
+  if (strncmp(command, "mon", 3) != 0) {
+    ptr = strrchr(command, ' ');
+    if (ptr != NULL && strcmp(ptr + 1, "help") == 0) {
+      *ptr = '\0';
+      memmove(command + 5, command, strlen(command) + 1);
+      memcpy(command, "help ", 5);
+    }
+  }
+
   if (TERM_EQU(command, "help", 4)) {
     const char *cmdptr = skipwhite(command + 4);
     *active = 1;
@@ -3088,6 +3182,7 @@ static int handle_help_cmd(char *command, STRINGLIST *textroot, int *active)
       stringlist_add(textroot, "Front-end topics.", 0);
       stringlist_add(textroot, "", 0);
       stringlist_add(textroot, "keyboard -- list special keys.", 0);
+      stringlist_add(textroot, "mouse -- mouse actions.", 0);
       stringlist_add(textroot, "serial -- configure the serial monitor.", 0);
       stringlist_add(textroot, "svd -- show or list peripherals and registers.", 0);
       stringlist_add(textroot, "trace -- configure SWO tracing.", 0);
@@ -3114,10 +3209,24 @@ static int handle_help_cmd(char *command, STRINGLIST *textroot, int *active)
       stringlist_add(textroot, "Shift-F11 -- Step out of functions, same as \"finish\".", 0);
       stringlist_add(textroot, "Ctrl-F -- find text (\"find\" command).", 0);
       stringlist_add(textroot, "Ctrl-G -- go to file or line in source view, (\"list\" command).", 0);
-      stringlist_add(textroot, "Ctrl-R -- scroll backward through the command history.", 0);
+      stringlist_add(textroot, "Ctrl-R -- scroll backward through the command history. You can also use"
+                               " Ctrl-ArrowUp and Ctrl-ArrowDown to scroll through the command history.", 0);
       stringlist_add(textroot, "Ctrl-F2 -- reset program, same as \"start\".", 0);
       stringlist_add(textroot, "Ctrl-F5 -- interrupt program (stop).", 0);
       return 1;
+    } else if (TERM_EQU(cmdptr, "mouse", 5)) {
+      stringlist_add(textroot, "Mouse actions.", 0);
+      stringlist_add(textroot, "", 0);
+      stringlist_add(textroot, "A left-click in the left margin of the source view, toggles a breakpoint"
+                               " on that line (or the nearest applicable line, if the line that was"
+                               " clicked on has no code).", 0);
+      stringlist_add(textroot, "", 0);
+      stringlist_add(textroot, "A right-click on a word or symbol in the source view, copies that word or"
+                               " symbol name onto the command line. To add a watch on a variable, for"
+                               " example, you can type \"w\" and right click on the variable (and press Enter).", 0);
+      stringlist_add(textroot, "", 0);
+      stringlist_add(textroot, "Hovering over a variable or symbol, shows information on the symbol (such"
+                               " as the current value, in case of a variable).", 0);
     } else if (TERM_EQU(cmdptr, "reset", 5)) {
       stringlist_add(textroot, "Restart debugging.", 0);
       stringlist_add(textroot, "", 0);
@@ -3127,8 +3236,8 @@ static int handle_help_cmd(char *command, STRINGLIST *textroot, int *active)
     } else if (TERM_EQU(cmdptr, "serial", 6)) {
       stringlist_add(textroot, "Configure the serial monitor.", 0);
       stringlist_add(textroot, "", 0);
-      stringlist_add(textroot, "serial [port] [bitrate] -- open the port at the bitrate.", 0);
-      stringlist_add(textroot, "    If no port is specified, the secondary UART of the Black Magic Probe is used.", 0);
+      stringlist_add(textroot, "serial [port] [bitrate] -- open the port at the bitrate. If no port is specified,"
+                               " the secondary UART of the Black Magic Probe is used.", 0);
       stringlist_add(textroot, "serial enable -- open the serial monitor with the previously confugured settings.", 0);
       stringlist_add(textroot, "serial disable -- close the virtual monitor.", 0);
       stringlist_add(textroot, "serial info -- show current status and configuration.", 0);
@@ -3153,9 +3262,9 @@ static int handle_help_cmd(char *command, STRINGLIST *textroot, int *active)
       stringlist_add(textroot, "trace async [target-clock] [bitrate] -- configure asynchronous tracing.", 0);
       stringlist_add(textroot, "trace async passive [bitrate] -- activate asynchronous tracing, without configuration.", 0);
       stringlist_add(textroot, "trace bitrate [bitrate] -- set only the bitrate, without changing other parameters.", 0);
-      stringlist_add(textroot, "    The target-clock may be given as 12000000 or as 12MHZ.", 0);
-      stringlist_add(textroot, "    The bitrate may be given as 115200 or as 115.2kbps.", 0);
-      stringlist_add(textroot, "    The option \"passive\" can be abbreviated to \"pasv\".", 0);
+      stringlist_add(textroot, "      The target-clock may be given as 12000000 or as 12MHZ.", 0);
+      stringlist_add(textroot, "      The bitrate may be given as 115200 or as 115.2kbps.", 0);
+      stringlist_add(textroot, "      The option \"passive\" can be abbreviated to \"pasv\".", 0);
       stringlist_add(textroot, "", 0);
       stringlist_add(textroot, "trace enable -- enable SWO tracing with previously configured settings.", 0);
       stringlist_add(textroot, "trace disable -- disable SWO tracing.", 0);
@@ -3168,8 +3277,8 @@ static int handle_help_cmd(char *command, STRINGLIST *textroot, int *active)
       stringlist_add(textroot, "trace channel [index] disable -- disable a channel (0..31).", 0);
       stringlist_add(textroot, "trace channel [index] [name] -- set the name of a channel.", 0);
       stringlist_add(textroot, "trace channel [index] #[colour] -- set the colour of a channel.", 0);
-      stringlist_add(textroot, "    The option \"channel\" can be abbreviated to \"chan\" or \"ch\".", 0);
-      stringlist_add(textroot, "    The parameter [index] may be a range, like 0-7 for the first eight channels.", 0);
+      stringlist_add(textroot, "      The option \"channel\" can be abbreviated to \"chan\" or \"ch\".", 0);
+      stringlist_add(textroot, "      The parameter [index] may be a range, like 0-7 for the first eight channels.", 0);
       stringlist_add(textroot, "", 0);
       stringlist_add(textroot, "trace clear -- clear the trace view (delete contents).", 0);
       stringlist_add(textroot, "trace save [filename] -- save the contents in the trace view to a file.", 0);
@@ -4095,6 +4204,7 @@ typedef struct tagAPPSTATE {
   int curstate;                 /**< current (or new) state */
   int prevstate;                /**< previous state (to detect state changes) */
   int nextstate;                /**< on occasion, follow-up state depends on logic */
+  unsigned long gdbversion;     /**< version of GDB, xx.yy.zzzz */
   int stateparam[3];            /**< parameters for state change */
   int refreshflags;             /**< flags for refresh of various views */
   int probe;                    /**< selected debug probe (index) */
@@ -4199,7 +4309,7 @@ static void help_popup(struct nk_context *ctx, APPSTATE *state, float canvas_wid
   if (nk_popup_begin(ctx, NK_POPUP_STATIC, "Help", NK_WINDOW_NO_SCROLLBAR, rc)) {
     static const float bottomrow_ratio[] = {0.15, 0.68, 0.17};
     nk_layout_row_dynamic(ctx, h - 1.75*ROW_HEIGHT, 1);
-    textview_widget(ctx, "help", helptext_root.next, opt_fontsize);
+    int rows = textview_widget(ctx, "help", helptext_root.next, opt_fontsize);
     nk_layout_row(ctx, NK_DYNAMIC, ROW_HEIGHT, 3, bottomrow_ratio);
     nk_label(ctx, (state->popup_active == POPUP_INFO) ? "More info" : "More help", NK_TEXT_LEFT);
     nk_edit_focus(ctx, 0);
@@ -4218,7 +4328,7 @@ static void help_popup(struct nk_context *ctx, APPSTATE *state, float canvas_wid
       {
         strlcat(state->help_edit, "\n", sizearray(state->help_edit));
         if (task_stdin(&state->task, state->help_edit))
-          gdbmi_sethandled(0); /* clear result on new input */
+          gdbmi_sethandled(FALSE); /* clear result on new input */
       }
       state->help_edit[0] = '\0';
     }
@@ -4252,7 +4362,6 @@ static void help_popup(struct nk_context *ctx, APPSTATE *state, float canvas_wid
         yoffs = 0;
       } else {
         yoffs += delta;
-        unsigned rows = stringlist_count(&helptext_root);
         int maxscroll = (int)(rows + 1) * (opt_fontsize + 4) - (h - 2*ROW_HEIGHT - 2*SPACING);
         if (maxscroll < 0)
           yoffs = 0;
@@ -4349,11 +4458,11 @@ static void sourcecode_view(struct nk_context *ctx, APPSTATE *state)
 
   struct nk_rect bounds = nk_widget_bounds(ctx);
   source_widget(ctx, "source", opt_fontsize, state->curstate == STATE_RUNNING);
-  if (state->curstate == STATE_STOPPED) {
+  if (state->curstate == STATE_STOPPED && nk_input_is_mouse_hovering_rect(&ctx->input, bounds)) {
     /* handle input for the source view only when not running */
+    int row, col;
+    source_mouse2char(ctx, "source", opt_fontsize, bounds, &row, &col);
     if (nk_input_mouse_clicked(&ctx->input, NK_BUTTON_LEFT, bounds)) {
-      int row, col;
-      source_mouse2char(ctx, "source", opt_fontsize, bounds, &row, &col);
       if (col == 0) {
         /* click in the margin: set/clear/enable/disable breakpoint
            - if there is no breakpoint on this line -> add a breakpoint
@@ -4393,12 +4502,10 @@ static void sourcecode_view(struct nk_context *ctx, APPSTATE *state)
           source_cursorline = row;
       }
       state->prev_clicked_line = row;
-    } else if (nk_input_is_mouse_hovering_rect(&ctx->input, bounds)) {
-      int row, col;
-      char sym[64];
-      source_mouse2char(ctx, "source", opt_fontsize, bounds, &row, &col);
+    } else {
       if (row != state->prev_clicked_line)
         state->prev_clicked_line = -1; /* mouse leaves the line clicked on, erase "repeat click" */
+      char sym[64];
       if (source_getsymbol(sym, sizearray(sym), row, col)) {
         /* we are hovering over a symbol; if the symbol hovered over is
            different from the previous one -> clear the tooltip value */
@@ -4407,13 +4514,24 @@ static void sourcecode_view(struct nk_context *ctx, APPSTATE *state)
           state->tooltip_tstamp = 0;
           strlcpy(state->statesymbol, sym, sizearray(state->statesymbol));
           /* if the new symbol is valid -> start timeout for hovering tooltip */
-          if (state->statesymbol[0] != '\0' && state->curstate == STATE_STOPPED)
+          if (state->statesymbol[0] != '\0')
             state->tooltip_tstamp = timestamp();
         } else if (state->tooltip_tstamp != 0) {
           unsigned long tstamp = timestamp();
           if (tstamp - state->tooltip_tstamp >= TOOLTIP_DELAY) {
             RESETSTATE(state, STATE_HOVER_SYMBOL);
             state->tooltip_tstamp = 0; /* reset, to this case is only dropped into once */
+          }
+        } else if (nk_input_mouse_clicked(&ctx->input, NK_BUTTON_RIGHT, bounds)) {
+          /* right click, if it is on a symbol -> append that symbol onto the
+             text on the command line */
+          state->tooltip_tstamp = 0;
+          if (sym[0] != '\0') {
+            int len = strlen(state->console_edit);
+            if (len > 0 && state->console_edit[len - 1] != ' ')
+              strlcat(state->console_edit, " ", sizearray(state->console_edit));
+            strlcat(state->console_edit, sym, sizearray(state->console_edit));
+            state->console_activate = 2;
           }
         }
         /* if the tooltip value is valid, show it */
@@ -4462,7 +4580,9 @@ static void console_view(struct nk_context *ctx, APPSTATE *state,
         for (ptr = strchr(state->console_edit, '\0'); ptr > state->console_edit && *(ptr - 1) <= ' '; )
           *--ptr = '\0'; /* strip trailing whitespace */
         /* some commands are handled internally (fully or partially) */
-        if (handle_display_cmd(state->console_edit, state->stateparam, state->statesymbol, sizearray(state->statesymbol))) {
+        if (handle_help_cmd(state->console_edit, &helptext_root, &state->popup_active)) {
+          /* nothing else to do */
+        } else if (handle_display_cmd(state->console_edit, state->stateparam, state->statesymbol, sizearray(state->statesymbol))) {
           RESETSTATE(state, STATE_WATCH_TOGGLE);
           tab_states[TAB_WATCHES] = NK_MAXIMIZED; /* make sure the watch view to open */
         } else if ((result = handle_file_load_reset(state->console_edit, state->Filename, sizearray(state->Filename))) != 0) {
@@ -4536,7 +4656,6 @@ static void console_view(struct nk_context *ctx, APPSTATE *state,
           }
         } else if (!handle_list_cmd(state->console_edit, &dwarf_symboltable, &dwarf_filetable)
                    && !handle_find_cmd(state->console_edit)
-                   && !handle_help_cmd(state->console_edit, &helptext_root, &state->popup_active)
                    && !handle_info_cmd(state->console_edit, &helptext_root, &state->popup_active, &state->swo))
         {
           char translated[sizearray(state->console_edit)];
@@ -4560,7 +4679,7 @@ static void console_view(struct nk_context *ctx, APPSTATE *state,
             TERM_EQU(state->console_edit, "clear", 5) ||
             TERM_EQU(state->console_edit, "disable", 7) ||
             TERM_EQU(state->console_edit, "enable", 6))
-          state->refreshflags |= REFRESH_BREAKPOINTS | REFRESH_CONSOLE;
+          state->refreshflags |= REFRESH_BREAKPOINTS | IGNORE_DOUBLE_DONE;
         /* save console_edit in a recent command list */
         stringlist_add_head(&state->consoleedit_root, state->console_edit, 0);
         state->consoleedit_next = NULL;
@@ -5174,7 +5293,7 @@ static void handle_stateaction(APPSTATE *state, enum nk_collapse_states tab_stat
         }
       }
       if (state->port_gdb[0] != '\0') {
-        RESETSTATE(state, STATE_FILE);
+        RESETSTATE(state, STATE_GDBVERSION);
       } else if (state->atprompt) {
         if (STATESWITCH(state)) {
           if (state->probe == state->netprobe)
@@ -5185,7 +5304,40 @@ static void handle_stateaction(APPSTATE *state, enum nk_collapse_states tab_stat
         }
         set_idle_time(1000); /* repeat scan on timeout (but don't sleep the GUI thread) */
       }
-      gdbmi_sethandled(0);
+      gdbmi_sethandled(FALSE);
+      break;
+    case STATE_GDBVERSION:
+      if (state->atprompt) {
+        /* walk over the introductory text */
+        STRINGLIST *item;
+        for (item = consolestring_root.next; item != NULL; item = item->next) {
+          assert(item->text != NULL);
+          if (strncmp(item->text, "GNU gdb", 7) == 0) {
+            /* first try to find a number behind a closing paranthesis */
+            int major = 0, minor = 0, build = 0, parts = 0;
+            const char *ptr = strchr(item->text, ')');
+            if (ptr != NULL) {
+              while (*ptr != '\0' && !isdigit(*ptr))
+                ptr++;
+              if (*ptr != '\0')
+                parts = sscanf(ptr, "%d.%d.%d", &major, &minor, &build);
+            }
+            /* then try to find a version anywhere */
+            if (parts < 3 || major < 4) {
+              for (ptr = item->text; *ptr != '\0' && !isdigit(*ptr); ptr++)
+                {}
+              if (*ptr != '\0')
+                parts = sscanf(ptr, "%d.%d.%d", &major, &minor, &build);
+            }
+            /* store in appstate */
+            if (parts >= 2 || major >= 4)
+              state->gdbversion = (major << 24) | (minor << 16) | (build & 0xffff);
+            break;
+          }
+        }
+        MOVESTATE(state, STATE_FILE);
+        gdbmi_sethandled(TRUE);
+      }
       break;
     case STATE_FILE:
       if (!state->atprompt)
@@ -5231,7 +5383,7 @@ static void handle_stateaction(APPSTATE *state, enum nk_collapse_states tab_stat
           }
           set_idle_time(1000); /* stay in file state */
         }
-        gdbmi_sethandled(0);
+        gdbmi_sethandled(FALSE);
       }
       break;
     case STATE_TARGET_EXT:
@@ -5252,7 +5404,7 @@ static void handle_stateaction(APPSTATE *state, enum nk_collapse_states tab_stat
           MOVESTATE(state, STATE_SCAN_BMP);
           set_idle_time(1000); /* drop back to scan (after on timeout) */
         }
-        gdbmi_sethandled(0);
+        gdbmi_sethandled(FALSE);
       }
       break;
     case STATE_MON_VERSION:
@@ -5284,7 +5436,7 @@ static void handle_stateaction(APPSTATE *state, enum nk_collapse_states tab_stat
           MOVESTATE(state, STATE_MON_TPWR);
           state->console_mark = NULL;
         }
-        gdbmi_sethandled(0);
+        gdbmi_sethandled(FALSE);
       }
       break;
     case STATE_MON_TPWR:
@@ -5302,7 +5454,7 @@ static void handle_stateaction(APPSTATE *state, enum nk_collapse_states tab_stat
             MOVESTATE(state, STATE_MON_SCAN);
           else
             set_idle_time(500); /* stay in current state, TPWR may take a little time */
-          gdbmi_sethandled(0);
+          gdbmi_sethandled(FALSE);
         }
       }
       break;
@@ -5350,7 +5502,7 @@ static void handle_stateaction(APPSTATE *state, enum nk_collapse_states tab_stat
         } else {
           set_idle_time(500);   /* stay in scan state, wait for more data */
         }
-        gdbmi_sethandled(0);
+        gdbmi_sethandled(FALSE);
       }
       break;
     case STATE_ASYNC_MODE:
@@ -5364,7 +5516,7 @@ static void handle_stateaction(APPSTATE *state, enum nk_collapse_states tab_stat
         MARKSTATE(state);
       } else if (gdbmi_isresult() != NULL) {
         MOVESTATE(state, STATE_ATTACH);
-        gdbmi_sethandled(0);
+        gdbmi_sethandled(FALSE);
       }
       break;
     case STATE_ATTACH:
@@ -5388,7 +5540,7 @@ static void handle_stateaction(APPSTATE *state, enum nk_collapse_states tab_stat
         } else {
           MOVESTATE(state, STATE_STOPPED);
         }
-        gdbmi_sethandled(0);
+        gdbmi_sethandled(FALSE);
       }
       break;
     case STATE_GET_SOURCES:
@@ -5410,9 +5562,9 @@ static void handle_stateaction(APPSTATE *state, enum nk_collapse_states tab_stat
         state->atprompt = nk_false;
         MARKSTATE(state);
       } else if (gdbmi_isresult() != NULL) {
-        if (strncmp(gdbmi_isresult(), "done", 4) == 0) {
-          sources_parse(gdbmi_isresult() + 5);  /* + 5 to skip "done" and comma */
-          state->sourcefiles = sources_getnames();     /* create array with names for the dropdown */
+        if (strncmp(gdbmi_isresult(), "done,", 5) == 0) {
+          sources_parse(gdbmi_isresult() + 5);      /* + 5 to skip "done" and comma */
+          state->sourcefiles = sources_getnames();  /* create array with names for the dropdown */
           state->warn_source_tstamps = !check_sources_tstamps(state->Filename); /* check timestamps of sources against elf file */
           MOVESTATE(state, STATE_MEMACCESS_1);
         } else {
@@ -5423,7 +5575,7 @@ static void handle_stateaction(APPSTATE *state, enum nk_collapse_states tab_stat
           }
           set_idle_time(1000); /* stay in attach state */
         }
-        gdbmi_sethandled(0);
+        gdbmi_sethandled(FALSE);
       }
       break;
     case STATE_MEMACCESS_1:
@@ -5439,7 +5591,7 @@ static void handle_stateaction(APPSTATE *state, enum nk_collapse_states tab_stat
            script for the state */
         MOVESTATE(state, (state->nextstate > 0) ? state->nextstate : STATE_MEMACCESS_2);
         state->nextstate = -1;
-        gdbmi_sethandled(0);
+        gdbmi_sethandled(FALSE);
       }
       break;
     case STATE_MEMACCESS_2:
@@ -5466,7 +5618,7 @@ static void handle_stateaction(APPSTATE *state, enum nk_collapse_states tab_stat
           console_replaceflags = console_xlateflags = 0;
           MOVESTATE(state, state->force_download ? STATE_DOWNLOAD : STATE_VERIFY);
         }
-        gdbmi_sethandled(0);
+        gdbmi_sethandled(FALSE);
       }
       break;
     case STATE_VERIFY:
@@ -5480,7 +5632,7 @@ static void handle_stateaction(APPSTATE *state, enum nk_collapse_states tab_stat
         MARKSTATE(state);
       } else if (gdbmi_isresult() != NULL) {
         STRINGLIST *item1, *item2 = NULL;
-        gdbmi_sethandled(0); /* first flag the result message as handled, to find the line preceding it */
+        gdbmi_sethandled(FALSE); /* first flag the result message as handled, to find the line preceding it */
         item1 = stringlist_getlast(&consolestring_root, 0, STRFLG_HANDLED);
         assert(item1 != NULL && item1->text != NULL);
         if (strncmp(item1->text, "the loaded file", 15) == 0) {
@@ -5515,7 +5667,7 @@ static void handle_stateaction(APPSTATE *state, enum nk_collapse_states tab_stat
       } else if (gdbmi_isresult() != NULL) {
         STRINGLIST *item = stringlist_getlast(&consolestring_root, STRFLG_RESULT, STRFLG_HANDLED);
         assert(item != NULL);
-        gdbmi_sethandled(0);
+        gdbmi_sethandled(FALSE);
         if (strncmp(item->text, "error", 5) == 0)
           item->flags = (item->flags & ~STRFLG_RESULT) | STRFLG_ERROR;
         MOVESTATE(state, STATE_CHECK_MAIN);
@@ -5543,7 +5695,7 @@ static void handle_stateaction(APPSTATE *state, enum nk_collapse_states tab_stat
       } else if (gdbmi_isresult() != NULL) {
         STRINGLIST *item;
         const char *ptr;
-        gdbmi_sethandled(0); /* first flag the result message as handled, to find the line preceding it */
+        gdbmi_sethandled(FALSE); /* first flag the result message as handled, to find the line preceding it */
         item = stringlist_getlast(&consolestring_root, 0, STRFLG_HANDLED);
         assert(item != NULL && item->text != NULL);
         ptr = strstr(item->text, state->EntryPoint);
@@ -5570,7 +5722,7 @@ static void handle_stateaction(APPSTATE *state, enum nk_collapse_states tab_stat
       } else if (gdbmi_isresult() != NULL) {
         MOVESTATE(state, STATE_EXEC_CMD);
         state->stateparam[0] = STATEPARAM_EXEC_RESTART;
-        gdbmi_sethandled(0);
+        gdbmi_sethandled(FALSE);
         if (sermon_isopen())
           sermon_clear(); /* erase any serial input that was received while starting up */
       }
@@ -5612,7 +5764,7 @@ static void handle_stateaction(APPSTATE *state, enum nk_collapse_states tab_stat
         if ((state->stateparam[0] == STATEPARAM_EXEC_STOP && strncmp(gdbmi_isresult(), "done", 4) == 0)
             || strncmp(gdbmi_isresult(), "running", 7) == 0)
           MOVESTATE(state, STATE_RUNNING);
-        gdbmi_sethandled(0);
+        gdbmi_sethandled(FALSE);
       }
       break;
     case STATE_HARDRESET:
@@ -5629,7 +5781,7 @@ static void handle_stateaction(APPSTATE *state, enum nk_collapse_states tab_stat
         MOVESTATE(state, STATE_INIT);  /* regardless of the result, we restart */
         if (state->tpwr)
           set_idle_time(200);   /* make sure power is off for a minimum duration */
-        gdbmi_sethandled(0);
+        gdbmi_sethandled(FALSE);
       }
       break;
     case STATE_RUNNING:
@@ -5646,7 +5798,7 @@ static void handle_stateaction(APPSTATE *state, enum nk_collapse_states tab_stat
       break;
     case STATE_STOPPED:
       if (STATESWITCH(state)) {
-        gdbmi_sethandled(1);
+        gdbmi_sethandled(TRUE);
         MARKSTATE(state);
       }
       if (state->swo.enabled && state->swo.mode != SWOMODE_NONE && !state->swo.init_status) {
@@ -5674,13 +5826,14 @@ static void handle_stateaction(APPSTATE *state, enum nk_collapse_states tab_stat
         state->atprompt = nk_false;
         MARKSTATE(state);
       } else if (gdbmi_isresult() != NULL) {
-        if (breakpoint_parse(gdbmi_isresult()) && (state->refreshflags & REFRESH_CONSOLE)) {
-          state->refreshflags &= ~(REFRESH_BREAKPOINTS | REFRESH_CONSOLE);
+        const char *ptr = gdbmi_isresult();
+        if (state->refreshflags & IGNORE_DOUBLE_DONE && strncmp(ptr, "done", 4) == 0 && ptr[4] != ',') {
+          state->refreshflags &= ~IGNORE_DOUBLE_DONE;
+          gdbmi_sethandled(FALSE);
+        } else if (breakpoint_parse(ptr)) {
+          state->refreshflags &= ~(REFRESH_BREAKPOINTS | IGNORE_DOUBLE_DONE);
           MOVESTATE(state, STATE_STOPPED);
-          gdbmi_sethandled(1);
-        } else {
-          state->refreshflags &= ~REFRESH_CONSOLE;
-          gdbmi_sethandled(0);
+          gdbmi_sethandled(TRUE);
         }
       }
       break;
@@ -5698,7 +5851,7 @@ static void handle_stateaction(APPSTATE *state, enum nk_collapse_states tab_stat
         state->refreshflags &= ~REFRESH_WATCHES;
         MOVESTATE(state, STATE_STOPPED);
         watch_update(gdbmi_isresult());
-        gdbmi_sethandled(0);
+        gdbmi_sethandled(FALSE);
       }
       break;
     case STATE_VIEWMEMORY:
@@ -5719,9 +5872,9 @@ static void handle_stateaction(APPSTATE *state, enum nk_collapse_states tab_stat
         if (memdump_parse(gdbmi_isresult(), &state->memdump)) {
           state->refreshflags &= ~REFRESH_MEMORY;
           MOVESTATE(state, STATE_STOPPED);
-          gdbmi_sethandled(1);
+          gdbmi_sethandled(TRUE);
         } else {
-          gdbmi_sethandled(0);
+          gdbmi_sethandled(FALSE);
         }
       }
       break;
@@ -5753,7 +5906,7 @@ static void handle_stateaction(APPSTATE *state, enum nk_collapse_states tab_stat
       } else if (gdbmi_isresult() != NULL) {
         state->refreshflags |= REFRESH_BREAKPOINTS;
         MOVESTATE(state, STATE_STOPPED);
-        gdbmi_sethandled(0);
+        gdbmi_sethandled(FALSE);
       }
       break;
     case STATE_WATCH_TOGGLE:
@@ -5798,7 +5951,7 @@ static void handle_stateaction(APPSTATE *state, enum nk_collapse_states tab_stat
           state->refreshflags |= REFRESH_WATCHES;
         }
         MOVESTATE(state, next_state);
-        gdbmi_sethandled(0);
+        gdbmi_sethandled(FALSE);
       }
       break;
     case STATE_WATCH_FORMAT:
@@ -5827,7 +5980,7 @@ static void handle_stateaction(APPSTATE *state, enum nk_collapse_states tab_stat
         MARKSTATE(state);
       } else if (gdbmi_isresult() != NULL) {
         MOVESTATE(state, STATE_STOPPED);
-        gdbmi_sethandled(0);
+        gdbmi_sethandled(FALSE);
       }
       break;
     case STATE_SWOTRACE:
@@ -5892,7 +6045,7 @@ static void handle_stateaction(APPSTATE *state, enum nk_collapse_states tab_stat
            that follows this is the one to run the SWO script */
         state->nextstate = STATE_SWODEVICE;
         MOVESTATE(state, STATE_MEMACCESS_1);
-        gdbmi_sethandled(0);
+        gdbmi_sethandled(FALSE);
       }
       break;
     case STATE_SWODEVICE:
@@ -5923,7 +6076,7 @@ static void handle_stateaction(APPSTATE *state, enum nk_collapse_states tab_stat
           console_replaceflags = console_xlateflags = 0;
           MOVESTATE(state, STATE_SWOGENERIC);
         }
-        gdbmi_sethandled(0);
+        gdbmi_sethandled(FALSE);
       }
       break;
     case STATE_SWOGENERIC:
@@ -5945,7 +6098,7 @@ static void handle_stateaction(APPSTATE *state, enum nk_collapse_states tab_stat
           task_stdin(&state->task, state->cmdline);
           state->atprompt = nk_false;
           MARKSTATE(state);
-          console_replaceflags = STRFLG_LOG;  /* move LOG to SCRRIPT, to hide script output by default */
+          console_replaceflags = STRFLG_LOG;  /* move LOG to SCRIPT, to hide script output by default */
           console_xlateflags = STRFLG_SCRIPT;
         } else {
           MOVESTATE(state, STATE_SWOCHANNELS);
@@ -5960,7 +6113,7 @@ static void handle_stateaction(APPSTATE *state, enum nk_collapse_states tab_stat
           console_replaceflags = console_xlateflags = 0;
           MOVESTATE(state, STATE_SWOCHANNELS);
         }
-        gdbmi_sethandled(0);
+        gdbmi_sethandled(FALSE);
       }
       break;
     case STATE_SWOCHANNELS:
@@ -5999,7 +6152,7 @@ static void handle_stateaction(APPSTATE *state, enum nk_collapse_states tab_stat
           bmscript_clearcache();
           MOVESTATE(state, STATE_STOPPED);
         }
-        gdbmi_sethandled(0);
+        gdbmi_sethandled(FALSE);
       }
       break;
     case STATE_HOVER_SYMBOL:
@@ -6012,7 +6165,7 @@ static void handle_stateaction(APPSTATE *state, enum nk_collapse_states tab_stat
       }
       if (STATESWITCH(state)) {
         char regalias[128];
-        gdbmi_sethandled(1);
+        gdbmi_sethandled(TRUE);
         if (svd_xlate_name(state->statesymbol, regalias, sizearray(regalias)) != 0)
           snprintf(state->cmdline, CMD_BUFSIZE, "-data-evaluate-expression %s\n", regalias);
         else
@@ -6041,7 +6194,7 @@ static void handle_stateaction(APPSTATE *state, enum nk_collapse_states tab_stat
           format_value(state->ttipvalue, sizearray(state->ttipvalue));
         }
         MOVESTATE(state, STATE_STOPPED);
-        gdbmi_sethandled(0);
+        gdbmi_sethandled(FALSE);
       }
       break;
     } /* switch (curstate) */
@@ -6243,7 +6396,7 @@ int main(int argc, char *argv[])
       if (appstate.monitor_cmd_active)
         flags |= STRFLG_MON_OUT;  /* so output goes to the main console instead of semihosting view */
       if (appstate.popup_active != POPUP_NONE)
-        helptext_add(&helptext_root, appstate.cmdline);
+        helptext_add(&helptext_root, appstate.cmdline, appstate.popup_active == POPUP_HELP);
       if (appstate.popup_active == POPUP_NONE && console_add(appstate.cmdline, flags)) {
         appstate.atprompt = nk_true;
         appstate.console_activate = 1;
