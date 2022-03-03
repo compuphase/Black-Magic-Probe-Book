@@ -3,7 +3,7 @@
  * Black Magic Probe. This utility is built with Nuklear for a cross-platform
  * GUI.
  *
- * Copyright 2019-2021 CompuPhase
+ * Copyright 2019-2022 CompuPhase
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -128,7 +128,7 @@ static int bmp_callback(int code, const char *message)
 #define ROW_HEIGHT      (1.6 * opt_fontsize)
 #define COMBOROW_CY     (0.9 * opt_fontsize)
 #define BROWSEBTN_WIDTH (1.5 * opt_fontsize)
-static int opt_fontsize = FONT_HEIGHT;
+static float opt_fontsize = FONT_HEIGHT;
 
 #define FILTER_MAXSTRING  128
 
@@ -861,7 +861,7 @@ int main(int argc, char *argv[])
   ini_gets("Settings", "mcu-freq", "48000000", appstate.cpuclock_str, sizearray(appstate.cpuclock_str), txtConfigFile);
   ini_gets("Settings", "bitrate", "100000", appstate.bitrate_str, sizearray(appstate.bitrate_str), txtConfigFile);
   ini_gets("Settings", "size", "", valstr, sizearray(valstr), txtConfigFile);
-  opt_fontsize = (int)ini_getl("Settings", "fontsize", FONT_HEIGHT, txtConfigFile);
+  opt_fontsize = ini_getf("Settings", "fontsize", FONT_HEIGHT, txtConfigFile);
   ini_gets("Settings", "fontstd", "", opt_fontstd, sizearray(opt_fontstd), txtConfigFile);
   ini_gets("Settings", "fontmono", "", opt_fontmono, sizearray(opt_fontmono), txtConfigFile);
   if (sscanf(valstr, "%d %d", &canvas_width, &canvas_height) != 2 || canvas_width < 100 || canvas_height < 50) {
@@ -903,7 +903,7 @@ int main(int argc, char *argv[])
   for (int idx = 1; idx < argc; idx++) {
     if (IS_OPTION(argv[idx])) {
       const char *ptr;
-      int result;
+      float h;
       switch (argv[idx][1]) {
       case '?':
       case 'h':
@@ -913,9 +913,9 @@ int main(int argc, char *argv[])
         ptr = &argv[idx][2];
         if (*ptr == '=' || *ptr == ':')
           ptr++;
-        result = (int)strtol(ptr, (char**)&ptr, 10);
-        if (result >= 8)
-          opt_fontsize = result;
+        h = (float)strtod(ptr, (char**)&ptr);
+        if (h >= 8.0)
+          opt_fontsize = h;
         if (*ptr == ',') {
           char *mono;
           ptr++;
@@ -1079,7 +1079,7 @@ int main(int argc, char *argv[])
     sprintf(valstr, "%d", tab_states[idx]);
     ini_puts("Settings", key, valstr, txtConfigFile);
   }
-  ini_putl("Settings", "fontsize", opt_fontsize, txtConfigFile);
+  ini_putf("Settings", "fontsize", opt_fontsize, txtConfigFile);
   ini_puts("Settings", "fontstd", opt_fontstd, txtConfigFile);
   ini_puts("Settings", "fontmono", opt_fontmono, txtConfigFile);
   ini_putl("Settings", "mode", appstate.mode, txtConfigFile);

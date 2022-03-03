@@ -65,7 +65,8 @@ static LRESULT CALLBACK WindowProc(HWND wnd, UINT msg, WPARAM wparam, LPARAM lpa
  *                    use the default).
  *  \param fontmono   The name of the preferred monospaced font (may be NULL to
  *                    use the default).
- *  \param fontsize   The size of the main font, in pixels.
+ *  \param fontsize   The size of the main font, in pixels (may be a partial
+ *                    number).
  *
  *  \note In Microsoft Windows, the application icon (in the frame window) is
  *        set to the icon with the name "appicon" the application's resources.
@@ -74,7 +75,7 @@ static LRESULT CALLBACK WindowProc(HWND wnd, UINT msg, WPARAM wparam, LPARAM lpa
  *        size variable must be appicon_datasize.
  */
 struct nk_context* guidriver_init(const char *caption, int width, int height, int flags,
-                                  const char *fontstd, const char *fontmono, int fontsize)
+                                  const char *fontstd, const char *fontmono, float fontsize)
 {
   struct nk_context *ctx;
   WNDCLASSW wc;
@@ -302,11 +303,12 @@ static void error_callback(int e, const char *d)
 }
 
 struct nk_context* guidriver_init(const char *caption, int width, int height, int flags,
-                                  const char *fontstd, const char *fontmono, int fontsize)
+                                  const char *fontstd, const char *fontmono, float fontsize)
 {
   extern const unsigned char appicon_data[];
   extern const unsigned int appicon_datasize;
   struct nk_context *ctx;
+  struct nk_font_config fontconfig;
   char path[256];
   GLFWimage icons[1];
   unsigned error;
@@ -331,6 +333,10 @@ struct nk_context* guidriver_init(const char *caption, int width, int height, in
   #endif
 
   ctx = nk_glfw3_init(winApp, NK_GLFW3_INSTALL_CALLBACKS);
+  fontconfig = nk_font_config(fontsize);
+  fontconfig.pixel_snap = 1;    /* align characters to pixel boundary, to increase sharpness */
+  fontconfig.oversample_h = 1;  /* disable horizontal oversampling, as recommended for pixel_snap */
+
   if ((fontstd != NULL && strlen(fontstd) > 0 && font_locate(path, sizeof path, fontstd, ""))
       || font_locate(path, sizeof path, "DejaVu Sans", "")
       || font_locate(path, sizeof path, "Ubuntu", "")
@@ -339,7 +345,7 @@ struct nk_context* guidriver_init(const char *caption, int width, int height, in
   {
     struct nk_font_atlas *atlas;
     nk_glfw3_font_stash_begin(&atlas);
-    fontStd = nk_font_atlas_add_from_file(atlas, path, fontsize, 0);
+    fontStd = nk_font_atlas_add_from_file(atlas, path, fontsize, &fontconfig);
     nk_glfw3_font_stash_end();
     /* Load Cursor: if you uncomment cursor loading please hide the cursor */
     /*nk_style_load_all_cursors(ctx, atlas->cursors);*/
@@ -354,7 +360,7 @@ struct nk_context* guidriver_init(const char *caption, int width, int height, in
   {
     struct nk_font_atlas *atlas;
     nk_glfw3_font_stash_begin(&atlas);
-    fontMono = nk_font_atlas_add_from_file(atlas, path, fontsize, 0);
+    fontMono = nk_font_atlas_add_from_file(atlas, path, fontsize, &fontconfig);
     nk_glfw3_font_stash_end();
   }
 

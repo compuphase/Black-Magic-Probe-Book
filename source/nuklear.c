@@ -247,7 +247,7 @@ NK_LIB void nk_draw_button_symbol(struct nk_command_buffer *out, const struct nk
 NK_LIB nk_bool nk_do_button_symbol(nk_flags *state, struct nk_command_buffer *out, struct nk_rect bounds, enum nk_symbol_type symbol, enum nk_button_behavior behavior, const struct nk_style_button *style, const struct nk_input *in, const struct nk_user_font *font);
 NK_LIB void nk_draw_button_image(struct nk_command_buffer *out, const struct nk_rect *bounds, const struct nk_rect *content, nk_flags state, const struct nk_style_button *style, const struct nk_image *img);
 NK_LIB nk_bool nk_do_button_image(nk_flags *state, struct nk_command_buffer *out, struct nk_rect bounds, struct nk_image img, enum nk_button_behavior b, const struct nk_style_button *style, const struct nk_input *in);
-NK_LIB void nk_draw_button_text_symbol(struct nk_command_buffer *out, const struct nk_rect *bounds, const struct nk_rect *label, const struct nk_rect *symbol, nk_flags state, const struct nk_style_button *style, const char *str, int len, enum nk_symbol_type type, const struct nk_user_font *font);
+NK_LIB void nk_draw_button_text_symbol(struct nk_command_buffer *out, const struct nk_rect *bounds, const struct nk_rect *label, const struct nk_rect *symbol, nk_flags state, const struct nk_style_button *style, const char *str, int len, nk_flags align, enum nk_symbol_type type, const struct nk_user_font *font);
 NK_LIB nk_bool nk_do_button_text_symbol(nk_flags *state, struct nk_command_buffer *out, struct nk_rect bounds, enum nk_symbol_type symbol, const char *str, int len, nk_flags align, enum nk_button_behavior behavior, const struct nk_style_button *style, const struct nk_user_font *font, const struct nk_input *in);
 NK_LIB void nk_draw_button_text_image(struct nk_command_buffer *out, const struct nk_rect *bounds, const struct nk_rect *label, const struct nk_rect *image, nk_flags state, const struct nk_style_button *style, const char *str, int len, const struct nk_user_font *font, const struct nk_image *img);
 NK_LIB nk_bool nk_do_button_text_image(nk_flags *state, struct nk_command_buffer *out, struct nk_rect bounds, struct nk_image img, const char* str, int len, nk_flags align, enum nk_button_behavior behavior, const struct nk_style_button *style, const struct nk_user_font *font, const struct nk_input *in);
@@ -18213,7 +18213,7 @@ NK_LIB void
 nk_draw_button_text_symbol(struct nk_command_buffer *out,
     const struct nk_rect *bounds, const struct nk_rect *label,
     const struct nk_rect *symbol, nk_flags state, const struct nk_style_button *style,
-    const char *str, int len, enum nk_symbol_type type,
+    const char *str, int len, nk_flags align, enum nk_symbol_type type,
     const struct nk_user_font *font)
 {
     struct nk_color sym;
@@ -18240,7 +18240,7 @@ nk_draw_button_text_symbol(struct nk_command_buffer *out,
 
     text.padding = nk_vec2(0,0);
     nk_draw_symbol(out, type, *symbol, style->text_background, sym, 0, font);
-    nk_widget_text(out, *label, str, len, &text, NK_TEXT_CENTERED, font);
+    nk_widget_text(out, *label, str, len, &text, align, font);
 }
 NK_LIB nk_bool
 nk_do_button_text_symbol(nk_flags *state,
@@ -18250,8 +18250,8 @@ nk_do_button_text_symbol(nk_flags *state,
     const struct nk_user_font *font, const struct nk_input *in)
 {
     int ret;
-    struct nk_rect tri = {0,0,0,0};
-    struct nk_rect content;
+    struct nk_rect rc_symbol = {0,0,0,0};
+    struct nk_rect rc_text;
 
     NK_ASSERT(style);
     NK_ASSERT(out);
@@ -18259,18 +18259,25 @@ nk_do_button_text_symbol(nk_flags *state,
     if (!out || !style || !font)
         return nk_false;
 
-    ret = nk_do_button(state, out, bounds, style, in, behavior, &content);
-    tri.y = content.y + (content.h/2) - font->height/2;
-    tri.w = font->height; tri.h = font->height;
-    if (align & NK_TEXT_ALIGN_LEFT) {
-        tri.x = (content.x + content.w) - (2 * style->padding.x + tri.w);
-        tri.x = NK_MAX(tri.x, 0);
-    } else tri.x = content.x + 2 * style->padding.x;
+    ret = nk_do_button(state, out, bounds, style, in, behavior, &rc_text);
+    rc_symbol.y = rc_text.y + (rc_text.h/2) - font->height/2;
+    rc_symbol.w = font->height;
+    rc_symbol.h = font->height;
+    if (align & NK_TEXT_ALIGN_RIGHT) {
+        /* right-aligned -> symbol at the right */
+        rc_symbol.x = (rc_text.x + rc_text.w) - (2 * style->padding.x + rc_symbol.w);
+        rc_symbol.x = NK_MAX(rc_symbol.x, 0);
+        rc_text.w -= 2 * style->padding.x + rc_symbol.w;
+    } else {
+        /* symbol left-aligned (text is left-aligned or centered) */
+        rc_symbol.x = rc_text.x + 2 * style->padding.x;
+        rc_text.x = rc_symbol.x + rc_symbol.w + 2 * style->padding.x;
+    }
 
     /* draw button */
     if (style->draw_begin) style->draw_begin(out, style->userdata);
-    nk_draw_button_text_symbol(out, &bounds, &content, &tri,
-        *state, style, str, len, symbol, font);
+    nk_draw_button_text_symbol(out, &bounds, &rc_text, &rc_symbol,
+        *state, style, str, len, align, symbol, font);
     if (style->draw_end) style->draw_end(out, style->userdata);
     return ret;
 }

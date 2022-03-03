@@ -2,7 +2,7 @@
  * General purpose Black Magic Probe support routines, based on the GDB-RSP
  * serial interface. The "script" support can also be used with GDB.
  *
- * Copyright 2019-2021 CompuPhase
+ * Copyright 2019-2022 CompuPhase
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.

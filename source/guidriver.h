@@ -31,7 +31,7 @@ enum {
 };
 
 struct nk_context* guidriver_init(const char *caption, int width, int height, int flags,
-                                  const char *fontstd, const char *fontmono, int fontsize);
+                                  const char *fontstd, const char *fontmono, float fontsize);
 void  guidriver_close(void);
 int   guidriver_appsize(int *width, int *height);
 void  guidriver_render(struct nk_color clear);

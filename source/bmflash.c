@@ -105,7 +105,7 @@
 #define BROWSEBTN_WIDTH (1.5 * opt_fontsize)
 #define LOGVIEW_ROWS    6
 
-static int opt_fontsize = FONT_HEIGHT;
+static float opt_fontsize = FONT_HEIGHT;
 
 
 /* log_addstring() adds a string to the log data; the parameter "text" may be NULL
@@ -1395,14 +1395,14 @@ int main(int argc, char *argv[])
   get_configfile(txtConfigFile, sizearray(txtConfigFile), "bmflash.ini");
   appstate.probe = (int)ini_getl("Settings", "probe", 0, txtConfigFile);
   ini_gets("Settings", "ip-address", "127.0.0.1", appstate.IPaddr, sizearray(appstate.IPaddr), txtConfigFile);
-  opt_fontsize = (int)ini_getl("Settings", "fontsize", FONT_HEIGHT, txtConfigFile);
+  opt_fontsize = ini_getf("Settings", "fontsize", FONT_HEIGHT, txtConfigFile);
   ini_gets("Settings", "fontstd", "", opt_fontstd, sizearray(opt_fontstd), txtConfigFile);
   ini_gets("Settings", "fontmono", "", opt_fontmono, sizearray(opt_fontmono), txtConfigFile);
 
   for (idx = 1; idx < argc; idx++) {
     if (IS_OPTION(argv[idx])) {
       const char *ptr;
-      int result;
+      float h;
       switch (argv[idx][1]) {
       case '?':
       case 'h':
@@ -1412,9 +1412,9 @@ int main(int argc, char *argv[])
         ptr = &argv[idx][2];
         if (*ptr == '=' || *ptr == ':')
           ptr++;
-        result = (int)strtol(ptr, (char**)&ptr, 10);
-        if (result >= 8)
-          opt_fontsize = result;
+        h = (float)strtod(ptr, (char**)&ptr);
+        if (h >= 8.0)
+          opt_fontsize = h;
         if (*ptr == ',') {
           char *mono;
           ptr++;
@@ -1596,7 +1596,7 @@ int main(int argc, char *argv[])
     guidriver_render(nk_rgb(30,30,30));
   }
 
-  ini_putl("Settings", "fontsize", opt_fontsize, txtConfigFile);
+  ini_putf("Settings", "fontsize", opt_fontsize, txtConfigFile);
   ini_puts("Settings", "fontstd", opt_fontstd, txtConfigFile);
   ini_puts("Settings", "fontmono", opt_fontmono, txtConfigFile);
   if (strlen(txtConfigFile) > 0)
