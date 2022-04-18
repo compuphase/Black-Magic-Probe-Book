@@ -63,12 +63,12 @@ LFLAGS_C  = $(L_DEBUG) /NOLOGO /SUBSYSTEM:console
 #               Project
 # -------------------------------------------------------------
 
-OBJLIST_BMDEBUG = bmdebug.obj bmcommon.obj bmp-scan.obj bmp-script.obj dirent.obj \
-                  dwarf.obj elf.obj guidriver.obj memdump.obj minIni.obj \
-                  nuklear_mousepointer.obj nuklear_splitter.obj nuklear_style.obj \
-                  nuklear_tooltip.obj rs232.obj serialmon.obj specialfolder.obj \
-                  strlcpy.obj svd-support.obj swotrace.obj tcpip.obj usb-support.obj \
-                  xmltractor.obj decodectf.obj parsetsdl.obj \
+OBJLIST_BMDEBUG = bmdebug.obj armdisasm.obj bmcommon.obj bmp-scan.obj bmp-script.obj \
+                  demangle.obj dirent.obj dwarf.obj elf.obj guidriver.obj memdump.obj \
+                  minIni.obj nuklear_mousepointer.obj nuklear_splitter.obj \
+                  nuklear_style.obj nuklear_tooltip.obj rs232.obj serialmon.obj \
+                  specialfolder.obj strlcpy.obj svd-support.obj swotrace.obj tcpip.obj \
+                  usb-support.obj xmltractor.obj decodectf.obj parsetsdl.obj \
                   nuklear.obj nuklear_gdip.obj noc_file_dialog.obj
 
 OBJLIST_BMFLASH = bmflash.obj bmcommon.obj bmp-scan.obj bmp-script.obj bmp-support.obj \
@@ -79,11 +79,11 @@ OBJLIST_BMFLASH = bmflash.obj bmcommon.obj bmp-scan.obj bmp-script.obj bmp-suppo
                   nuklear.obj nuklear_gdip.obj noc_file_dialog.obj
 
 OBJLIST_BMTRACE = bmtrace.obj bmcommon.obj bmp-scan.obj bmp-script.obj bmp-support.obj \
-                  crc32.obj dwarf.obj elf.obj gdb-rsp.obj guidriver.obj minIni.obj \
-                  nuklear_mousepointer.obj nuklear_splitter.obj nuklear_style.obj \
-                  nuklear_tooltip.obj picoro.obj rs232.obj specialfolder.obj swotrace.obj \
-                  strlcpy.obj tcpip.obj usb-support.obj xmltractor.obj decodectf.obj \
-                  parsetsdl.obj \
+                  crc32.obj demangle.obj dwarf.obj elf.obj gdb-rsp.obj guidriver.obj \
+                  minIni.obj nuklear_mousepointer.obj nuklear_splitter.obj \
+                  nuklear_style.obj nuklear_tooltip.obj picoro.obj rs232.obj \
+                  specialfolder.obj swotrace.obj strlcpy.obj tcpip.obj usb-support.obj \
+                  xmltractor.obj decodectf.obj parsetsdl.obj \
                   nuklear.obj nuklear_gdip.obj noc_file_dialog.obj
 
 OBJLIST_BMSCAN = bmscan.obj bmp-scan.obj tcpip.obj
@@ -102,6 +102,8 @@ depend :
 
 
 ##### C files #####
+
+armdisasm.obj : armdisasm.c
 
 bmcommon.obj : bmcommon.c
 
@@ -124,6 +126,8 @@ cksum.obj : cksum.c
 crc32.obj : crc32.c
 
 decodectf.obj : decodectf.c
+
+demangle.obj : demangle.c
 
 dirent.obj : dirent.c
 

@@ -83,7 +83,7 @@ struct nk_context* guidriver_init(const char *caption, int width, int height, in
   RECT rect;
   RECT rcDesktop;
   wchar_t wcapt[128];
-  int i, j, len;
+  int i, j, x, y, len;
 
   SetRect(&rect, 0, 0, width, height);
   if (flags & GUIDRV_RESIZEABLE) {
@@ -151,13 +151,17 @@ struct nk_context* guidriver_init(const char *caption, int width, int height, in
 
   /* get size of primary monitor, to center the utility on in */
   GetWindowRect(GetDesktopWindow(), &rcDesktop);
-  //??? handle GUIDRV_CENTER flag
-
   AdjustWindowRectEx(&rect, style, FALSE, exstyle);
+  if (flags & GUIDRV_CENTER) {
+    x = (rcDesktop.right - rect.right) / 2;
+    y = (rcDesktop.bottom - rect.bottom) / 2;
+  } else {
+    x = y = CW_USEDEFAULT;
+  }
+
   hwndApp = CreateWindowExW(exstyle, wc.lpszClassName, wcapt,
                             style | WS_MINIMIZEBOX | WS_VISIBLE,
-                            (rcDesktop.right-rect.right)/ 2,(rcDesktop.bottom - rect.bottom)/ 2,
-                            rect.right - rect.left, rect.bottom - rect.top,
+                            x, y, rect.right - rect.left, rect.bottom - rect.top,
                             NULL, NULL, wc.hInstance, NULL);
   if (hwndApp == NULL)
     return NULL;

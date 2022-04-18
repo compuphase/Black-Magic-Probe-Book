@@ -523,6 +523,16 @@ const char *svd_mcu_prefix(void)
   return svd_prefix;
 }
 
+/** svd_peripheral() returns the peripheral at the given index.
+ *  \param index        The index of the peripheral to return, starting from 0.
+ *  \param address      The base address of the peripheral registers. This
+ *                      parameter may be NULL.
+ *  \param description  An optional description of the peripheral. This
+ *                      parameter may be NULL.
+ *
+ *  \return A pointer to the name of the peripheral, or NULL if parameter
+ *          "index" is out of range.
+ */
 const char *svd_peripheral(unsigned index, unsigned long *address, const char **description)
 {
   if (index >= peripheral_count)

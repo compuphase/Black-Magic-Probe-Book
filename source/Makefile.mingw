@@ -69,11 +69,12 @@ endif
 #               Project
 # -------------------------------------------------------------
 
-OBJLIST_BMDEBUG = bmdebug.o bmcommon.o bmp-scan.o bmp-script.o dwarf.o elf.o \
-                  guidriver.o memdump.o minIni.o nuklear_mousepointer.o \
-                  nuklear_splitter.o nuklear_style.o nuklear_tooltip.o rs232.o \
-                  serialmon.o specialfolder.o strlcpy.o svd-support.o swotrace.o \
-                  tcpip.o usb-support.o xmltractor.o decodectf.o parsetsdl.o \
+OBJLIST_BMDEBUG = bmdebug.o armdisasm.o bmcommon.o bmp-scan.o bmp-script.o \
+                  demangle.o dwarf.o elf.o guidriver.o memdump.o minIni.o \
+                  nuklear_mousepointer.o nuklear_splitter.o nuklear_style.o \
+                  nuklear_tooltip.o rs232.o serialmon.o specialfolder.o strlcpy.o \
+                  svd-support.o swotrace.o tcpip.o usb-support.o xmltractor.o \
+                  decodectf.o parsetsdl.o \
                   nuklear.o nuklear_gdip.o noc_file_dialog.o
 
 OBJLIST_BMFLASH = bmflash.o bmcommon.o bmp-scan.o bmp-script.o bmp-support.o \
@@ -82,8 +83,8 @@ OBJLIST_BMFLASH = bmflash.o bmcommon.o bmp-scan.o bmp-script.o bmp-support.o \
                   picoro.o rs232.o specialfolder.o strlcpy.o tcpip.o xmltractor.o \
                   nuklear.o nuklear_gdip.o noc_file_dialog.o
 
-OBJLIST_BMTRACE = bmtrace.o bmcommon.o bmp-scan.o bmp-script.o bmp-support.o crc32.o \
-                  dwarf.o elf.o gdb-rsp.o guidriver.o minIni.o \
+OBJLIST_BMTRACE = bmtrace.o bmcommon.o bmp-scan.o bmp-script.o bmp-support.o \
+                  crc32.o demangle.o dwarf.o elf.o gdb-rsp.o guidriver.o minIni.o \
                   nuklear_mousepointer.o nuklear_splitter.o nuklear_style.o \
                   nuklear_tooltip.o picoro.o rs232.o specialfolder.o swotrace.o \
                   strlcpy.o tcpip.o usb-support.o xmltractor.o decodectf.o parsetsdl.o \
@@ -106,6 +107,8 @@ depend :
 
 ##### C files #####
 
+armdisasm.o : armdisasm.c
+
 bmcommon.o : bmcommon.c
 
 bmdebug.o : bmdebug.c
@@ -126,7 +129,9 @@ cksum.o : cksum.c
 
 crc32.o : crc32.c
 
-decodectf.ob : decodectf.c
+decodectf.o : decodectf.c
+
+demangle.o : demangle.c
 
 dwarf.o : dwarf.c
 

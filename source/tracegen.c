@@ -219,7 +219,8 @@ static int generate_functionheader(FILE *fp, const CTF_EVENT *evt, unsigned flag
   return 1;
 }
 
-void generate_prototypes(FILE *fp, unsigned flags, const char *trace_func, const PATHLIST *includepaths)
+void generate_prototypes(FILE *fp, unsigned flags, const char *trace_func,
+                         const char *timestamp_func, const PATHLIST *includepaths)
 {
   const CTF_EVENT *evt;
   const CTF_STREAM *stream;
@@ -257,7 +258,8 @@ void generate_prototypes(FILE *fp, unsigned flags, const char *trace_func, const
     /* the clock type must be converted to a standard C type, because the
        TSDL type is not compatible with C */
     assert(stream->clock != NULL);
-    fprintf(fp, "%s trace_timestamp(void);\n", type_to_string(stream->clock, typedesc, sizearray(typedesc)));
+    assert(timestamp_func != NULL && strlen(timestamp_func) > 0);
+    fprintf(fp, "%s %s(void);\n", type_to_string(stream->clock, typedesc, sizearray(typedesc)), timestamp_func);
   }
   fprintf(fp, "\n");
 
@@ -275,7 +277,8 @@ void generate_prototypes(FILE *fp, unsigned flags, const char *trace_func, const
   fprintf(fp, "#endif /* TRACEGEN_PROTOTYPE_FUNCTIONS */\n");
 }
 
-void generate_funcstubs(FILE *fp, unsigned flags, const char *trace_func, const char *headerfile)
+void generate_funcstubs(FILE *fp, unsigned flags, const char *trace_func,
+                        const char *timestamp_func, const char *headerfile)
 {
   char xmit_call[40];
   const CTF_EVENT *evt;
@@ -376,9 +379,10 @@ void generate_funcstubs(FILE *fp, unsigned flags, const char *trace_func, const 
       char typedesc[64];
       const CTF_TYPE *clock = stream->clock;
       assert(clock != NULL);
+      assert(timestamp_func != NULL && strlen(timestamp_func) > 0);
       /* the clock type must be converted to a standard C type, because the
          TSDL type is not compatible with C */
-      fprintf(fp, "  %s tstamp = trace_timestamp();\n", type_to_string(clock, typedesc, sizearray(typedesc)));
+      fprintf(fp, "  %s tstamp = %s();\n", type_to_string(clock, typedesc, sizearray(typedesc)), timestamp_func);
     }
     /* if there are string parameters, create variables for their lengths and
        their positions in the buffer */
@@ -509,6 +513,7 @@ int main(int argc, char *argv[])
   infile[0] = '\0';
   outfile[0] = '\0';
   strcpy(trace_func, "trace_xmit");
+  strcpy(timestamp_func, "trace_timestamp");
   opt_flags = 0;
   for (idx = 1; idx < argc; idx++) {
     if (IS_OPTION(argv[idx])) {
@@ -616,7 +621,7 @@ int main(int argc, char *argv[])
     strlcat(outfile, ".h", sizearray(outfile));
     fp = fopen(outfile, "wt");
     if (fp != NULL) {
-      generate_prototypes(fp, opt_flags, trace_func, &includepaths);  //??? pass in timestamp_func
+      generate_prototypes(fp, opt_flags, trace_func, timestamp_func, &includepaths);
       fclose(fp);
     } else {
       fprintf(stderr, "Error writing file \"%s\", error %d.\n", outfile, errno);
@@ -631,7 +636,7 @@ int main(int argc, char *argv[])
       /* temporarily rename the extension back to .h */
       assert(ptr != NULL && *(ptr + 1) == 'c');
       *(ptr + 1) = 'h';
-      generate_funcstubs(fp, opt_flags, trace_func, outfile); //??? pass in timestamp_func
+      generate_funcstubs(fp, opt_flags, trace_func, timestamp_func, outfile);
       assert(ptr != NULL && *(ptr + 1) == 'h');
       *(ptr + 1) = 'c';
       fclose(fp);

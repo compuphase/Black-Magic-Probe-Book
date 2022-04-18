@@ -3,7 +3,7 @@
  * variable symbols are stored.
  * For the moment, only 32-bit Little-Endian executables are supported.
  *
- * Copyright (c) 2015,2019-2021 CompuPhase
+ * Copyright (c) 2015,2019-2022 CompuPhase
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -22,8 +22,9 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
-#include "dwarf.h"
+#include "demangle.h"
 #include "elf.h"
+#include "dwarf.h"
 
 #if defined __GNUC__
   #define PACKED        __attribute__((packed))
@@ -766,15 +767,23 @@ static DWARF_SYMBOLLIST *symname_insert(DWARF_SYMBOLLIST *root,const char *name,
                                         int external)
 {
   DWARF_SYMBOLLIST *cur,*pred;
+  char demangled[256];
 
   assert(root!=NULL);
   assert(name!=NULL);
+
   if ((cur=(DWARF_SYMBOLLIST*)malloc(sizeof(DWARF_SYMBOLLIST)))==NULL)
     return NULL;      /* insufficient memory */
-  if ((cur->name=strdup(name))==NULL) {
+
+  if (demangle(demangled, sizeof(demangled), name))
+    cur->name=strdup(demangled);
+  else
+    cur->name=strdup(name);
+  if (cur==NULL) {
     free(cur);
     return NULL;      /* insufficient memory */
   }
+
   cur->code_addr=code_addr;
   cur->code_range=code_range;
   cur->data_addr=data_addr;
@@ -1683,7 +1692,7 @@ int dwarf_read(FILE *fp,DWARF_LINELOOKUP *linetable,DWARF_SYMBOLLIST *symboltabl
   assert(filetable->next==NULL);
   assert(address_size!=NULL);
 
-  result=elf_info(fp,&wordsize,NULL,NULL);
+  result=elf_info(fp,&wordsize,NULL,NULL,NULL);
   if (result!=ELFERR_NONE || wordsize!=32) {
     /* only 32-bit architectures at this time */
     fclose(fp);
@@ -1805,7 +1814,53 @@ const DWARF_SYMBOLLIST *dwarf_sym_from_index(const DWARF_SYMBOLLIST *symboltable
   return NULL;
 }
 
-const char *dwarf_path_from_index(const DWARF_PATHLIST *filetable,int fileindex)
+/** dwarf_collect_functions_in_file() stores the pointers to all "code" symbols
+ *  that appear in a file into a list.
+ *
+ *  To check the size of the list, call this function with parameter "list" set
+ *  to 0. The number of entries to allocate is returned. Then allocate a buffer
+ *  of sufficient size, and call this function again with that buffer.
+ *
+ *  Note that the returned list holds pointers to symbols, not the symbols
+ *  themselves. The list can be sorted on function names or function addresses.
+ */
+unsigned dwarf_collect_functions_in_file(const DWARF_SYMBOLLIST *symboltable,int fileindex,
+                                         int sort,const DWARF_SYMBOLLIST *list[],int numentries)
+{
+  const DWARF_SYMBOLLIST *sym;
+  int count;
+
+  assert(symboltable!=NULL);
+  if (list==NULL)
+    numentries=0;
+
+  count=0;
+  for (sym=symboltable->next; sym!=NULL; sym=sym->next) {
+    if (sym->fileindex==fileindex && DWARF_IS_FUNCTION(sym)) {
+      if (count<numentries) {
+        int pos;
+        if (sort==DWARF_SORT_ADDRESS) {
+          for (pos=0; pos<count && list[pos]->code_addr<sym->code_addr; pos++)
+            {}
+        } else {
+          for (pos=0; pos<count && strcmp(list[pos]->name,sym->name)<0; pos++)
+            {}
+        }
+        assert(list!=NULL);
+        if (pos<count)
+          memmove(&list[pos+1],&list[pos],(count-pos)*sizeof(DWARF_SYMBOLLIST*));
+        list[pos]=sym;
+      }
+      count+=1;
+    }
+  }
+  return count;
+}
+
+/** dwarf_path_from_fileindex() returns the path of the source file (or NULL
+ *  if parameter "fileindex" is invalid)
+ */
+const char *dwarf_path_from_fileindex(const DWARF_PATHLIST *filetable,int fileindex)
 {
   const DWARF_PATHLIST *file;
 
@@ -1816,6 +1871,13 @@ const char *dwarf_path_from_index(const DWARF_PATHLIST *filetable,int fileindex)
   return (file!=NULL) ? file->name : NULL;
 }
 
+/** dwarf_fileindex_from_path() looks up the path in the file table and
+ *  returns the index in the table (if found). The function first tries a
+ *  full path, but also compares the base names of the files (if a full path
+ *  match fails).
+ *
+ *  \return The file index, or -1 on failure.
+ */
 int dwarf_fileindex_from_path(const DWARF_PATHLIST *filetable,const char *path)
 {
   const DWARF_PATHLIST *file;
@@ -1857,3 +1919,4 @@ const DWARF_LINELOOKUP *dwarf_line_from_address(const DWARF_LINELOOKUP *linetabl
       return line;
   return NULL;
 }
+

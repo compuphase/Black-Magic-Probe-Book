@@ -52,6 +52,9 @@
 #include "bmp-script.h"
 #include "bmp-support.h"
 #include "bmp-scan.h"
+#include "demangle.h"
+#include "dwarf.h"
+#include "elf.h"
 #include "gdb-rsp.h"
 #include "minIni.h"
 #include "noc_file_dialog.h"
@@ -63,8 +66,6 @@
 #include "specialfolder.h"
 #include "tcpip.h"
 
-#include "dwarf.h"
-#include "elf.h"
 #include "parsetsdl.h"
 #include "decodectf.h"
 #include "swotrace.h"
@@ -942,7 +943,7 @@ int main(int argc, char *argv[])
       /* parameter is a filename, test whether that is an ELF file */
       FILE *fp = fopen(argv[idx], "rb");
       if (fp != NULL) {
-        int err = elf_info(fp, NULL, NULL, NULL);
+        int err = elf_info(fp, NULL, NULL, NULL, NULL);
         if (err == ELFERR_NONE) {
           strlcpy(appstate.ELFfile, argv[idx], sizearray(appstate.ELFfile));
           if (access(appstate.TSDLfile, 0) != 0) {
@@ -1037,7 +1038,9 @@ int main(int argc, char *argv[])
       find_popup(ctx, &appstate, canvas_width, canvas_height);
 
       /* mouse cursor shape */
-      if (splitter_ver.hover)
+      if (nk_is_popup_open(ctx))
+        pointer_setstyle(CURSOR_NORMAL);
+      else if (splitter_ver.hover)
         pointer_setstyle(CURSOR_UPDOWN);
       else if (splitter_hor.hover)
         pointer_setstyle(CURSOR_LEFTRIGHT);

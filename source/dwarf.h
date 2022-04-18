@@ -2,7 +2,7 @@
  * information * in an ELF file. For the symbol table, only the function and
  * variable symbols are stored.
  *
- * Copyright (c) 2015,2019-2021 CompuPhase
+ * Copyright (c) 2015,2019-2022 CompuPhase
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -57,13 +57,19 @@ typedef struct tagDWARF_LINELOOKUP {
 #define DWARF_IS_FUNCTION(sym)  ((sym)->code_range>0)
 #define DWARF_IS_VARIABLE(sym)  ((sym)->code_range==0)
 
+enum {
+  DWARF_SORT_NAME,
+  DWARF_SORT_ADDRESS,
+};
+
 int dwarf_read(FILE *fp,DWARF_LINELOOKUP *linetable,DWARF_SYMBOLLIST *symboltable,DWARF_PATHLIST *filetable,int *address_size);
 void dwarf_cleanup(DWARF_LINELOOKUP *linetable,DWARF_SYMBOLLIST *symboltable,DWARF_PATHLIST *filetable);
 
 const DWARF_SYMBOLLIST* dwarf_sym_from_name(const DWARF_SYMBOLLIST *symboltable,const char *name,int fileindex,int lineindex);
 const DWARF_SYMBOLLIST* dwarf_sym_from_address(const DWARF_SYMBOLLIST *symboltable,unsigned address,int exact);
 const DWARF_SYMBOLLIST* dwarf_sym_from_index(const DWARF_SYMBOLLIST *symboltable,unsigned index);
-const char*             dwarf_path_from_index(const DWARF_PATHLIST *filetable,int fileindex);
+unsigned                dwarf_collect_functions_in_file(const DWARF_SYMBOLLIST *symboltable,int fileindex,int sort,const DWARF_SYMBOLLIST *list[],int numentries);
+const char*             dwarf_path_from_fileindex(const DWARF_PATHLIST *filetable,int fileindex);
 int                     dwarf_fileindex_from_path(const DWARF_PATHLIST *filetable,const char *path);
 const DWARF_LINELOOKUP* dwarf_line_from_address(const DWARF_LINELOOKUP *linetable,unsigned address);
 

@@ -58,15 +58,19 @@
 #include <assert.h>
 #include <ctype.h>
 #include <limits.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
 
+#include "armdisasm.h"
 #include "bmcommon.h"
 #include "bmp-scan.h"
 #include "bmp-script.h"
+#include "demangle.h"
 #include "dwarf.h"
+#include "elf.h"
 #include "guidriver.h"
 #include "memdump.h"
 #include "noc_file_dialog.h"
@@ -160,8 +164,8 @@ static void serial_info_mode(STRINGLIST *textroot);
 static void source_getcursorpos(int *fileindex, int *linenumber);
 
 
-/** stringlist_add() adds a string to the tail of the list. */
-static STRINGLIST *stringlist_add(STRINGLIST *root, const char *text, int flags)
+/** stringlist_append() adds a string to the tail of the list. */
+static STRINGLIST *stringlist_append(STRINGLIST *root, const char *text, int flags)
 {
   STRINGLIST *tail, *item;
 
@@ -183,8 +187,10 @@ static STRINGLIST *stringlist_add(STRINGLIST *root, const char *text, int flags)
   return item;
 }
 
-/** stringlist_add_head() adds a string to the head of the list. */
-static STRINGLIST *stringlist_add_head(STRINGLIST *root, const char *text, int flags)
+/** stringlist_insert() inserts a string after the passed-in pointer. Pass
+ *  in "root" to insert a string at ad the head of the list.
+ */
+static STRINGLIST *stringlist_insert(STRINGLIST *listpos, const char *text, int flags)
 {
   STRINGLIST *item = (STRINGLIST*)malloc(sizeof(STRINGLIST));
   if (item == NULL)
@@ -197,9 +203,9 @@ static STRINGLIST *stringlist_add_head(STRINGLIST *root, const char *text, int f
   }
   item->flags = (unsigned short)flags;
 
-  assert(root != NULL);
-  item->next = root->next;
-  root->next = item;
+  assert(listpos != NULL);
+  item->next = listpos->next;
+  listpos->next = item;
   return item;
 }
 
@@ -332,7 +338,7 @@ static int helptext_add(STRINGLIST *root, char *text, int reformat)
               || stringlist_count(root) < 2)                              /* never concatenate the first two lines */
             linebreak = nk_true;
           if (linebreak) {
-            stringlist_add(root, linebuffer, xtraflags);
+            stringlist_append(root, linebuffer, xtraflags);
             *linebuffer = '\0';
           } else {
             /* more text likely follows, add a space character */
@@ -349,7 +355,7 @@ static int helptext_add(STRINGLIST *root, char *text, int reformat)
   }
 
   if (strlen(linebuffer) > 0)
-    stringlist_add(root, linebuffer, xtraflags);
+    stringlist_append(root, linebuffer, xtraflags);
 
   free((void*)linebuffer);
   return 1;
@@ -392,7 +398,7 @@ static void semihosting_add(STRINGLIST *root, const char *text, unsigned short f
         if (buffer != NULL) {
           strncpy(buffer, text, buflen);
           buffer[buflen] = '\0';
-          item = stringlist_add(root, text, flags);
+          item = stringlist_append(root, text, flags);
           free(buffer);
           if (item == NULL)
             return; /* stringlist_add() failed! -> quit */
@@ -414,7 +420,7 @@ static void semihosting_add(STRINGLIST *root, const char *text, unsigned short f
         unsigned long addr = strtoul(start + 3, (char**)&tail, 16);
         const DWARF_LINELOOKUP *lineinfo = dwarf_line_from_address(&dwarf_linetable, addr);
         if (lineinfo != NULL) {
-          const char *path = dwarf_path_from_index(&dwarf_filetable, lineinfo->fileindex);
+          const char *path = dwarf_path_from_fileindex(&dwarf_filetable, lineinfo->fileindex);
           if (path != NULL) {
             size_t sz = (start - item->text) + strlen(tail);
             const char *basename = lastdirsep(path);
@@ -714,7 +720,7 @@ static int console_add(const char *text, int flags)
       semihosting_add(&semihosting_root, ptr, curflags | xtraflags);
     /* after gdbmi_leader(), there may again be '\n' characters in the resulting string */
     for (tok = strtok((char*)ptr, "\n"); tok != NULL; tok = strtok(NULL, "\n"))
-      stringlist_add(&consolestring_root, tok, curflags | xtraflags);
+      stringlist_append(&consolestring_root, tok, curflags | xtraflags);
     console_buffer[0] = '\0';
   }
   curflags = flags;
@@ -761,7 +767,7 @@ static int console_add(const char *text, int flags)
             if (strcmp(last->text, tok) == 0)
               continue;
           }
-          stringlist_add(&consolestring_root, tok, flags | xtraflags);
+          stringlist_append(&consolestring_root, tok, flags | xtraflags);
         }
       }
       console_buffer[0]= '\0';
@@ -785,6 +791,7 @@ static int console_autocomplete(char *text, size_t textsize, const DWARF_SYMBOLL
     const char *parameters;
   } GDBCOMMAND;
   static const GDBCOMMAND commands[] = {
+    { "assembly", NULL, "off on" },
     { "attach", NULL, NULL },
     { "backtrace", "bt", NULL },
     { "break", "b", "%func %file" },
@@ -795,6 +802,7 @@ static int console_autocomplete(char *text, size_t textsize, const DWARF_SYMBOLL
     { "continue", "c", NULL },
     { "delete", NULL, NULL },
     { "disable", NULL, NULL },
+    { "disassemble", "disas", "off on" },
     { "display", NULL, "%var %reg" },
     { "down", NULL, NULL },
     { "enable", NULL, NULL },
@@ -940,16 +948,15 @@ static int console_autocomplete(char *text, size_t textsize, const DWARF_SYMBOLL
               const DWARF_SYMBOLLIST *sym;
               int match_var = (strcmp(ptr, "%var") == 0);
               int curfile, curline;
-              const char *path;
               source_getcursorpos(&curfile, &curline);
               /* translate the file index from the list returned by GDB to the
                  list collected from DWARF */
-              path = source_getname(curfile);
+              const char *path = source_getname(curfile);
               assert(path != NULL);
               curfile = dwarf_fileindex_from_path(&dwarf_filetable, path);
               for (idx = 0; !result && (sym = dwarf_sym_from_index(symboltable, idx)) != 0; idx++) {
                 assert(sym->name != NULL);
-                if (strncmp(word, sym->name, len) == 0) {
+                if (strncmp(word, sym->name, len)== 0) {
                   int match = 0;
                   if (match_var && DWARF_IS_VARIABLE(sym)) {
                     if (sym->scope == SCOPE_EXTERNAL
@@ -1151,9 +1158,9 @@ static void console_history_add(STRINGLIST *root, const char *text, int tail)
     stringlist_delete(root, item);
 
   if (tail)
-    stringlist_add(root, text, 0);
+    stringlist_append(root, text, 0);
   else
-    stringlist_add_head(root, text, 0);
+    stringlist_insert(root, text, 0);
 }
 
 static const STRINGLIST *console_history_step(const STRINGLIST *root, const STRINGLIST *mark, int forward)
@@ -1209,30 +1216,269 @@ static const STRINGLIST *console_history_match(const STRINGLIST *root, const STR
 }
 
 
+typedef struct tagSOURCELINE {
+  struct tagSOURCELINE *next;
+  char *text;
+  unsigned long address;  /* memory address (if known) */
+  int linenumber;         /* line number in the source file (0 for assembly) */
+  bool hidden;            /* assembly lines are shown or hidden, depending on mode */
+} SOURCELINE;
+
 typedef struct tagSOURCEFILE {
   char *basename;
   char *path;
-  STRINGLIST root; /* base of text lines */
+  SOURCELINE root; /* base of text lines */
   time_t timestamp;
 } SOURCEFILE;
 
+static ELF_SYMBOL *elf_symbols = NULL;
+static int elf_symbol_count = 0;
 static SOURCEFILE *sources = NULL;
 static unsigned sources_size = 0;   /* size of the sources array (max. files that the array can contain) */
 static unsigned sources_count = 0;  /* number of entries in the sources array */
 
-static void sourcefile_load(FILE *fp, STRINGLIST *root)
+/** sourceline_append() adds a string to the tail of the list. */
+static SOURCELINE *sourceline_append(SOURCELINE *root, const char *text,
+                                     unsigned long address, int linenumber)
+{
+  SOURCELINE *item = (SOURCELINE*)malloc(sizeof(SOURCELINE));
+  if (item == NULL)
+    return NULL;
+  memset(item, 0, sizeof(SOURCELINE));
+  item->text = strdup(text);
+  if (item->text == NULL) {
+    free((void*)item);
+    return NULL;
+  }
+  item->address = address;
+  item->linenumber = linenumber;
+
+  assert(root != NULL);
+  SOURCELINE *tail;
+  for (tail = root; tail->next != NULL; tail = tail->next)
+    {}
+  tail->next = item;
+  return item;
+}
+
+/** sourceline_insert() inserts a string *after* the passed-in pointer. Pass
+ *  in "root" to insert a string at ad the head of the list.
+ */
+static SOURCELINE *sourceline_insert(SOURCELINE *listpos, const char *text,
+                                     unsigned long address, int linenumber)
+{
+  SOURCELINE *item = (SOURCELINE*)malloc(sizeof(SOURCELINE));
+  if (item == NULL)
+    return NULL;
+  memset(item, 0, sizeof(SOURCELINE));
+  item->text = strdup(text);
+  if (item->text == NULL) {
+    free((void*)item);
+    return NULL;
+  }
+  item->address = address;
+  item->linenumber = linenumber;
+
+  assert(listpos != NULL);
+  item->next = listpos->next;
+  listpos->next = item;
+  return item;
+}
+
+static void sourceline_clear(SOURCELINE *root)
+{
+  assert(root != NULL);
+  while (root->next != NULL) {
+    SOURCELINE *item = root->next;
+    root->next = item->next;
+    assert(item->text != NULL);
+    free((void*)item->text);
+    free((void*)item);
+  }
+}
+
+static void sourcefile_load(FILE *fp, SOURCELINE *root)
 {
   assert(fp != NULL);
   assert(root != NULL);
   assert(root->next == NULL); /* line list should be empty */
 
+  int linenumber = 1;
   char line[512]; /* source code really should not have lines as long as this */
   while (fgets(line, sizearray(line), fp) != NULL) {
     char *ptr = strchr(line, '\n');
     if (ptr != NULL)
       *ptr = '\0';
-    stringlist_add(root, line, 0);
+    sourceline_append(root, line, 0, linenumber++);
   }
+}
+
+static int source_linecount(int srcindex)
+{
+  int count = 0;
+  SOURCELINE *item;
+  if (srcindex >= 0 && srcindex < sources_count)
+    for (item = sources[srcindex].root.next; item != NULL; item = item->next)
+      count++;
+  return count;
+}
+
+static SOURCELINE *source_firstline(int srcindex)
+{
+  return (srcindex >= 0 && srcindex < sources_count) ? sources[srcindex].root.next : NULL;
+}
+
+static bool disasm_callback(uint32_t address, const char *text, void *user)
+{
+  /* cache previous source line, to use as a starting point for the next line */
+  static SOURCELINE *prev_src = NULL;
+  if (address == ~0) {  /* special call to clear the cache */
+    prev_src = NULL;
+    return false;
+  }
+
+  SOURCELINE *root =(SOURCELINE*)user;
+  assert(root != NULL);
+  SOURCELINE *last_instr = NULL;
+  SOURCELINE *item = (prev_src != NULL) ? prev_src : root->next;
+  while (item != NULL && address > item->address) {
+    if (item->address != 0 && item->linenumber == 0)
+      last_instr = item;
+    item = item->next;
+  }
+  if ((item == NULL || address < item->address) && address > last_instr->address)
+    item = last_instr;
+  if (item == NULL)
+    sourceline_append(root, text, address, 0);
+  else
+    sourceline_insert(item, text, address, 0);
+  prev_src = item;
+  return true;
+}
+
+static void disasm_show_hide(int fileindex, bool visible)
+{
+  SOURCELINE *item = source_firstline(fileindex);
+  while (item != NULL) {
+    if (item->linenumber == 0)
+      item->hidden = !visible;
+    item = item->next;
+  }
+}
+
+static bool sourcefile_disassemble(const char *path, const SOURCEFILE *source, ARMSTATE *armstate)
+{
+  assert(path != NULL);
+  assert(source != NULL);
+  assert(armstate != NULL);
+
+  /* if not yet done, get the list of symbols from the ELF file; this is just
+     used to get the start addresses of the functions and to determine whether
+     to disassemble in Thumb mode or ARM mode; the function names are not
+     important (and therefore not demangled) */
+  if (elf_symbols == NULL) {
+    FILE *fp = fopen(path, "rb");
+    if (fp != NULL) {
+      int count = 0;
+      if (elf_load_symbols(fp, NULL, &count) == ELFERR_NONE && count > 0) {
+        elf_symbols = malloc(count * sizeof(ELF_SYMBOL));
+        if (elf_symbols != NULL) {
+          elf_load_symbols(fp, elf_symbols, &count);
+          elf_symbol_count = count;
+        }
+      }
+      fclose(fp);
+    }
+    /* add all code symbols to the ARM debugger state */
+    disasm_init(armstate, DISASM_ADDRESS | DISASM_INSTR | DISASM_COMMENT);
+    for (int i = 0; i < elf_symbol_count; i++) {
+      if (elf_symbols[i].is_func) {
+        uint32_t address = elf_symbols[i].address & ~1;
+        int mode = (elf_symbols[i].address & 1) ? ARMMODE_THUMB : ARMMODE_ARM;
+        char demangled[256];
+        const char *name = elf_symbols[i].name;
+        if (demangle(demangled, sizeof(demangled), name))
+          name = demangled;
+        disasm_symbol(armstate, name, address, mode);
+      }
+    }
+    /* add SVD peripherals to the disassembler as well */
+    const char *name;
+    unsigned long address;
+    for (int idx = 0; (name = svd_peripheral(idx, &address, NULL)) != NULL; idx++)
+      disasm_symbol(armstate, name, address, ARMMODE_DATA);
+  }
+
+  int fileidx = dwarf_fileindex_from_path(&dwarf_filetable, source->basename);
+  if (fileidx == -1)
+    return false;   /* source file not found in the DWARF file table */
+
+  /* associate addresses to source lines */
+  assert(source != NULL);
+  SOURCELINE *item = source->root.next;
+  int curline = 1;
+  for (DWARF_LINELOOKUP *lineaddr = dwarf_linetable.next; lineaddr != NULL; lineaddr = lineaddr->next) {
+    if (lineaddr->fileindex == fileidx) {
+      if (curline > lineaddr->line) {
+        item = source->root.next;
+        curline = 1;
+      }
+      while (curline < lineaddr->line) {
+        item = item->next;
+        curline += 1;
+      }
+      if (curline == lineaddr->line)
+        item->address = lineaddr->address;
+    }
+  }
+
+  /* get the address range for the current file */
+  unsigned addr_low = UINT_MAX, addr_high = 0;
+  const DWARF_SYMBOLLIST *sym;
+  for (unsigned i = 0; (sym = dwarf_sym_from_index(&dwarf_symboltable, i)) != NULL; i++) {
+    /* check for a function in the actve file */
+    if (sym->code_range > 0 && sym->fileindex == fileidx) {
+      if (sym->code_addr < addr_low)
+        addr_low = sym->code_addr;
+      if (sym->code_addr + sym->code_range > addr_high)
+        addr_high = sym->code_addr + sym->code_range;
+    }
+  }
+  if (addr_low >= addr_high)
+    return false;   /* no functions in this file (like in a header file) */
+  unsigned addr_range = addr_high - addr_low;
+
+  unsigned char *bincode;
+  int mode = ARMMODE_UNKNOWN;
+  FILE *fp = fopen(path, "rb");
+  if (fp != NULL) {
+    /* get initial mode from address of ELF entry point */
+    unsigned long entry;
+    if (elf_info(fp, NULL, NULL, NULL, &entry) == ELFERR_NONE)
+      mode = (entry & 1) ? ARMMODE_THUMB : ARMMODE_ARM;
+    /* find the section to read and read the portion relevant for this source file */
+    unsigned long offset, address, length;
+    if (elf_section_by_name(fp, ".text", &offset, &address, &length) == ELFERR_NONE) {
+      assert(address <= addr_low);
+      assert(addr_high <= address + length);
+      bincode = malloc(addr_range * sizeof(unsigned char));
+      if (bincode != NULL) {
+        fseek(fp, offset + (addr_low - address), SEEK_SET);
+        fread(bincode, 1, addr_range, fp);
+      }
+    }
+    fclose(fp);
+  }
+  if (bincode == NULL)
+    return false;   /* unable to read the ELF file, or insufficient memory */
+
+  /* finally, start the disassembly */
+  disasm_callback(~0, NULL, NULL);  /* clear cache in the callback */
+  disasm_address(armstate, addr_low);
+  disasm_buffer(armstate, bincode, addr_range, mode, disasm_callback, (void*)&source->root);
+  disasm_compact_codepool(armstate, addr_low, addr_range);
+  free((void*)bincode);
+  return true;
 }
 
 /** sources_add() adds a source file unless it already exists in the list.
@@ -1317,7 +1563,7 @@ static void sources_clear(int freelists)
       free((void*)sources[idx].path);
       sources[idx].path = NULL;
     }
-    stringlist_clear(&sources[idx].root);
+    sourceline_clear(&sources[idx].root);
     memset(&sources[idx].root, 0, sizeof(STRINGLIST));
   }
   sources_count = 0;
@@ -1327,6 +1573,14 @@ static void sources_clear(int freelists)
     free((void*)sources);
     sources = NULL;
     sources_size = 0;
+
+    if (elf_symbols != NULL) {
+      assert(elf_symbol_count > 0);
+      elf_clear_symbols(elf_symbols, elf_symbol_count);
+      free((void*)elf_symbols);
+      elf_symbols = NULL;
+      elf_symbol_count = 0;
+    }
   }
 }
 
@@ -1485,22 +1739,6 @@ static const char **sources_getnames(void)
 
   return namelist;
 }
-
-static int source_linecount(int srcindex)
-{
-  int count = 0;
-  STRINGLIST *item;
-  if (srcindex >= 0 && srcindex < sources_count)
-    for (item = sources[srcindex].root.next; item != NULL; item = item->next)
-      count++;
-  return count;
-}
-
-static STRINGLIST *source_firstline(int srcindex)
-{
-  return (srcindex >= 0 && srcindex < sources_count) ? sources[srcindex].root.next : NULL;
-}
-
 
 typedef struct tagBREAKPOINT {
   struct tagBREAKPOINT *next;
@@ -1906,16 +2144,14 @@ static void locals_clear(void)
 
 static int locals_update(const char *gdbresult)
 {
-  LOCALVAR *var;
-  const char *head;
-  int count;
-
   /* clear all changed & in-scope flags */
+  LOCALVAR *var;
   for (var = localvar_root.next; var != NULL; var = var->next)
     var->flags = 0;
 
   if (strncmp(gdbresult, "done", 4) != 0)
     return 0;
+  const char *head;
   if ((head = strchr(gdbresult, ',')) == NULL)
     return 0;
   head = skipwhite(head + 1);
@@ -1926,7 +2162,7 @@ static int locals_update(const char *gdbresult)
   head = skipwhite(head + 1);
   assert(*head == '[');
   head = skipwhite(head + 1);
-  count = 0;
+  int count = 0;
   while (*head != ']') {
     const char *tail;
     char *line;
@@ -2225,7 +2461,7 @@ static int watch_update(const char *gdbresult)
   return count;
 }
 
-static int watch_update_format(unsigned seqnr, const char *gdbresult)
+static bool watch_update_format(unsigned seqnr, const char *gdbresult)
 {
   WATCH *watch;
 
@@ -2234,17 +2470,17 @@ static int watch_update_format(unsigned seqnr, const char *gdbresult)
     {}
   assert(watch != NULL);
   if (watch == NULL)
-    return 0;
+    return false;
 
   if (strncmp(gdbresult, "done", 4) != 0)
-    return 0;
+    return false;
 
   const char *start;
   if ((start = strchr(gdbresult, ',')) == NULL)
-    return 0;
+    return false;
   start = skipwhite(start + 1);
   if (strncmp(start, "format", 6) != 0)
-    return 0;
+    return false;
   start = skipwhite(start + 6);
   assert(*start == '=');
   start = skipwhite(start + 1);
@@ -2273,7 +2509,89 @@ static int watch_update_format(unsigned seqnr, const char *gdbresult)
   start = fieldvalue(start, &len);
   assert(start != NULL);
   watch->value = strdup_len(start, len);
-  return 1;
+  return true;
+}
+
+
+typedef struct tagREGISTER_DEF {
+  const char *name;
+  unsigned long value;
+  unsigned short flags;
+} REGISTER_DEF;
+#define REGFLG_CHANGED    0x0002
+static REGISTER_DEF register_def[] = {
+  { "r0", 0, 0 },
+  { "r1", 0, 0 },
+  { "r2", 0, 0 },
+  { "r3", 0, 0 },
+  { "r4", 0, 0 },
+  { "r5", 0, 0 },
+  { "r6", 0, 0 },
+  { "r7", 0, 0 },
+  { "r8", 0, 0 },
+  { "r9", 0, 0 },
+  { "r10", 0, 0 },
+  { "r11", 0, 0 },
+  { "r12", 0, 0 },
+  { "sp", 0, 0 },
+  { "lr", 0, 0 },
+  { "pc", 0, 0 },
+};
+
+static bool registers_update(const char *gdbresult)
+{
+  /* clear all changed flags */
+  for (int idx = 0; idx < sizearray(register_def); idx++)
+    register_def[idx].flags = 0;
+
+  if (strncmp(gdbresult, "done", 4) != 0)
+    return false;
+  const char *head;
+  if ((head = strchr(gdbresult, ',')) == NULL)
+    return false;
+  head = skipwhite(head + 1);
+  if (strncmp(head, "register-values", 15) != 0)
+    return false;
+  head = skipwhite(head + 15);
+  assert(*head == '=');
+  head = skipwhite(head + 1);
+  assert(*head == '[');
+  head = skipwhite(head + 1);
+  while (*head != ']') {
+    const char *tail;
+    assert(*head == '{');
+    head = skipwhite(head + 1);
+    tail = str_matchchar(head, '}');
+    assert(tail != NULL);
+    if (strncmp(head, "number", 6) == 0) {
+      const char *ptr = skipwhite(head + 6);
+      assert(*ptr == '=');
+      ptr = skipwhite(ptr + 1);
+      assert(*ptr == '"');
+      int reg = (int)strtol(ptr + 1, (char**)&ptr, 10);
+      ptr = skipwhite(ptr);
+      assert(*ptr == '"');
+      ptr = skipwhite(ptr + 1);
+      assert(*ptr == ',');
+      ptr = skipwhite(ptr + 1);
+      if (strncmp(ptr, "value", 5) == 0) {
+        ptr = skipwhite(ptr + 5);
+        assert(*ptr == '=');
+        ptr = skipwhite(ptr + 1);
+        assert(*ptr == '"');
+        unsigned long val = strtoul(ptr + 1, NULL, 0);
+        if (reg >= 0 && reg < sizearray(register_def) && register_def[reg].value != val) {
+          register_def[reg].value = val;
+          register_def[reg].flags = REGFLG_CHANGED;
+        }
+      }
+    }
+    head = skipwhite(tail + 1);
+    if (*head == ',')
+      head = skipwhite(head + 1);
+  }
+
+  return true;
 }
 
 static const char *lastdirsep(const char *path)
@@ -2403,7 +2721,7 @@ static char *enquote(char *dest, const char *source, size_t dest_size)
 }
 
 
-static int check_stopped(int *filenr, int *linenr)
+static int check_stopped(int *filenr, int *linenr, uint32_t *address)
 {
   STRINGLIST *item;
   int lastfound = 0;
@@ -2417,7 +2735,7 @@ static int check_stopped(int *filenr, int *linenr)
       if (strncmp(item->text, "stopped", 7) == 0) {
         const char *head, *tail;
         last_is_stopped = 1;
-        if ((head = strstr(item->text, "file=")) != 0) {
+        if ((head = strstr(item->text, "file=")) != NULL) {
           char filename[_MAX_PATH];
           unsigned len;
           assert(head[5] == '"');
@@ -2436,11 +2754,17 @@ static int check_stopped(int *filenr, int *linenr)
             *filenr = source_lookup(filename);
           }
         }
-        if ((head = strstr(item->text, "line=")) != 0) {
+        if ((head = strstr(item->text, "line=")) != NULL) {
           assert(head[5] == '"');
           head += 6;
           assert(linenr != NULL);
-          *linenr = (int)strtol(head, NULL, 10) ;
+          *linenr = (int)strtol(head, NULL, 10);
+        }
+        if ((head = strstr(item->text, "addr=")) != NULL) {
+          assert(head[5] == '"');
+          head += 6;
+          assert(address != NULL);
+          *address = (uint32_t)strtoul(head, NULL, 0);
         }
       }
     }
@@ -2999,16 +3323,75 @@ static int source_cursorfile = 0; /* file and line in the view and that the curs
 static int source_cursorline = 0;
 static int source_execfile = 0;   /* file and line that the execution point is at */
 static int source_execline = 0;
+static uint32_t exec_address = 0;
 static float source_lineheight = 0;
 static float source_charwidth = 0;
 static int source_vp_rows = 0;
+static bool source_force_refresh = false;
+
+/* returns the line number as appears in the source code widget, that maps to
+   the line in the source code; these two are the same in source view, but
+   different in disassembly view */
+static int line_source2phys(int fileindex, int source_line)
+{
+  assert(fileindex >= 0);
+  int line = 1;
+  SOURCELINE *item;
+  for (item = source_firstline(fileindex); item != NULL; item = item->next) {
+    if (item->hidden)
+      continue;
+    if (item->linenumber == source_line)
+      break;
+    line += 1;
+  }
+  return (item != NULL) ? line : source_line;
+}
+
+/* returns the line number in the source file that is *on* or *before* the
+   physical line that is passed in */
+static int line_phys2source(int fileindex, int phys_line)
+{
+  assert(fileindex >= 0);
+  int line = 1;
+  SOURCELINE *item;
+  for (item = source_firstline(fileindex); item != NULL && phys_line > 1; item = item->next) {
+    if (item->hidden)
+      continue;
+    if (item->linenumber > 0)
+      line = item->linenumber;
+    phys_line -= 1;
+  }
+  return line;
+}
+
+/* returns the line number as appears in the source code widget, that maps to
+   the address (or the line just before the address) */
+static int line_addr2phys(int fileindex, uint32_t address)
+{
+  assert(fileindex >= 0);
+  int best_line = 1;
+  uint32_t low_addr = 0;
+  int line = 1;
+  SOURCELINE *item;
+  for (item = source_firstline(fileindex); item != NULL; item = item->next) {
+    if (item->hidden)
+      continue;
+    if (item->address > low_addr && item->address <= address) {
+      best_line = line;
+      if (item->address == address)
+        break;  /* exact match found, no need to search further */
+    }
+    line += 1;
+  }
+  return best_line;
+}
 
 /* source_widget() draws the text of a source file */
 static void source_widget(struct nk_context *ctx, const char *id, float rowheight,
-                          int grayed)
+                          bool grayed, bool disassembly)
 {
   int fonttype;
-  STRINGLIST *item;
+  SOURCELINE *item;
   struct nk_rect rcwidget = nk_layout_widget_bounds(ctx);
   struct nk_style_window const *stwin = &ctx->style.window;
   struct nk_style_button stbtn = ctx->style.button;
@@ -3029,8 +3412,8 @@ static void source_widget(struct nk_context *ctx, const char *id, float rowheigh
     int lines = 0, maxlen = 0;
     float maxwidth = 0;
     for (item = source_firstline(source_cursorfile); item != NULL; item = item->next) {
-      float textwidth;
-      BREAKPOINT *bkpt;
+      if (item->hidden)
+        continue;
       lines++;
       assert(item->text != NULL);
       nk_layout_row_begin(ctx, NK_STATIC, rowheight, 4);
@@ -3039,17 +3422,8 @@ static void source_widget(struct nk_context *ctx, const char *id, float rowheigh
         source_lineheight = rcline.h;
       }
       /* line number or active/breakpoint markers */
-      if ((bkpt = breakpoint_lookup(source_cursorfile, lines)) == NULL) {
-        char str[20];
-        nk_layout_row_push(ctx, 2 * rowheight);
-        sprintf(str, "%4d", lines);
-        if (grayed)
-          nk_label_colored(ctx, str, NK_TEXT_LEFT, nk_rgb(128, 128, 128));
-        else if (lines == source_cursorline)
-          nk_label_colored(ctx, str, NK_TEXT_LEFT, nk_rgb(250, 250, 128));
-        else
-          nk_label(ctx, str, NK_TEXT_LEFT);
-      } else {
+      BREAKPOINT *bkpt;
+      if ((bkpt = breakpoint_lookup(source_cursorfile, item->linenumber)) != NULL) {
         nk_layout_row_push(ctx, rowheight - ctx->style.window.spacing.x);
         nk_spacing(ctx, 1);
         /* breakpoint marker */
@@ -3063,10 +3437,30 @@ static void source_widget(struct nk_context *ctx, const char *id, float rowheigh
         else
           stbtn.text_normal = stbtn.text_active = stbtn.text_hover = nk_rgb(255, 50, 120);
         nk_button_symbol_styled(ctx, &stbtn, bkpt->enabled ? NK_SYMBOL_CIRCLE_SOLID : NK_SYMBOL_CIRCLE_OUTLINE);
+      } else if (item->linenumber != 0) {
+        nk_layout_row_push(ctx, 2 * rowheight);
+        char str[20];
+        sprintf(str, "%4d", item->linenumber);
+        if (grayed)
+          nk_label_colored(ctx, str, NK_TEXT_LEFT, nk_rgb(128, 128, 128));
+        else if (lines == source_cursorline)
+          nk_label_colored(ctx, str, NK_TEXT_LEFT, nk_rgb(250, 250, 128));
+        else
+          nk_label(ctx, str, NK_TEXT_LEFT);
+      } else {
+        nk_layout_row_push(ctx, 2 * rowheight);
+        nk_spacing(ctx, 1);
       }
       /* active line marker */
       nk_layout_row_push(ctx, rowheight / 2);
-      if (lines == source_execline && source_cursorfile == source_execfile) {
+      bool is_exec_point = false;
+      if (source_cursorfile == source_execfile) {
+        if (disassembly)
+          is_exec_point = (item->address == exec_address);
+        else
+          is_exec_point = (item->linenumber == source_execline);
+      }
+      if (is_exec_point) {
         stbtn.normal.data.color = stbtn.hover.data.color
           = stbtn.active.data.color = stbtn.text_background
           = nk_rgba(20, 29, 38, 225);
@@ -3077,7 +3471,7 @@ static void source_widget(struct nk_context *ctx, const char *id, float rowheigh
       }
       /* calculate size of the text */
       assert(font != NULL && font->width != NULL);
-      textwidth = font->width(font->userdata, font->height, item->text, strlen(item->text));
+      float textwidth = font->width(font->userdata, font->height, item->text, strlen(item->text));
       if (textwidth > maxwidth) {
         maxwidth = textwidth;
         maxlen = strlen(item->text);
@@ -3087,6 +3481,8 @@ static void source_widget(struct nk_context *ctx, const char *id, float rowheigh
         nk_label_colored(ctx, item->text, NK_TEXT_LEFT, nk_rgb(128, 128, 128));
       else if (lines == source_cursorline)
         nk_label_colored(ctx, item->text, NK_TEXT_LEFT, nk_rgb(250, 250, 128));
+      else if (item->linenumber == 0)
+        nk_label_colored(ctx, item->text, NK_TEXT_LEFT, nk_rgb(192, 192, 224));
       else
         nk_label(ctx, item->text, NK_TEXT_LEFT);
       nk_layout_row_end(ctx);
@@ -3103,9 +3499,11 @@ static void source_widget(struct nk_context *ctx, const char *id, float rowheigh
     if (lines > 0) {
       static int saved_execfile = 0, saved_execline = 0;
       static int saved_cursorline = 0;
-      if (saved_execline != source_execline || saved_execfile != source_execfile) {
+      if (saved_execline != source_execline || saved_execfile != source_execfile || source_force_refresh) {
         saved_execfile = source_execfile;
-        source_cursorline = saved_execline = source_execline;
+        saved_execline = source_execline;
+        source_cursorline = line_source2phys(source_cursorfile, source_execline);
+        source_force_refresh = false;
       }
       if (saved_cursorline != source_cursorline) {
         /* calculate scrolling: make cursor line fit in the window */
@@ -3169,7 +3567,7 @@ static int source_mouse2char(struct nk_context *ctx, const char *id,
  */
 static int source_getsymbol(char *symname, size_t symlen, int row, int col)
 {
-  STRINGLIST *item;
+  SOURCELINE *item;
   const char *head, *tail, *ptr;
   int len, nest;
 
@@ -3251,6 +3649,7 @@ static int source_getsymbol(char *symname, size_t symlen, int row, int col)
   return 1;
 }
 
+/* returns the current file index and line that the cursor is on */
 static void source_getcursorpos(int *fileindex, int *linenumber)
 {
   assert(fileindex != NULL);
@@ -3294,6 +3693,7 @@ enum {
   STATE_LIST_BREAKPOINTS,
   STATE_LIST_LOCALS,
   STATE_LIST_WATCHES,
+  STATE_LIST_REGISTERS,
   STATE_VIEWMEMORY,
   STATE_BREAK_TOGGLE,
   STATE_WATCH_TOGGLE,
@@ -3327,7 +3727,8 @@ enum {
 #define REFRESH_BREAKPOINTS 0x0001
 #define REFRESH_LOCALS      0x0002
 #define REFRESH_WATCHES     0x0004
-#define REFRESH_MEMORY      0x0008
+#define REFRESH_REGISTERS   0x0008
+#define REFRESH_MEMORY      0x0010
 #define IGNORE_DOUBLE_DONE  0x8000  /* input comes from a console, check for extra "done" result */
 
 #define MSG_BMP_NOT_FOUND   0x0001
@@ -3441,8 +3842,8 @@ static int load_settings(const char *filename, char *entrypoint, size_t entrypoi
 
 static void svd_info(const char *params, STRINGLIST *textroot)
 {
-  stringlist_add(textroot, "System View Description", 0);
-  stringlist_add(textroot, "", 0);
+  stringlist_append(textroot, "System View Description", 0);
+  stringlist_append(textroot, "", 0);
 
   assert(params != NULL);
   if (*params == '\0') {
@@ -3453,7 +3854,7 @@ static void svd_info(const char *params, STRINGLIST *textroot)
     while ((name = svd_peripheral(idx, &address, &description)) != NULL) {
       has_info = nk_true;
       if (idx == 0)
-        stringlist_add(textroot, "Peripherals:", 0);
+        stringlist_append(textroot, "Peripherals:", 0);
       char line[200];
       sprintf(line, "    [%lx] %s", address, name);
       if (description != NULL) {
@@ -3469,11 +3870,11 @@ static void svd_info(const char *params, STRINGLIST *textroot)
           line[len + count] = '\0';
         }
       }
-      stringlist_add(textroot, line, 0);
+      stringlist_append(textroot, line, 0);
       idx += 1;
     }
     if (!has_info)
-      stringlist_add(textroot, "No SVD file loaded, no information available", 0);
+      stringlist_append(textroot, "No SVD file loaded, no information available", 0);
   } else {
     char *params_upcase = NULL;
     unsigned long address;
@@ -3484,7 +3885,7 @@ static void svd_info(const char *params, STRINGLIST *textroot)
       #if !defined __linux__
         params_upcase = strdup(params);
         if (params_upcase != NULL) {
-          strupr(params_upcase);	//??? make strupr() for Linux
+          strupr(params_upcase);
           result = svd_lookup(params_upcase, 0, &periph_name, &reg_name, &address, &description);
         }
       #endif
@@ -3494,7 +3895,7 @@ static void svd_info(const char *params, STRINGLIST *textroot)
       if (reg_name != NULL && result == 1) {
         /* register details */
         sprintf(line, "[%lx] %s%s->%s:", address, svd_mcu_prefix(), periph_name, reg_name);
-        stringlist_add(textroot, line, 0);
+        stringlist_append(textroot, line, 0);
         /* full description, reformatted in strings of 80 characters */
         if (description != NULL) {
           const char *head = description;
@@ -3514,11 +3915,11 @@ static void svd_info(const char *params, STRINGLIST *textroot)
             if (len < sizearray(line)) {
               strncpy(line, head, len);
               line[len] = '\0';
-              stringlist_add(textroot, line, 0);
+              stringlist_append(textroot, line, 0);
             } else {
               /* remainder text does not fit in line variable -> just dump the
                  remainder (this should not occur) */
-              stringlist_add(textroot, head, 0);
+              stringlist_append(textroot, head, 0);
               len = strlen(head);
             }
             head += len;
@@ -3526,7 +3927,7 @@ static void svd_info(const char *params, STRINGLIST *textroot)
               head++;
           }
         }
-        stringlist_add(textroot, "", 0);
+        stringlist_append(textroot, "", 0);
         /* register fields */
         int idx = 0;
         const char *name;
@@ -3542,13 +3943,13 @@ static void svd_info(const char *params, STRINGLIST *textroot)
             strlcat(line, " -- ", sizearray(line));
             strlcat(line, description, sizearray(line));
           }
-          stringlist_add(textroot, line, 0);
+          stringlist_append(textroot, line, 0);
           idx += 1;
         }
       } else if (reg_name != NULL && result > 1) {
         /* register name with implied peripheral, and there are multiple
            peripherals with this register name */
-        stringlist_add(textroot, "Multiple matches:", 0);
+        stringlist_append(textroot, "Multiple matches:", 0);
         for (int idx = 0; idx < result; idx++) {
           if (idx > 0) {
             /* name for index 0 was already looked up, so only look up registers
@@ -3571,18 +3972,18 @@ static void svd_info(const char *params, STRINGLIST *textroot)
               line[len + count] = '\0';
             }
           }
-          stringlist_add(textroot, line, 0);
+          stringlist_append(textroot, line, 0);
         }
       } else {
         /* peripheral details, list all registers */
         assert(result == 1 && reg_name == NULL);
         sprintf(line, "%s%s:", svd_mcu_prefix(), periph_name);
-        stringlist_add(textroot, line, 0);
+        stringlist_append(textroot, line, 0);
         if (description != NULL)
-          stringlist_add(textroot, description, 0);
-        stringlist_add(textroot, "", 0);
+          stringlist_append(textroot, description, 0);
+        stringlist_append(textroot, "", 0);
         /* list all registers in the peripheral */
-        stringlist_add(textroot, "Registers:", 0);
+        stringlist_append(textroot, "Registers:", 0);
         unsigned long offset;
         int range;
         const char *name, *description;
@@ -3611,20 +4012,20 @@ static void svd_info(const char *params, STRINGLIST *textroot)
               line[len + count] = '\0';
             }
           }
-          stringlist_add(textroot, line, 0);
+          stringlist_append(textroot, line, 0);
           idx += 1;
         }
       }
     } else {
-      stringlist_add(textroot, "Specified register of peripheral is not found", 0);
+      stringlist_append(textroot, "Specified register of peripheral is not found", 0);
     }
     if (params_upcase != NULL)
       free((void*)params_upcase);
   }
 }
 
-static int handle_help_cmd(char *command, STRINGLIST *textroot, int *active,
-                           nk_bool *reformat)
+static bool handle_help_cmd(char *command, STRINGLIST *textroot, int *active,
+                            nk_bool *reformat)
 {
   assert(command != NULL);
   assert(textroot != NULL);
@@ -3654,115 +4055,126 @@ static int handle_help_cmd(char *command, STRINGLIST *textroot, int *active,
     *active = POPUP_HELP;
     *reformat = nk_true;    /* by default, reformat (overruled for "help mon") */
     if (*cmdptr == '\0') {
-      stringlist_add(textroot, "Front-end topics.", 0);
-      stringlist_add(textroot, "", 0);
-      stringlist_add(textroot, "keyboard -- list special keys.", 0);
-      stringlist_add(textroot, "mouse -- mouse actions.", 0);
-      stringlist_add(textroot, "serial -- configure the serial monitor.", 0);
-      stringlist_add(textroot, "svd -- show or list peripherals and registers.", 0);
-      stringlist_add(textroot, "trace -- configure SWO tracing.", 0);
-      stringlist_add(textroot, "", 0);
-      /* drop to the default "return 0", so that GDB's help follows */
+      stringlist_append(textroot, "Front-end topics.", 0);
+      stringlist_append(textroot, "", 0);
+      stringlist_append(textroot, "assembly -- show assembly mixed with source code.", 0);
+      stringlist_append(textroot, "find -- search text in the source view.", 0);
+      stringlist_append(textroot, "keyboard -- list special keys.", 0);
+      stringlist_append(textroot, "mouse -- mouse actions.", 0);
+      stringlist_append(textroot, "serial -- configure the serial monitor.", 0);
+      stringlist_append(textroot, "svd -- show or list peripherals and registers.", 0);
+      stringlist_append(textroot, "trace -- configure SWO tracing.", 0);
+      stringlist_append(textroot, "", 0);
+      /* drop to the default "return false", so that GDB's help follows */
+    } else if (TERM_EQU(cmdptr, "assembly", 8) || TERM_EQU(command, "disassemble", 11) || TERM_EQU(command, "disas", 5)) {
+      stringlist_append(textroot, "Show disassembled code interleaved with source code.", 0);
+      stringlist_append(textroot, "", 0);
+      stringlist_append(textroot, "assembly [on | off] -- set the assembly mode on or off; when no parameter is given, the command toggles the current status.", 0);
+      stringlist_append(textroot, "disassemble [on | off] -- a synonym for the \"assembly\" command.", 0);
+      stringlist_append(textroot, "", 0);
+      stringlist_append(textroot, "Note that in assembly mode, the function keys F10 and F11 step by"
+                                  " instruction, rather than by source line. You can still use the \"next\""
+                                  " and \"step\" commands to step by source line.", 0);
     } else if (TERM_EQU(cmdptr, "find", 4)) {
-      stringlist_add(textroot, "Find text in the current source file (case-insensitive).", 0);
-      stringlist_add(textroot, "", 0);
-      stringlist_add(textroot, "find [text]", 0);
-      stringlist_add(textroot, "Without parameter, the find command repeats the previous search.", 0);
-      return 1;
+      stringlist_append(textroot, "Find text in the current source file (case-insensitive).", 0);
+      stringlist_append(textroot, "", 0);
+      stringlist_append(textroot, "find [text]", 0);
+      stringlist_append(textroot, "Without parameter, the find command repeats the previous search.", 0);
+      return true;
     } else if (TERM_EQU(cmdptr, "kbd", 3) || TERM_EQU(cmdptr, "keys", 4) || TERM_EQU(cmdptr, "keyboard", 8)) {
-      stringlist_add(textroot, "Keyboard navigation and commands.", 0);
-      stringlist_add(textroot, "", 0);
-      stringlist_add(textroot, "Up/Down arrow -- scroll the source view up and down (one line).", 0);
-      stringlist_add(textroot, "PageUp/PageDown -- scroll the source view up and down (one screen).", 0);
-      stringlist_add(textroot, "", 0);
-      stringlist_add(textroot, "F3 -- find next (see \"find\" command).", 0);
-      stringlist_add(textroot, "F5 -- continue running, same as \"continue\".", 0);
-      stringlist_add(textroot, "F7 -- run to cursor line (in the source view), same as \"until\".", 0);
-      stringlist_add(textroot, "F9 -- set/reset breakpoint on the current line.", 0);
-      stringlist_add(textroot, "F10 -- step to next line (step over functions), same as \"next\".", 0);
-      stringlist_add(textroot, "F11 -- Step single line (step into functions), same as \"step\".", 0);
-      stringlist_add(textroot, "TAB -- auto-complete command or parameter.", 0);
-      stringlist_add(textroot, "Shift-F11 -- Step out of functions, same as \"finish\".", 0);
-      stringlist_add(textroot, "Ctrl-F -- find text (\"find\" command).", 0);
-      stringlist_add(textroot, "Ctrl-G -- go to file or line in source view, (\"list\" command).", 0);
-      stringlist_add(textroot, "Ctrl-R -- scroll backward through the command history. You can also use"
+      stringlist_append(textroot, "Keyboard navigation and commands.", 0);
+      stringlist_append(textroot, "", 0);
+      stringlist_append(textroot, "Up/Down arrow -- scroll the source view up and down (one line).", 0);
+      stringlist_append(textroot, "PageUp/PageDown -- scroll the source view up and down (one screen).", 0);
+      stringlist_append(textroot, "", 0);
+      stringlist_append(textroot, "F3 -- find next (see \"find\" command).", 0);
+      stringlist_append(textroot, "F5 -- continue running, same as \"continue\".", 0);
+      stringlist_append(textroot, "F7 -- run to cursor line (in the source view), same as \"until\".", 0);
+      stringlist_append(textroot, "F9 -- set/reset breakpoint on the current line.", 0);
+      stringlist_append(textroot, "F10 -- step to next line (step over functions), same as \"next\".", 0);
+      stringlist_append(textroot, "F11 -- Step single line (step into functions), same as \"step\".", 0);
+      stringlist_append(textroot, "TAB -- auto-complete command or parameter.", 0);
+      stringlist_append(textroot, "Shift-F11 -- Step out of functions, same as \"finish\".", 0);
+      stringlist_append(textroot, "Ctrl-F -- find text (\"find\" command).", 0);
+      stringlist_append(textroot, "Ctrl-G -- go to file or line in source view, (\"list\" command).", 0);
+      stringlist_append(textroot, "Ctrl-R -- scroll backward through the command history. You can also use"
                                " Ctrl-ArrowUp and Ctrl-ArrowDown to scroll through the command history.", 0);
-      stringlist_add(textroot, "Ctrl-F2 -- reset program, same as \"start\".", 0);
-      stringlist_add(textroot, "Ctrl-F5 -- interrupt program (stop).", 0);
-      return 1;
+      stringlist_append(textroot, "Ctrl-F2 -- reset program, same as \"start\".", 0);
+      stringlist_append(textroot, "Ctrl-F5 -- interrupt program (stop).", 0);
+      return true;
     } else if (TERM_EQU(cmdptr, "mouse", 5)) {
-      stringlist_add(textroot, "Mouse actions.", 0);
-      stringlist_add(textroot, "", 0);
-      stringlist_add(textroot, "A left-click in the left margin of the source view, toggles a breakpoint"
+      stringlist_append(textroot, "Mouse actions.", 0);
+      stringlist_append(textroot, "", 0);
+      stringlist_append(textroot, "A left-click in the left margin of the source view, toggles a breakpoint"
                                " on that line (or the nearest applicable line, if the line that was"
                                " clicked on has no code).", 0);
-      stringlist_add(textroot, "", 0);
-      stringlist_add(textroot, "A right-click on a word or symbol in the source view, copies that word or"
+      stringlist_append(textroot, "", 0);
+      stringlist_append(textroot, "A right-click on a word or symbol in the source view, copies that word or"
                                " symbol name onto the command line. To add a watch on a variable, for"
                                " example, you can type \"disp\" and right click on the variable (and press Enter).", 0);
-      stringlist_add(textroot, "", 0);
-      stringlist_add(textroot, "A right-click on a value in the Locals or Watches views enables you to"
+      stringlist_append(textroot, "", 0);
+      stringlist_append(textroot, "A right-click on a value in the Locals or Watches views enables you to"
                                " select the format in which the value is displayed: decimal, hexadecimal,"
                                " octal or binary. This only works for integer values.", 0);
-      stringlist_add(textroot, "", 0);
-      stringlist_add(textroot, "Hovering over a variable or symbol, shows information on the symbol (such"
+      stringlist_append(textroot, "", 0);
+      stringlist_append(textroot, "Hovering over a variable or symbol, shows information on the symbol (such"
                                " as the current value, in case of a variable).", 0);
     } else if (TERM_EQU(cmdptr, "reset", 5)) {
-      stringlist_add(textroot, "Restart debugging.", 0);
-      stringlist_add(textroot, "", 0);
-      stringlist_add(textroot, "reset -- restart the target program; keep breakpoints and variable watches.", 0);
-      stringlist_add(textroot, "reset hard -- restart both the debugger and the target program.", 0);
-      return 1;
+      stringlist_append(textroot, "Restart debugging.", 0);
+      stringlist_append(textroot, "", 0);
+      stringlist_append(textroot, "reset -- restart the target program; keep breakpoints and variable watches.", 0);
+      stringlist_append(textroot, "reset hard -- restart both the debugger and the target program.", 0);
+      return true;
     } else if (TERM_EQU(cmdptr, "serial", 6)) {
-      stringlist_add(textroot, "Configure the serial monitor.", 0);
-      stringlist_add(textroot, "", 0);
-      stringlist_add(textroot, "serial [port] [bitrate] -- open the port at the bitrate. If no port is specified,"
+      stringlist_append(textroot, "Configure the serial monitor.", 0);
+      stringlist_append(textroot, "", 0);
+      stringlist_append(textroot, "serial [port] [bitrate] -- open the port at the bitrate. If no port is specified,"
                                " the secondary UART of the Black Magic Probe is used.", 0);
-      stringlist_add(textroot, "serial enable -- open the serial monitor with the previously confugured settings.", 0);
-      stringlist_add(textroot, "serial disable -- close the virtual monitor.", 0);
-      stringlist_add(textroot, "serial info -- show current status and configuration.", 0);
-      stringlist_add(textroot, "", 0);
-      stringlist_add(textroot, "serial [filename] -- configure CTF decoding using the given TSDL file.", 0);
-      stringlist_add(textroot, "serial plain -- disable CTF decoding, display received data as text.", 0);
-      stringlist_add(textroot, "", 0);
-      stringlist_add(textroot, "serial clear -- clear the serial monitor view (delete contents).", 0);
-      stringlist_add(textroot, "serial save [filename] -- save the contents in the serial monitor to a file.", 0);
+      stringlist_append(textroot, "serial enable -- open the serial monitor with the previously confugured settings.", 0);
+      stringlist_append(textroot, "serial disable -- close the virtual monitor.", 0);
+      stringlist_append(textroot, "serial info -- show current status and configuration.", 0);
+      stringlist_append(textroot, "", 0);
+      stringlist_append(textroot, "serial [filename] -- configure CTF decoding using the given TSDL file.", 0);
+      stringlist_append(textroot, "serial plain -- disable CTF decoding, display received data as text.", 0);
+      stringlist_append(textroot, "", 0);
+      stringlist_append(textroot, "serial clear -- clear the serial monitor view (delete contents).", 0);
+      stringlist_append(textroot, "serial save [filename] -- save the contents in the serial monitor to a file.", 0);
     } else if (TERM_EQU(cmdptr, "svd", 3)) {
-      stringlist_add(textroot, "Show information from the System View Description file.", 0);
-      stringlist_add(textroot, "", 0);
-      stringlist_add(textroot, "info svd -- list all peripherals.", 0);
-      stringlist_add(textroot, "info svd [peripheral] -- list registers in the peripheral.", 0);
-      stringlist_add(textroot, "info svd [register] -- look up register, display matching registers.", 0);
-      stringlist_add(textroot, "info svd [peripheral->register] -- show register details.", 0);
+      stringlist_append(textroot, "Show information from the System View Description file.", 0);
+      stringlist_append(textroot, "", 0);
+      stringlist_append(textroot, "info svd -- list all peripherals.", 0);
+      stringlist_append(textroot, "info svd [peripheral] -- list registers in the peripheral.", 0);
+      stringlist_append(textroot, "info svd [register] -- look up register, display matching registers.", 0);
+      stringlist_append(textroot, "info svd [peripheral->register] -- show register details.", 0);
     } else if (TERM_EQU(cmdptr, "trace", 5) || TERM_EQU(cmdptr, "tracepoint", 10) || TERM_EQU(cmdptr, "tracepoints", 11)) {
-      stringlist_add(textroot, "Configure SWO tracing.", 0);
-      stringlist_add(textroot, "", 0);
-      stringlist_add(textroot, "trace [target-clock] [bitrate] -- configure Manchester tracing.", 0);
-      stringlist_add(textroot, "trace passive -- activate Manchester tracing, without configuration.", 0);
-      stringlist_add(textroot, "trace async [target-clock] [bitrate] -- configure asynchronous tracing.", 0);
-      stringlist_add(textroot, "trace async passive [bitrate] -- activate asynchronous tracing, without configuration.", 0);
-      stringlist_add(textroot, "trace bitrate [bitrate] -- set only the bitrate, without changing other parameters.", 0);
-      stringlist_add(textroot, "      The target-clock may be given as 12000000 or as 12MHZ.", 0);
-      stringlist_add(textroot, "      The bitrate may be given as 115200 or as 115.2kbps.", 0);
-      stringlist_add(textroot, "      The option \"passive\" can be abbreviated to \"pasv\".", 0);
-      stringlist_add(textroot, "", 0);
-      stringlist_add(textroot, "trace enable -- enable SWO tracing with previously configured settings.", 0);
-      stringlist_add(textroot, "trace disable -- disable SWO tracing.", 0);
-      stringlist_add(textroot, "trace info -- show current status and configuration.", 0);
-      stringlist_add(textroot, "", 0);
-      stringlist_add(textroot, "trace [filename] -- configure CTF decoding using the given TSDL file.", 0);
-      stringlist_add(textroot, "trace plain -- disable CTF decoding, trace plain input data.", 0);
-      stringlist_add(textroot, "", 0);
-      stringlist_add(textroot, "trace channel [index] enable -- enable a channel (0..31).", 0);
-      stringlist_add(textroot, "trace channel [index] disable -- disable a channel (0..31).", 0);
-      stringlist_add(textroot, "trace channel [index] [name] -- set the name of a channel.", 0);
-      stringlist_add(textroot, "trace channel [index] #[colour] -- set the colour of a channel.", 0);
-      stringlist_add(textroot, "      The option \"channel\" can be abbreviated to \"chan\" or \"ch\".", 0);
-      stringlist_add(textroot, "      The parameter [index] may be a range, like 0-7 for the first eight channels.", 0);
-      stringlist_add(textroot, "", 0);
-      stringlist_add(textroot, "trace clear -- clear the trace view (delete contents).", 0);
-      stringlist_add(textroot, "trace save [filename] -- save the contents in the trace view to a file.", 0);
-      return 1;
+      stringlist_append(textroot, "Configure SWO tracing.", 0);
+      stringlist_append(textroot, "", 0);
+      stringlist_append(textroot, "trace [target-clock] [bitrate] -- configure Manchester tracing.", 0);
+      stringlist_append(textroot, "trace passive -- activate Manchester tracing, without configuration.", 0);
+      stringlist_append(textroot, "trace async [target-clock] [bitrate] -- configure asynchronous tracing.", 0);
+      stringlist_append(textroot, "trace async passive [bitrate] -- activate asynchronous tracing, without configuration.", 0);
+      stringlist_append(textroot, "trace bitrate [bitrate] -- set only the bitrate, without changing other parameters.", 0);
+      stringlist_append(textroot, "      The target-clock may be given as 12000000 or as 12MHZ.", 0);
+      stringlist_append(textroot, "      The bitrate may be given as 115200 or as 115.2kbps.", 0);
+      stringlist_append(textroot, "      The option \"passive\" can be abbreviated to \"pasv\".", 0);
+      stringlist_append(textroot, "", 0);
+      stringlist_append(textroot, "trace enable -- enable SWO tracing with previously configured settings.", 0);
+      stringlist_append(textroot, "trace disable -- disable SWO tracing.", 0);
+      stringlist_append(textroot, "trace info -- show current status and configuration.", 0);
+      stringlist_append(textroot, "", 0);
+      stringlist_append(textroot, "trace [filename] -- configure CTF decoding using the given TSDL file.", 0);
+      stringlist_append(textroot, "trace plain -- disable CTF decoding, trace plain input data.", 0);
+      stringlist_append(textroot, "", 0);
+      stringlist_append(textroot, "trace channel [index] enable -- enable a channel (0..31).", 0);
+      stringlist_append(textroot, "trace channel [index] disable -- disable a channel (0..31).", 0);
+      stringlist_append(textroot, "trace channel [index] [name] -- set the name of a channel.", 0);
+      stringlist_append(textroot, "trace channel [index] #[colour] -- set the colour of a channel.", 0);
+      stringlist_append(textroot, "      The option \"channel\" can be abbreviated to \"chan\" or \"ch\".", 0);
+      stringlist_append(textroot, "      The parameter [index] may be a range, like 0-7 for the first eight channels.", 0);
+      stringlist_append(textroot, "", 0);
+      stringlist_append(textroot, "trace clear -- clear the trace view (delete contents).", 0);
+      stringlist_append(textroot, "trace save [filename] -- save the contents in the trace view to a file.", 0);
+      return true;
     } else if (TERM_EQU(cmdptr, "mon", 3)) {
       memcpy(command, "mon help", 8);       /* translate "help mon" -> "mon help" */
       *reformat = nk_false;
@@ -3773,11 +4185,11 @@ static int handle_help_cmd(char *command, STRINGLIST *textroot, int *active,
   } else if (*active == POPUP_HELP && !(TERM_EQU(command, "mon", 3) || TERM_EQU(command, "monitor", 7))) {
     *active = POPUP_NONE;
   }
-  return 0;
+  return false;
 }
 
-static int handle_info_cmd(char *command, STRINGLIST *textroot, int *active,
-                           nk_bool *reformat, const SWOSETTINGS *swo)
+static bool handle_info_cmd(char *command, STRINGLIST *textroot, int *active,
+                            nk_bool *reformat, const SWOSETTINGS *swo)
 {
   assert(command != NULL);
   assert(textroot != NULL);
@@ -3791,31 +4203,56 @@ static int handle_info_cmd(char *command, STRINGLIST *textroot, int *active,
     *active = POPUP_INFO;
     *reformat = nk_false; /* never reformat "info" */
     if (*cmdptr == '\0') {
-      stringlist_add(textroot, "Front-end topics.", 0);
-      stringlist_add(textroot, "", 0);
-      stringlist_add(textroot, "serial -- status of the serial monitor.", 0);
-      stringlist_add(textroot, "svd -- list peripherals and registers.", 0);
-      stringlist_add(textroot, "trace -- status SWO tracing.", 0);
-      stringlist_add(textroot, "", 0);
-      /* drop to the default "return 0", so that GDB's info follows */
+      stringlist_append(textroot, "Front-end topics.", 0);
+      stringlist_append(textroot, "", 0);
+      stringlist_append(textroot, "serial -- status of the serial monitor.", 0);
+      stringlist_append(textroot, "svd -- list peripherals and registers.", 0);
+      stringlist_append(textroot, "trace -- status SWO tracing.", 0);
+      stringlist_append(textroot, "", 0);
+      /* drop to the default "return false", so that GDB's info follows */
     } else if (TERM_EQU(cmdptr, "trace", 5)) {
       trace_info_mode(swo, 1, textroot);
-      return 1;
+      return true;
     } else if (TERM_EQU(cmdptr, "serial", 6)) {
       serial_info_mode(textroot);
-      return 1;
+      return true;
     } else if (TERM_EQU(cmdptr, "svd", 3)) {
       svd_info(skipwhite(cmdptr + 3), textroot);
-      return 1;
+      return true;
     }
   } else if (*active == POPUP_INFO) {
     *active = POPUP_NONE;
   }
-  return 0;
+  return false;
 }
 
-static int handle_list_cmd(const char *command, const DWARF_SYMBOLLIST *symboltable,
-                           const DWARF_PATHLIST *filetable)
+static bool handle_disasm_cmd(const char *command, bool *curstate)
+{
+  command = skipwhite(command);
+  if (TERM_EQU(command, "disassemble", 11) || TERM_EQU(command, "disas", 5)
+      || TERM_EQU(command, "assembly", 8))
+  {
+    const char *ptr = command;
+    while (isalpha(*ptr))
+      ptr++;
+    ptr = skipwhite(ptr);
+    if (*ptr == '\0')
+      *curstate =!*curstate;
+    else if (TERM_EQU(ptr, "on", 2))
+      *curstate = true;
+    else if (TERM_EQU(ptr, "off", 3))
+      *curstate = false;
+    else
+      console_add("Invalid argument\n", STRFLG_ERROR);
+    disasm_show_hide(source_cursorfile, *curstate);
+    source_force_refresh = true;
+    return true;
+  }
+  return false;
+}
+
+static bool handle_list_cmd(const char *command, const DWARF_SYMBOLLIST *symboltable,
+                            const DWARF_PATHLIST *filetable)
 {
   command = skipwhite(command);
   if (TERM_EQU(command, "list", 4)) {
@@ -3825,24 +4262,24 @@ static int handle_list_cmd(const char *command, const DWARF_SYMBOLLIST *symbolta
       source_cursorline += source_vp_rows;      /* "list" & "list +" */
       if (source_cursorline > linecount)
         source_cursorline = linecount;
-      return 1;
+      return true;
     } else if (*p1 == '-') {
       source_cursorline -= source_vp_rows;      /* "list -" */
       if (source_cursorline < 1)
         source_cursorline = 1;
-      return 1;
+      return true;
     } else if (isdigit(*p1)) {
       int line = (int)strtol(p1, NULL, 10);     /* "list #" (where # is a line number) */
       if (line >= 1 && line <= source_linecount(source_cursorfile)) {
         source_cursorline = line;
-        return 1;
+        return true;
       }
     } else {
       const DWARF_SYMBOLLIST *sym;              /* "list filename", "list filename:#" or "list function" */
       unsigned line = 0, idx = UINT_MAX;
       sym = dwarf_sym_from_name(symboltable, p1, source_cursorfile, source_cursorline);
       if (sym != NULL) {
-        const char *path = dwarf_path_from_index(filetable, sym->fileindex);
+        const char *path = dwarf_path_from_fileindex(filetable, sym->fileindex);
         if (path != NULL)
           idx = source_lookup(path);
         line = sym->line;
@@ -3871,14 +4308,14 @@ static int handle_list_cmd(const char *command, const DWARF_SYMBOLLIST *symbolta
       if (idx < sources_count && line >= 1) {
         source_cursorfile = idx;
         source_cursorline = line;
-        return 1;
+        return true;
       }
     }
   }
-  return 0;
+  return false;
 }
 
-static int handle_display_cmd(const char *command, int *param, char *symbol, size_t symlength)
+static bool handle_display_cmd(const char *command, int *param, char *symbol, size_t symlength)
 {
   const char *ptr;
 
@@ -3913,26 +4350,26 @@ static int handle_display_cmd(const char *command, int *param, char *symbol, siz
         ptr += 1; /* skip any characters following the format */
     }
     strlcpy(symbol, skipwhite(ptr), symlength);
-    return 1;
+    return true;
   } else if (TERM_EQU(command, "undisp", 6) || TERM_EQU(command, "undisplay", 9)) {
     param[0] = STATEPARAM_WATCH_DEL;
     ptr = strchr(command, ' ');
     assert(ptr != NULL);
     if (isdigit(*ptr)) {
       param[1] = (int)strtol(ptr, NULL, 10);
-      return 1;
+      return true;
     } else {
       /* find a watch with the name */
       WATCH *watch;
       for (watch = watch_root.next; watch != NULL; watch = watch->next) {
         if (strcmp(watch->expr, ptr) == 0) {
           param[1] = watch->seqnr;
-          return 1;
+          return true;
         }
       }
     }
   }
-  return 0;
+  return false;
 }
 
 #define RESET_FILE    1 /* equivalent to the GDB "file" command */
@@ -4002,13 +4439,13 @@ static int find_substring(const char *text, const char *pattern)
   return (idx + patlen <= txtlen);
 }
 
-static int handle_find_cmd(const char *command)
+static bool handle_find_cmd(const char *command)
 {
   assert(command != NULL);
   command = skipwhite(command);
   if (TERM_EQU(command, "find", 4)) {
     static char pattern[50] = "";
-    STRINGLIST *item = source_firstline(source_cursorfile);
+    SOURCELINE *item = source_firstline(source_cursorfile);
     int linenr, found_on_curline;
     const char *ptr;
     if ((ptr = strchr(command, ' ')) != NULL) {
@@ -4017,7 +4454,7 @@ static int handle_find_cmd(const char *command)
         strlcpy(pattern, ptr, sizearray(pattern));
     }
     if (strlen(pattern) == 0)
-      return 1; /* invalid pattern, but command syntax is ok */
+      return true; /* invalid pattern, but command syntax is ok */
     /* find pattern, starting from source_cursorline */
     linenr = 1;
     while (item != NULL && linenr < source_cursorline) {
@@ -4037,7 +4474,7 @@ static int handle_find_cmd(const char *command)
       assert(item != NULL && item->text != NULL);
       if (find_substring(item->text, pattern)) {
         source_cursorline = linenr;
-        return 1;     /* found, stop search */
+        return true;     /* found, stop search */
       }
       item = item->next;
       linenr++;
@@ -4053,9 +4490,9 @@ static int handle_find_cmd(const char *command)
       console_add("No further matches found\n", STRFLG_ERROR);
     else
       console_add("Text not found\n", STRFLG_ERROR);
-    return 1;
+    return true;
   }
-  return 0;
+  return false;
 }
 
 /** handle_x_command()
@@ -4067,14 +4504,14 @@ static int handle_find_cmd(const char *command)
  *        * fmt       'x', 'd', 'u', 'o', 't', 'f', 'c', 'a', 'i', 's'
  *        * size      1, 2, 4, 8
  */
-static int handle_x_cmd(const char *command, MEMDUMP *memdump)
+static bool handle_x_cmd(const char *command, MEMDUMP *memdump)
 {
   char *ptr;
 
   assert(command != NULL);
   command = skipwhite(command);
   if (!TERM_EQU(command, "x", 1))
-    return 0;
+    return false;
 
   assert(memdump != NULL);
   ptr = (char*)skipwhite(command + 1);
@@ -4114,16 +4551,16 @@ static int handle_x_cmd(const char *command, MEMDUMP *memdump)
 
   if (!memdump_validate(memdump)) {
     console_add("Missing address\n", STRFLG_ERROR);
-    return 1; /* still say return 1, because the command was recognized */
+    return true; /* still say "return true", because the command was recognized */
   }
 
   /* free memory of the previous dump */
   memdump_cleanup(memdump);
 
-  return 1;
+  return true;
 }
 
-static int is_monitor_cmd(const char *command)
+static bool is_monitor_cmd(const char *command)
 {
   assert(command != NULL);
   return TERM_EQU(command, "mon", 3) || TERM_EQU(command, "monitor", 7);
@@ -4157,7 +4594,7 @@ static void trace_info_channel(int ch_start, int ch_end, STRINGLIST *textroot)
       }
     }
     if (textroot != NULL) {
-      stringlist_add(textroot, msg, 0);
+      stringlist_append(textroot, msg, 0);
     } else {
       strlcat(msg, "\n", sizearray(msg));
       console_add(msg, STRFLG_STATUS);
@@ -4171,8 +4608,8 @@ static void trace_info_mode(const SWOSETTINGS *swo, int showchannels, STRINGLIST
 
   strlcpy(msg, "SWO Trace configuration", sizearray(msg));
   if (textroot != NULL) {
-    stringlist_add(textroot, msg, 0);
-    stringlist_add(textroot, "", 0);
+    stringlist_append(textroot, msg, 0);
+    stringlist_append(textroot, "", 0);
   } else {
     strlcat(msg, ": ", sizearray(msg));
   }
@@ -4197,7 +4634,7 @@ static void trace_info_mode(const SWOSETTINGS *swo, int showchannels, STRINGLIST
     break;
   }
   if (textroot != NULL)
-    stringlist_add(textroot, msg, 0);
+    stringlist_append(textroot, msg, 0);
 
   if (textroot == NULL)
     strlcat(msg, ", data width = ", sizearray(msg));
@@ -4208,7 +4645,7 @@ static void trace_info_mode(const SWOSETTINGS *swo, int showchannels, STRINGLIST
   else
     sprintf(msg + strlen(msg), "%u-bit", swo->datasize * 8);
   if (textroot != NULL) {
-    stringlist_add(textroot, msg, 0);
+    stringlist_append(textroot, msg, 0);
   } else {
     strlcat(msg, "\n", sizearray(msg));
     console_add(msg, STRFLG_STATUS);
@@ -4223,7 +4660,7 @@ static void trace_info_mode(const SWOSETTINGS *swo, int showchannels, STRINGLIST
     } else {
       strlcat(msg, "-", sizearray(msg));
     }
-    stringlist_add(textroot, msg, 0);
+    stringlist_append(textroot, msg, 0);
   } else {
     if (strlen(swo->metadata) > 0) {
       const char *basename = lastdirsep(swo->metadata);
@@ -4233,8 +4670,8 @@ static void trace_info_mode(const SWOSETTINGS *swo, int showchannels, STRINGLIST
   }
 
   if (textroot != NULL) {
-    stringlist_add(textroot, "", 0);
-    stringlist_add(textroot, "Enabled channels", 0);
+    stringlist_append(textroot, "", 0);
+    stringlist_append(textroot, "Enabled channels", 0);
   }
   if (showchannels && swo->mode != SWOMODE_NONE && swo->enabled) {
     int count, chan;
@@ -4243,7 +4680,7 @@ static void trace_info_mode(const SWOSETTINGS *swo, int showchannels, STRINGLIST
         count++;
     if (textroot != NULL) {
       if (count == 0) {
-        stringlist_add(textroot, "(all channels disabled)", 0);
+        stringlist_append(textroot, "(all channels disabled)", 0);
       } else {
         for (chan = 0; chan < NUM_CHANNELS; chan++)
           if (channel_getenabled(chan))
@@ -4319,7 +4756,6 @@ static int handle_trace_cmd(const char *command, SWOSETTINGS *swo)
       ch_end = NUM_CHANNELS - 1;
     } else {
       ch_start =(int)strtol(ptr,(char**)&ptr, 10);
-      //??? enhancement (especially with CTF): allow a channel name as well as a number
       ptr = (char*)skipwhite(ptr);
       if (*ptr == '-') {
         ch_end = (int)strtol(ptr + 1, (char**)&ptr, 10);
@@ -4510,8 +4946,8 @@ static void serial_info_mode(STRINGLIST *textroot)
 
   strlcpy(msg, "Serial monitor configuration", sizearray(msg));
   if (textroot != NULL) {
-    stringlist_add(textroot, msg, 0);
-    stringlist_add(textroot, "", 0);
+    stringlist_append(textroot, msg, 0);
+    stringlist_append(textroot, "", 0);
     msg[0] = '\0';
   } else {
     strlcat(msg, ": ", sizearray(msg));
@@ -4524,7 +4960,7 @@ static void serial_info_mode(STRINGLIST *textroot)
     strlcat(msg, "disabled", sizearray(msg));
   }
   if (textroot != NULL) {
-    stringlist_add(textroot, msg, 0);
+    stringlist_append(textroot, msg, 0);
   } else {
     strlcat(msg, "\n", sizearray(msg));
     console_add(msg, STRFLG_STATUS);
@@ -4535,7 +4971,7 @@ static void serial_info_mode(STRINGLIST *textroot)
     if (strlen(tdsl) > 0) {
       sprintf(msg, "CTF mode: %s", tdsl);
       if (textroot != NULL) {
-        stringlist_add(textroot, msg, 0);
+        stringlist_append(textroot, msg, 0);
       } else {
         strlcat(msg, "\n", sizearray(msg));
         console_add(msg, STRFLG_STATUS);
@@ -4752,8 +5188,10 @@ typedef struct tagAPPSTATE {
   char SVDfile[_MAX_PATH];      /**< target MCU definitions */
   char EntryPoint[64];          /**< name of the entry-point function (e.g. "main") */
   SWOSETTINGS swo;              /**< TRACESWO configuration */
+  ARMSTATE armstate;            /**< state of the disassembler */
   unsigned long scriptparams[4];/**< parameters for running configuration scripts (for TRACESWO) */
   const char **sourcefiles;     /**< array of all source files */
+  bool disassemble_mode;        /**< whether source code is mixed with disassembly */
   int prev_clicked_line;        /**< line in source view that was previously clicked on (to detect multiple clicks on the same line) */
   char statesymbol[128];        /**< name of the symbol hovered over (in source view) */
   char ttipvalue[256];          /**< text for variable value in tooltip (when hovering above symbol) */
@@ -4769,6 +5207,7 @@ typedef struct tagAPPSTATE {
   SIZERBAR sizerbar_breakpoints;/**< info for resizable breakpoints view */
   SIZERBAR sizerbar_locals;     /**< info for resizable local variables view */
   SIZERBAR sizerbar_watches;    /**< info for resizable "variable watches" view */
+  SIZERBAR sizerbar_registers;  /**< info for resizable local variables view */
   SIZERBAR sizerbar_memory;     /**< info for resizable memory dump view */
   SIZERBAR sizerbar_semihosting;/**< info for resizable semihosting output view */
   SIZERBAR sizerbar_serialmon;  /**< info for resizable serial monitor */
@@ -4780,6 +5219,7 @@ enum {
   TAB_BREAKPOINTS,
   TAB_LOCALS,
   TAB_WATCHES,
+  TAB_REGISTERS,
   TAB_MEMORY,
   TAB_SEMIHOSTING,
   TAB_SERMON,
@@ -4858,7 +5298,6 @@ static void help_popup(struct nk_context *ctx, APPSTATE *state, float canvas_wid
       delta = INT_MIN;
     else if (nk_input_is_key_pressed(&ctx->input, NK_KEY_SCROLL_BOTTOM))
       delta = INT_MAX;
-    //??? enhancement: tab-completion, back to previous help/info screen
     if (delta < -0.1 || delta > 0.1) {
       nk_uint xoffs, yoffs;
       nk_group_get_scroll(ctx, "help", &xoffs, &yoffs);
@@ -4933,7 +5372,7 @@ static void button_bar(struct nk_context *ctx, APPSTATE *state, float panel_widt
   {
     RESETSTATE(state, STATE_EXEC_CMD);
     state->stateparam[0] = STATEPARAM_EXEC_UNTIL;
-    state->stateparam[1] = source_cursorline;
+    state->stateparam[1] = line_phys2source(source_cursorfile, source_cursorline);
   }
   float combo_width = panel_width - 6 * (BUTTON_WIDTH + 5);
   nk_layout_row_push(ctx, combo_width);
@@ -5000,15 +5439,30 @@ static void sourcecode_view(struct nk_context *ctx, APPSTATE *state)
       source_cursorline = linecount;
   }
 
+  /* if disassembly is requested, check whether to do this first */
+  if (state->disassemble_mode && source_cursorfile >= 0 && source_cursorfile < sources_count) {
+    SOURCELINE *item;
+    for (item = source_firstline(source_cursorfile); item != NULL && item->linenumber != 0; item = item->next)
+      {}  /* lines in assembly have address set, but no linenumber */
+    if (item == NULL) {
+      bool ok = sourcefile_disassemble(state->Filename, &sources[source_cursorfile], &state->armstate);
+      if (!ok) {
+        /* on failure, switch disassembly off (otherwise, this routine will be
+           re-entered each update) */
+        state->disassemble_mode = false;
+      }
+    }
+  }
+
   struct nk_rect bounds = nk_widget_bounds(ctx);
-  source_widget(ctx, "source", opt_fontsize, state->curstate == STATE_RUNNING);
+  source_widget(ctx, "source", opt_fontsize, state->curstate == STATE_RUNNING, state->disassemble_mode);
   if (state->curstate == STATE_STOPPED && nk_input_is_mouse_hovering_rect(&ctx->input, bounds)) {
     /* handle input for the source view only when not running */
     int row, col;
     source_mouse2char(ctx, "source", opt_fontsize, bounds, &row, &col);
     if (nk_input_mouse_clicked(&ctx->input, NK_BUTTON_LEFT, bounds)) {
       if (col == 0) {
-        toggle_breakpoint(state, source_cursorfile, row);
+        toggle_breakpoint(state, source_cursorfile, line_phys2source(source_cursorfile, row));
       } else {
         /* set the cursor line */
         if (row > 0 && row <= source_linecount(source_cursorfile))
@@ -5169,7 +5623,8 @@ static void console_view(struct nk_context *ctx, APPSTATE *state,
           }
         } else if (!handle_list_cmd(state->console_edit, &dwarf_symboltable, &dwarf_filetable)
                    && !handle_find_cmd(state->console_edit)
-                   && !handle_info_cmd(state->console_edit, &helptext_root, &state->popup_active, &state->reformat_help, &state->swo))
+                   && !handle_info_cmd(state->console_edit, &helptext_root, &state->popup_active, &state->reformat_help, &state->swo)
+                   && !handle_disasm_cmd(state->console_edit, &state->disassemble_mode))
         {
           char translated[sizearray(state->console_edit)];
           /* check monitor command, to avoid that the output should goes
@@ -5194,7 +5649,7 @@ static void console_view(struct nk_context *ctx, APPSTATE *state,
             TERM_EQU(state->console_edit, "enable", 6))
           state->refreshflags |= REFRESH_BREAKPOINTS | IGNORE_DOUBLE_DONE;
         /* save console_edit in a recent command list */
-        stringlist_add_head(&state->consoleedit_root, state->console_edit, 0);
+        stringlist_insert(&state->consoleedit_root, state->console_edit, 0);
         state->consoleedit_next = NULL;
         state->console_edit[0] = '\0';
       }
@@ -5563,7 +6018,7 @@ static void panel_locals(struct nk_context *ctx, APPSTATE *state,
     if (result == NK_MINIMIZED)
       refresh_panel_contents(state, STATE_LIST_LOCALS, REFRESH_LOCALS);
 
-    /* find longest watch expression and value */
+    /* find longest variable name and value */
     float namewidth = 0;
     float valwidth = 2 * ROW_HEIGHT;
     struct nk_user_font const *font = ctx->style.font;
@@ -5701,6 +6156,47 @@ static void panel_watches(struct nk_context *ctx, APPSTATE *state,
     }
 
     nk_sizer(ctx, &state->sizerbar_watches);
+    nk_tree_state_pop(ctx);
+  }
+}
+
+static void panel_registers(struct nk_context *ctx, APPSTATE *state,
+                            enum nk_collapse_states *tab_state, float rowheight)
+{
+  assert(ctx != NULL);
+  assert(state != NULL);
+  assert(tab_state != NULL);
+
+  nk_sizer_refresh(&state->sizerbar_registers);
+  int result = *tab_state;  /* save old state */
+  if (nk_tree_state_push(ctx, NK_TREE_TAB, "Registers", tab_state)) {
+    if (result == NK_MINIMIZED)
+      refresh_panel_contents(state, STATE_LIST_REGISTERS, REFRESH_REGISTERS);
+
+    float namewidth = 2 * ROW_HEIGHT;
+    float valwidth = 4 * ROW_HEIGHT;
+    nk_layout_row_dynamic(ctx, state->sizerbar_registers.size, 1);
+    nk_style_push_color(ctx, &ctx->style.window.fixed_background.data.color, nk_rgba(20, 29, 38, 225));
+    if (nk_group_begin(ctx, "registers", 0)) {
+      for (int idx = 0; idx < sizearray(register_def); idx++) {
+        nk_layout_row_begin(ctx, NK_STATIC, rowheight, 2);
+        nk_layout_row_push(ctx, namewidth);
+        nk_label(ctx, register_def[idx].name, NK_TEXT_LEFT);
+        nk_layout_row_push(ctx, valwidth);
+        int fonttype = guidriver_setfont(ctx, FONT_MONO);
+        char field[20];
+        sprintf(field, "0x%08lx", register_def[idx].value);
+        if (register_def[idx].flags & REGFLG_CHANGED)
+          nk_label_colored(ctx, field, NK_TEXT_LEFT, nk_rgb(255, 100, 128));
+        else
+          nk_label(ctx, field, NK_TEXT_LEFT);
+        guidriver_setfont(ctx, fonttype);
+      }
+      nk_group_end(ctx);
+    }
+    nk_style_pop_color(ctx);
+
+    nk_sizer(ctx, &state->sizerbar_registers);
     nk_tree_state_pop(ctx);
   }
 }
@@ -6204,9 +6700,12 @@ static void handle_stateaction(APPSTATE *state, enum nk_collapse_states tab_stat
       }
       break;
     case STATE_ATTACH:
-      if (check_stopped(&source_execfile, &source_execline)) {
+      if (check_stopped(&source_execfile, &source_execline, &exec_address)) {
         source_cursorfile = source_execfile;
-        source_cursorline = source_execline;
+        if (state->disassemble_mode)
+          source_cursorline = line_addr2phys(source_execfile, exec_address);
+        else
+          source_cursorline = line_source2phys(source_execfile, source_execline);
         state->atprompt = nk_true; /* in GDB 10, no prompt follows on error, so force it */
       }
       if (!state->atprompt)
@@ -6310,7 +6809,6 @@ static void handle_stateaction(APPSTATE *state, enum nk_collapse_states tab_stat
         break;
       if (STATESWITCH(state)) {
         /* check whether the firmware CRC matches the file in GDB */
-        //??? bug: for LPC targets, checksum must be corrected in the ELF file first (but we do not know the target type)
         task_stdin(&state->task, "compare-sections\n");
         state->atprompt = nk_false;
         MARKSTATE(state);
@@ -6359,13 +6857,15 @@ static void handle_stateaction(APPSTATE *state, enum nk_collapse_states tab_stat
       break;
     case STATE_CHECK_MAIN:
       /* first try to find "main" in the DWARF information (if this fails,
-         we have for some reason failed to load/parse the DWARF information) */
+         we have failed to load/parse the DWARF information) */
       if (strlen(state->EntryPoint) == 0)
-        strcpy(state->EntryPoint, "main");
-      if (STATESWITCH(state) && dwarf_sym_from_name(&dwarf_symboltable, state->EntryPoint, -1, -1) != NULL) {
-        //??? to do: also check whether "main" (or the chosen entry point) is a function
-        MOVESTATE(state, STATE_START);  /* main() found, restart program at main */
-        break;
+        strlcpy(state->EntryPoint, "main", sizearray(state->EntryPoint));
+      if (STATESWITCH(state)) {
+        const DWARF_SYMBOLLIST *entry = dwarf_sym_from_name(&dwarf_symboltable, state->EntryPoint, -1, -1);
+        if (entry != NULL && entry->code_range != 0) {
+          MOVESTATE(state, STATE_START);  /* main() found, restart program at main */
+          break;
+        }
       }
       if (!state->atprompt)
         break;
@@ -6386,9 +6886,12 @@ static void handle_stateaction(APPSTATE *state, enum nk_collapse_states tab_stat
         if (ptr != NULL && (ptr == item->text || *(ptr - 1) == ' ')) {
           MOVESTATE(state, STATE_START);    /* main() found, restart program at main */
         } else {
-          check_stopped(&source_execfile, &source_execline);
+          check_stopped(&source_execfile, &source_execline, &exec_address);
           source_cursorfile = source_execfile;
-          source_cursorline = source_execline;
+          if (state->disassemble_mode)
+            source_cursorline = line_addr2phys(source_execfile, exec_address);
+          else
+            source_cursorline = line_source2phys(source_execfile, source_execline);
           MOVESTATE(state, STATE_STOPPED);  /* main() not found, stay stopped */
           state->cont_is_run = nk_true;     /* but when "Cont" is pressed, "run" is performed */
         }
@@ -6427,10 +6930,16 @@ static void handle_stateaction(APPSTATE *state, enum nk_collapse_states tab_stat
           strcpy(state->cmdline, "-exec-interrupt\n");
           break;
         case STATEPARAM_EXEC_NEXT:
-          strcpy(state->cmdline, "-exec-next\n");
+          if (state->disassemble_mode)
+            strcpy(state->cmdline, "-exec-next-instruction\n");
+          else
+            strcpy(state->cmdline, "-exec-next\n");
           break;
         case STATEPARAM_EXEC_STEP:
-          strcpy(state->cmdline, "-exec-step\n");
+          if (state->disassemble_mode)
+            strcpy(state->cmdline, "-exec-step-instruction\n");
+          else
+            strcpy(state->cmdline, "-exec-step\n");
           break;
         case STATEPARAM_EXEC_UNTIL:
           sprintf(state->cmdline, "-exec-until %d\n", state->stateparam[1]);
@@ -6470,9 +6979,12 @@ static void handle_stateaction(APPSTATE *state, enum nk_collapse_states tab_stat
       break;
     case STATE_RUNNING:
       MARKSTATE(state);
-      if (check_stopped(&source_execfile, &source_execline)) {
+      if (check_stopped(&source_execfile, &source_execline, &exec_address)) {
         source_cursorfile = source_execfile;
-        source_cursorline = source_execline;
+        if (state->disassemble_mode)
+          source_cursorline = line_addr2phys(source_execfile, exec_address);
+        else
+          source_cursorline = line_source2phys(source_execfile, source_execline);
         MOVESTATE(state, STATE_STOPPED);
         state->refreshflags = 0;
         /* refresh locals & watches only when the respective view is open */
@@ -6480,6 +6992,8 @@ static void handle_stateaction(APPSTATE *state, enum nk_collapse_states tab_stat
           state->refreshflags |= REFRESH_LOCALS;
         if (tab_states[TAB_WATCHES] == NK_MAXIMIZED)
           state->refreshflags |= REFRESH_WATCHES;
+        if (tab_states[TAB_REGISTERS] == NK_MAXIMIZED)
+          state->refreshflags |= REFRESH_REGISTERS;
         /* only refresh memory if format & count is set, and if memory view is open */
         if (state->memdump.count > 0 && state->memdump.size > 0 && tab_states[TAB_MEMORY] == NK_MAXIMIZED)
           state->refreshflags |= REFRESH_MEMORY;
@@ -6499,6 +7013,8 @@ static void handle_stateaction(APPSTATE *state, enum nk_collapse_states tab_stat
         RESETSTATE(state, STATE_LIST_LOCALS);
       } else if (state->refreshflags & REFRESH_WATCHES) {
         RESETSTATE(state, STATE_LIST_WATCHES);
+      } else if (state->refreshflags & REFRESH_REGISTERS) {
+        RESETSTATE(state, STATE_LIST_REGISTERS);
       } else if (state->refreshflags & REFRESH_MEMORY) {
         RESETSTATE(state, STATE_VIEWMEMORY);
       } else if (check_running()) {
@@ -6553,6 +7069,20 @@ static void handle_stateaction(APPSTATE *state, enum nk_collapse_states tab_stat
         state->refreshflags &= ~REFRESH_WATCHES;
         MOVESTATE(state, STATE_STOPPED);
         watch_update(gdbmi_isresult());
+        gdbmi_sethandled(nk_false);
+      }
+      break;
+    case STATE_LIST_REGISTERS:
+      if (!state->atprompt)
+        break;
+      if (STATESWITCH(state)) {
+        task_stdin(&state->task, "-data-list-register-values --skip-unavailable x\n");
+        state->atprompt = nk_false;
+        MARKSTATE(state);
+      } else if (gdbmi_isresult() != NULL) {
+        state->refreshflags &= ~REFRESH_REGISTERS;
+        MOVESTATE(state, STATE_STOPPED);
+        registers_update(gdbmi_isresult());
         gdbmi_sethandled(nk_false);
       }
       break;
@@ -6957,6 +7487,7 @@ int main(int argc, char *argv[])
   config_read_tabstate("breakpoints", &tab_states[TAB_BREAKPOINTS], &appstate.sizerbar_breakpoints, NK_MAXIMIZED, 5 * ROW_HEIGHT, txtConfigFile);
   config_read_tabstate("locals", &tab_states[TAB_LOCALS], &appstate.sizerbar_locals, NK_MAXIMIZED, 5 * ROW_HEIGHT, txtConfigFile);
   config_read_tabstate("watches", &tab_states[TAB_WATCHES], &appstate.sizerbar_watches, NK_MINIMIZED, 5 * ROW_HEIGHT, txtConfigFile);
+  config_read_tabstate("locals", &tab_states[TAB_REGISTERS], &appstate.sizerbar_registers, NK_MAXIMIZED, 5 * ROW_HEIGHT, txtConfigFile);
   config_read_tabstate("memory", &tab_states[TAB_MEMORY], &appstate.sizerbar_memory, NK_MINIMIZED, 5 * ROW_HEIGHT, txtConfigFile);
   config_read_tabstate("semihosting", &tab_states[TAB_SEMIHOSTING], &appstate.sizerbar_semihosting, NK_MINIMIZED, 5 * ROW_HEIGHT, txtConfigFile);
   config_read_tabstate("serialmon", &tab_states[TAB_SERMON], &appstate.sizerbar_serialmon, NK_MINIMIZED, 5 * ROW_HEIGHT, txtConfigFile);
@@ -6964,6 +7495,7 @@ int main(int argc, char *argv[])
   nk_sizer_init(&appstate.sizerbar_breakpoints, appstate.sizerbar_breakpoints.size, ROW_HEIGHT, SEPARATOR_VER);
   nk_sizer_init(&appstate.sizerbar_locals, appstate.sizerbar_locals.size, ROW_HEIGHT, SEPARATOR_VER);
   nk_sizer_init(&appstate.sizerbar_watches, appstate.sizerbar_watches.size, ROW_HEIGHT, SEPARATOR_VER);
+  nk_sizer_init(&appstate.sizerbar_registers, appstate.sizerbar_registers.size, ROW_HEIGHT, SEPARATOR_VER);
   nk_sizer_init(&appstate.sizerbar_memory, appstate.sizerbar_memory.size, ROW_HEIGHT, SEPARATOR_VER);
   nk_sizer_init(&appstate.sizerbar_semihosting, appstate.sizerbar_semihosting.size, ROW_HEIGHT, SEPARATOR_VER);
   nk_sizer_init(&appstate.sizerbar_serialmon, appstate.sizerbar_serialmon.size, ROW_HEIGHT, SEPARATOR_VER);
@@ -7072,6 +7604,7 @@ int main(int argc, char *argv[])
   source_cursorline = 0;
   source_execfile = -1;
   source_execline = 0;
+  disasm_init(&appstate.armstate, DISASM_ADDRESS | DISASM_INSTR | DISASM_COMMENT);
 
   ctx = guidriver_init("BlackMagic Debugger", canvas_width, canvas_height,
                        GUIDRV_RESIZEABLE | GUIDRV_TIMER, opt_fontstd, opt_fontmono, opt_fontsize);
@@ -7161,6 +7694,7 @@ int main(int argc, char *argv[])
         panel_breakpoints(ctx, &appstate, &tab_states[TAB_BREAKPOINTS]);
         panel_locals(ctx, &appstate, &tab_states[TAB_LOCALS], opt_fontsize);
         panel_watches(ctx, &appstate, &tab_states[TAB_WATCHES], opt_fontsize);
+        panel_registers(ctx, &appstate, &tab_states[TAB_REGISTERS], opt_fontsize);
         panel_memory(ctx, &appstate, &tab_states[TAB_MEMORY], opt_fontsize);
         panel_semihosting(ctx, &appstate, &tab_states[TAB_SEMIHOSTING]);
         panel_serialmonitor(ctx, &appstate, &tab_states[TAB_SERMON]);
@@ -7176,10 +7710,12 @@ int main(int argc, char *argv[])
         help_popup(ctx, &appstate, canvas_width, canvas_height);
 
       /* mouse cursor shape */
-      if (appstate.sizerbar_breakpoints.hover || appstate.sizerbar_locals.hover
-          || appstate.sizerbar_watches.hover || appstate.sizerbar_memory.hover
-          || appstate.sizerbar_semihosting.hover || appstate.sizerbar_serialmon.hover
-          || appstate.sizerbar_swo.hover)
+      if (nk_is_popup_open(ctx))
+        pointer_setstyle(CURSOR_NORMAL);
+      else if (appstate.sizerbar_breakpoints.hover || appstate.sizerbar_locals.hover
+               || appstate.sizerbar_watches.hover || appstate.sizerbar_registers.hover
+               || appstate.sizerbar_memory.hover || appstate.sizerbar_semihosting.hover
+               || appstate.sizerbar_serialmon.hover || appstate.sizerbar_swo.hover)
         pointer_setstyle(CURSOR_UPDOWN);
       else if (splitter_ver.hover)
         pointer_setstyle(CURSOR_UPDOWN);
@@ -7211,6 +7747,7 @@ int main(int argc, char *argv[])
   config_write_tabstate("breakpoints", tab_states[TAB_BREAKPOINTS], &appstate.sizerbar_breakpoints, txtConfigFile);
   config_write_tabstate("locals", tab_states[TAB_LOCALS], &appstate.sizerbar_locals, txtConfigFile);
   config_write_tabstate("watches", tab_states[TAB_WATCHES], &appstate.sizerbar_watches, txtConfigFile);
+  config_write_tabstate("registers", tab_states[TAB_REGISTERS], &appstate.sizerbar_registers, txtConfigFile);
   config_write_tabstate("memory", tab_states[TAB_MEMORY], &appstate.sizerbar_memory, txtConfigFile);
   config_write_tabstate("semihosting", tab_states[TAB_SEMIHOSTING], &appstate.sizerbar_semihosting, txtConfigFile);
   config_write_tabstate("serialmon", tab_states[TAB_SERMON], &appstate.sizerbar_serialmon, txtConfigFile);
@@ -7249,6 +7786,7 @@ int main(int argc, char *argv[])
   sources_clear(nk_true);
   bmscript_clear();
   dwarf_cleanup(&dwarf_linetable, &dwarf_symboltable, &dwarf_filetable);
+  disasm_cleanup(&appstate.armstate);
   tcpip_cleanup();
   sermon_close();
   return exitcode;

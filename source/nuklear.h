@@ -5805,6 +5805,9 @@ template<typename T> struct nk_alignof{struct Big {T x; char c;}; enum {
 #define NK_ALIGNOF(t) ((char*)(&((struct {char c; t _h;}*)0)->_h) - (char*)0)
 #endif
 
+/* utility */
+NK_API nk_bool nk_is_popup_open(struct nk_context *ctx);
+
 #endif /* NK_NUKLEAR_H_ */
 
 /*

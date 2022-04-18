@@ -196,7 +196,7 @@ int tcpip_open(const char *ip_address)
     #if defined WIN32 || defined _WIN32
       return WSAGetLastError();
     #else
-      //???
+      return errno;
     #endif
   }
 

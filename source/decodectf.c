@@ -2,7 +2,7 @@
  * Functions to decode a byte stream matching a trace stream description (TSDL
  * file). It uses data structures created by parsectf.
  *
- * Copyright 2019-2021 CompuPhase
+ * Copyright 2019-2022 CompuPhase
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,6 +17,7 @@
  * limitations under the License.
  */
 
+#include <alloca.h>
 #include <assert.h>
 #include <stdio.h>
 #include <stdint.h>
@@ -29,9 +30,11 @@
   #include "strlcpy.h"
 #endif
 #if defined _MSC_VER
-    #define strdup(s)         _strdup(s)
+  #define strdup(s)   _strdup(s)
+  #define alloca(a)   _alloca(a)
 #endif
 
+#include "demangle.h"
 #include "parsetsdl.h"
 #include "decodectf.h"
 
@@ -274,25 +277,25 @@ void ctf_set_symtable(const DWARF_SYMBOLLIST *symtable)
 
 static int lookup_symbol(uint32_t address, char *symname, size_t maxlength)
 {
-  const DWARF_SYMBOLLIST *sym;
-
   if (symboltable == NULL)
     return 0;
-  sym = dwarf_sym_from_address(symboltable, address, 1);
+  const DWARF_SYMBOLLIST *sym = dwarf_sym_from_address(symboltable, address, 1);
   if (sym == NULL)
     return 0;
   assert(sym->name != NULL);
-  strlcpy(symname, sym->name, maxlength);
+  char *buffer = alloca(maxlength * sizeof(char));
+  if (demangle(buffer, maxlength, sym->name))
+    strlcpy(symname, buffer, maxlength);
+  else
+    strlcpy(symname, sym->name, maxlength);
   return 1;
 }
 
 static void str_reverse(char *str, int length)
 {
-  char *tail;
-
   assert(str != NULL);
   assert(length >= 0);
-  tail = str + length - 1;
+  char *tail = str + length - 1;
   while (tail > str) {
     char temp = *str;
     *str++ = *tail;

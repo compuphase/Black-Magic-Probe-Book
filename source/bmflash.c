@@ -1448,8 +1448,8 @@ int main(int argc, char *argv[])
   strlcpy(appstate.ParamFile, appstate.Filename, sizearray(appstate.ParamFile));
   strlcat(appstate.ParamFile, ".bmcfg", sizearray(appstate.ParamFile));
 
-  ctx = guidriver_init("BlackMagic Flash Programmer", WINDOW_WIDTH, WINDOW_HEIGHT, GUIDRV_TIMER,
-                       opt_fontstd, opt_fontmono, opt_fontsize);
+  ctx = guidriver_init("BlackMagic Flash Programmer", WINDOW_WIDTH, WINDOW_HEIGHT,
+                       GUIDRV_CENTER | GUIDRV_TIMER, opt_fontstd, opt_fontmono, opt_fontsize);
   nuklear_style(ctx);
 
   tab_states[TAB_OPTIONS] = NK_MINIMIZED;

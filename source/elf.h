@@ -3,10 +3,7 @@
  * for requirements of specific micro-controllers. At this moment, the utility
  * supports various ranges of the LPC family by NXP.
  *
- * Build this file with the macro STANDALONE defined on the command line to
- * create a self-contained executable.
- *
- * Copyright 2015,2019 CompuPhase
+ * Copyright 2015,2019-2022 CompuPhase
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -29,13 +26,22 @@
 
 enum {
   ELFERR_NONE = 0,
-  ELFERR_CHKSUMSET,        /* checksum was already the correct value (no error, but no change either) */
-  ELFERR_UNKNOWNDRIVER,    /* unknown microcontroller driver name */
-  ELFERR_FILEFORMAT,       /* unsupported file format */
-  ELFERR_NOMATCH,          /* no matching section / segment */
+  ELFERR_CHKSUMSET,     /* checksum was already the correct value (no error, but no change either) */
+  ELFERR_UNKNOWNDRIVER, /* unknown microcontroller driver name */
+  ELFERR_FILEFORMAT,    /* unsupported file format */
+  ELFERR_NOMATCH,       /* no matching section / segment */
+  ELFERR_MEMORY,        /* insufficient memory */
 };
 
-int elf_info(FILE *fp,int *wordsize,int *bigendian,int *machine);
+typedef struct tagELF_SYMBOL {
+  const char *name;     /* symbol name */
+  unsigned long address;/* memory address */
+  unsigned long size;   /* code size or data size (0 for unknown) */
+  unsigned char is_func;/* 1 for a function symbol, 0 for a variable/data */
+  unsigned char is_ext; /* 1 for external scope, 0 for file local scope */
+} ELF_SYMBOL;
+
+int elf_info(FILE *fp,int *wordsize,int *bigendian,int *machine,unsigned long *entry_addr);
 
 int elf_segment_by_index(FILE *fp,int index,
                          int *type,
@@ -49,6 +55,9 @@ int elf_section_by_name(FILE *fp,const char *sectionname,unsigned long *offset,
 int elf_section_by_address(FILE *fp,unsigned long baseaddr,
                            char *sectionname,size_t namelength,unsigned long *offset,
                            unsigned long *address,unsigned long *length);
+
+int elf_load_symbols(FILE *fp,ELF_SYMBOL *symbols,int *number);
+void elf_clear_symbols(ELF_SYMBOL *symbols,int number);
 
 int elf_patch_vecttable(FILE *fp,const char *driver,unsigned int *checksum);
 int elf_check_crp(FILE *fp,int *crp);

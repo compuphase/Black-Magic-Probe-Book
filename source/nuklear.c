@@ -23789,6 +23789,20 @@ nk_tooltipfv(struct nk_context *ctx, const char *fmt, va_list args)
 }
 #endif
 
+/* utility */
+NK_API nk_bool
+nk_is_popup_open(struct nk_context *ctx)
+{
+    struct nk_window *win;
+    struct nk_window *popup;
+
+    NK_ASSERT(ctx != NULL);
+    win = ctx->current;
+    if (ctx->current != ctx->active)
+        return nk_false;
+    popup = win->popup.win;
+    return (popup != NULL);
+}
 
 
 /*
