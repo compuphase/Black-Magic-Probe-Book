@@ -211,7 +211,7 @@ bmscan : $(OBJLIST_BMSCAN)
 	$(LNK) $(LFLAGS) -o$@ $^ -lbsd -lpthread
 
 elf-postlink : $(OBJLIST_POSTLINK)
-	$(LNK) $(LFLAGS) -o$@ $^
+	$(LNK) $(LFLAGS) -o$@ $^ -lbsd
 
 tracegen : $(OBJLIST_TRACEGEN)
 	$(LNK) $(LFLAGS) -o$@ $^ -lbsd

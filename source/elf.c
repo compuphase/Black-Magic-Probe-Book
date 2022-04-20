@@ -25,6 +25,13 @@
 #include <stdlib.h>
 #include <string.h>
 #include "elf.h"
+#if defined WIN32 || defined _WIN32
+  #if defined __MINGW32__ || defined __MINGW64__ || defined _MSC_VER
+    #include "strlcpy.h"
+  #endif
+#elif defined __linux__
+  #include <bsd/string.h>
+#endif
 
 #if defined __GNUC__
   #define PACKED        __attribute__((packed))

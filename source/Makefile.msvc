@@ -88,7 +88,7 @@ OBJLIST_BMTRACE = bmtrace.obj bmcommon.obj bmp-scan.obj bmp-script.obj bmp-suppo
 
 OBJLIST_BMSCAN = bmscan.obj bmp-scan.obj tcpip.obj
 
-OBJLIST_POSTLINK = elf-postlink.obj elf.obj
+OBJLIST_POSTLINK = elf-postlink.obj elf.obj strlcpy.obj
 
 OBJLIST_TRACEGEN = tracegen.obj parsetsdl.obj strlcpy.obj
 

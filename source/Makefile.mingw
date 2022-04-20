@@ -92,7 +92,7 @@ OBJLIST_BMTRACE = bmtrace.o bmcommon.o bmp-scan.o bmp-script.o bmp-support.o \
 
 OBJLIST_BMSCAN = bmscan.o bmp-scan.o tcpip.o
 
-OBJLIST_POSTLINK = elf-postlink.o elf.o
+OBJLIST_POSTLINK = elf-postlink.o elf.o strlcpy.o
 
 OBJLIST_TRACEGEN = tracegen.o parsetsdl.o strlcpy.o
 
