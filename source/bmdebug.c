@@ -807,14 +807,14 @@ static int console_autocomplete(char *text, size_t textsize, const DWARF_SYMBOLL
     { "down", NULL, NULL },
     { "enable", NULL, NULL },
     { "file", NULL, "%path" },
-    { "find", NULL, NULL },
+    { "find", NULL, "%func %var" },
     { "finish", "fin", NULL },
     { "frame", "f", NULL },
-    { "help", NULL, "break breakpoints data files keyboard monitor running serial stack status support svd trace user-defined" },
+    { "help", NULL, "assembly break breakpoints data files find keyboard monitor running serial stack status support svd trace user-defined" },
     { "info", NULL, "args breakpoints frame functions locals scope set sources stack svd variables vtbl" },
     { "list", NULL, "%func %var %file" },
     { "load", NULL, NULL },
-    { "monitor", "mon", "connect_srst hard_srst jtag_scan morse option swdp_scan targets tpwr traceswo vector_catch" },
+    { "monitor", "mon", "connect_srst frequency halt_timeout hard_srst heapinfo jtag_scan morse option swdp_scan targets tpwr traceswo vector_catch" },
     { "next", "n", NULL },
     { "print", "p", "%var %reg" },
     { "ptype", NULL, "%var" },
@@ -4055,6 +4055,10 @@ static bool handle_help_cmd(char *command, STRINGLIST *textroot, int *active,
     *active = POPUP_HELP;
     *reformat = nk_true;    /* by default, reformat (overruled for "help mon") */
     if (*cmdptr == '\0') {
+      stringlist_append(textroot, "BMDebug is a GDB front-end, specifcally for embedded debugging with the Black Magic Probe.", 0);
+      stringlist_append(textroot, "Copyright 2019-2022 CompuPhase", 0);
+      stringlist_append(textroot, "Licensed under the Apache License version 2.0", 0);
+      stringlist_append(textroot, "", 0);
       stringlist_append(textroot, "Front-end topics.", 0);
       stringlist_append(textroot, "", 0);
       stringlist_append(textroot, "assembly -- show assembly mixed with source code.", 0);
@@ -4124,6 +4128,7 @@ static bool handle_help_cmd(char *command, STRINGLIST *textroot, int *active,
       stringlist_append(textroot, "", 0);
       stringlist_append(textroot, "reset -- restart the target program; keep breakpoints and variable watches.", 0);
       stringlist_append(textroot, "reset hard -- restart both the debugger and the target program.", 0);
+      stringlist_append(textroot, "reset load -- restart the debugger and reload the target program.", 0);
       return true;
     } else if (TERM_EQU(cmdptr, "serial", 6)) {
       stringlist_append(textroot, "Configure the serial monitor.", 0);
@@ -5313,6 +5318,10 @@ static void help_popup(struct nk_context *ctx, APPSTATE *state, float canvas_wid
       }
       nk_group_set_scroll(ctx, "help", xoffs, yoffs);
     }
+
+    /* other keyboard functions */
+    if (nk_input_is_key_pressed(&ctx->input, NK_KEY_TAB))
+      console_autocomplete(state->help_edit, sizearray(state->help_edit), &dwarf_symboltable);
 
     nk_popup_end(ctx);
   } else {

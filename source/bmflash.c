@@ -639,6 +639,8 @@ static int help_popup(struct nk_context *ctx)
     "Black Magic Probe. It automatically handles idiosyncrasies of MCU\n"
     "families, and supports setting a serial number during the download\n"
     "(i.e. serialization). It does not require GDB.\n\n"
+    "Copyright 2019-2022 CompuPhase\n"
+    "Licensed under the Apache License version 2.0\n\n"
     "^3Options\n"
     "The MCU family must be set for post-processing the ELF file or\n"
     "performing additional configurations before the download. It is\n"

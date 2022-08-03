@@ -11997,6 +11997,12 @@ nk_input_button(struct nk_context *ctx, enum nk_buttons id, int x, int y, nk_boo
     btn->clicked_pos.y = (float)y;
     btn->down = down;
     btn->clicked++;
+    #ifdef NK_BUTTON_TRIGGER_ON_RELEASE
+        if (down == 1 && id == NK_BUTTON_LEFT) {
+            in->mouse.down_pos.x = btn->clicked_pos.x;
+            in->mouse.down_pos.y = btn->clicked_pos.y;
+        }
+    #endif
 }
 NK_API void
 nk_input_scroll(struct nk_context *ctx, struct nk_vec2 val)
@@ -12057,8 +12063,14 @@ nk_input_has_mouse_click_in_rect(const struct nk_input *i, enum nk_buttons id,
     const struct nk_mouse_button *btn;
     if (!i) return nk_false;
     btn = &i->mouse.buttons[id];
-    if (!NK_INBOX(btn->clicked_pos.x,btn->clicked_pos.y,b.x,b.y,b.w,b.h))
-        return nk_false;
+    #ifdef NK_BUTTON_TRIGGER_ON_RELEASE
+        if (!NK_INBOX(btn->clicked_pos.x,btn->clicked_pos.y,b.x,b.y,b.w,b.h)
+            || !NK_INBOX(i->mouse.down_pos.x,i->mouse.down_pos.y,b.x,b.y,b.w,b.h))
+            return nk_false;
+    #else
+        if (!NK_INBOX(btn->clicked_pos.x,btn->clicked_pos.y,b.x,b.y,b.w,b.h))
+            return nk_false;
+    #endif
     return nk_true;
 }
 NK_API nk_bool
@@ -21513,7 +21525,8 @@ nk_do_edit(nk_flags *state, struct nk_command_buffer *out,
         }
 
         /* draw text */
-        {struct nk_color background_color;
+        { /* local block */
+        struct nk_color background_color;
         struct nk_color text_color;
         struct nk_color sel_background_color;
         struct nk_color sel_text_color;
@@ -21632,7 +21645,8 @@ nk_do_edit(nk_flags *state, struct nk_command_buffer *out,
                 nk_fill_rect(out, label, 0, cursor_color);
                 nk_widget_text(out, label, cursor_ptr, glyph_len, &txt, NK_TEXT_LEFT, font);
             }
-        }}
+        }
+        } /* end local */
     } else {
         /* not active so just draw text */
         int l = nk_str_len_char(&edit->string);
@@ -21792,14 +21806,18 @@ nk_edit_buffer(struct nk_context *ctx, nk_flags flags,
         if (flags & NK_EDIT_CLIPBOARD)
             edit->clip = ctx->clip;
         edit->active = (unsigned char)win->edit.active;
-    } else edit->active = nk_false;
+    } else {
+        edit->active = nk_false;
+    }
+    if (nk_is_popup_open(ctx))
+        edit->active = nk_false;
     edit->mode = win->edit.mode;
 
     filter = (!filter) ? nk_filter_default: filter;
     prev_state = (unsigned char)edit->active;
     in = (flags & NK_EDIT_READ_ONLY) ? 0: in;
     ret_flags = nk_do_edit(&ctx->last_widget_state, &win->buffer, bounds, flags,
-                    filter, edit, &style->edit, in, style->font);
+                           filter, edit, &style->edit, in, style->font);
 
     if (ctx->last_widget_state & NK_WIDGET_STATE_HOVER)
         ctx->style.cursor_active = ctx->style.cursors[NK_CURSOR_TEXT];
@@ -23797,9 +23815,9 @@ nk_is_popup_open(struct nk_context *ctx)
     struct nk_window *popup;
 
     NK_ASSERT(ctx != NULL);
-    win = ctx->current;
     if (ctx->current != ctx->active)
         return nk_false;
+    win = ctx->current;
     popup = win->popup.win;
     return (popup != NULL);
 }
