@@ -3,8 +3,12 @@
 This guide covers setting up and using the <a href="https://github.com/blackmagic-debug/blackmagic/">Black Magic Probe</a>. The Black Magic Probe is a low cost JTAG/SWD probe for ARM Cortex micro-controllers. A distinguishing feature of the Black Magic Probe is that it embeds a GDB server. As a result, the GNU Debugger can directly connect to the Black Magic Probe.<br>
 
 While setting up and using the Black Magic Probe has also been covered in wikis and blogs, I found that those description often only scratched the surface of the subject. With this guide, I set out to give a more comprehensive account. Over time, this guide has been updated to cover new firmware releases, as well as specific notes on [ctxLink](http://www.sidprice.com/ctxlink/), a derivative of the Black Magic Probe that offers a WiFi connection.
+
+The guide is licensed under the [Creative Commons Attribution-NonCommercial-NoDerivatives 4.0 International License](https://creativecommons.org/licenses/by-nc-nd/4.0/).
 ## Utilities
 Several utilities accompagny this guide. Some are small, such as `bmscan` to locate the (virtual) serial port at which the Black Magic Probe is found (or scans the local network for ctxLink). Another is a helper tool for a specific family of micro-controllers (`elf-postlink`). There are GUI utilities and text-mode utilities. All have been tested under Microsoft Windows and Linux.
+
+The software is licensed under the [Apache License, version 2.0](https://www.apache.org/licenses/LICENSE-2.0).
 
 For the purpose of troubleshooting, pre-build versions of the "hosted" variant of the Black Magic firmware are also available for Windows and Linux (see [Releases](https://github.com/compuphase/Black-Magic-Probe-Book/releases)).
 ## Building the software
