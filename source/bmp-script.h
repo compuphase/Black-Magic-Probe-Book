@@ -3,7 +3,7 @@
  * automatically handle device-specific settings. It can use the GDB-RSP serial
  * interface, or the GDB-MI console interface.
  *
- * Copyright 2019-2020 CompuPhase
+ * Copyright 2019-2022 CompuPhase
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -26,16 +26,32 @@
   extern "C" {
 #endif
 
-#define SCRIPT_MAGIC  0x6dce7fd0  /**< magic value for parameter replacement */
+enum {
+  OT_LITERAL,
+  OT_ADDRESS,
+  OT_PARAM,
+};
+typedef struct tagOPERAND {
+  uint32_t data;  /* register or memory address, literal value, or parameter index */
+  uint16_t type;  /* one of the OT_xxx values */
+  uint16_t size;  /* operand size in bytes */
+} OPERAND;
+
+enum {
+  OP_MOV,       /* a = b */
+  OP_ORR,       /* a |= b */
+  OP_AND,       /* a &= b */
+  OP_AND_INV,   /* a &= ~b */
+};
 
 int bmscript_load(const char *mcu, const char *architecture);
 void bmscript_clear(void);
 void bmscript_clearcache(void);
 
-int bmscript_line(const char *name, char *oper, uint32_t *address, uint32_t *value, uint8_t *size);
-int bmscript_line_fmt(const char *name, char *line, const unsigned long *params);
+bool bmscript_line(const char *name, uint16_t *oper, OPERAND *lvalue, OPERAND *rvalue);
+bool bmscript_line_fmt(const char *name, char *line, const unsigned long *params, size_t paramcount);
 
-int architecture_match(const char *architecture, const char *mcufamily);
+bool architecture_match(const char *architecture, const char *mcufamily);
 
 #if defined __cplusplus
   }

@@ -29,6 +29,7 @@
 #include <assert.h>
 #include <ctype.h>
 #include <stdarg.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -454,26 +455,44 @@ int bmp_detach(int powerdown)
  */
 int bmp_checkversionstring(void)
 {
-  char buffer[512];
-  size_t size;
-  int probe = PROBE_UNKNOWN;
-
   if (!bmp_isopen())
     return PROBE_UNKNOWN;
 
+  char line[512];
+  memset(line, 0, sizeof line);
+
+  int probe = PROBE_UNKNOWN;
   gdbrsp_xmit("qRcmd,version", -1);
-  do {
-    char *ptr;
-    size = gdbrsp_recv(buffer, sizearray(buffer), 1000);
-    if (size > 0 && buffer[0] == 'o' && (ptr = strchr(buffer, '\n')) != NULL) {
-      int p;
-      *ptr = '\0';
-      if ((p = check_versionstring(buffer + 1)) != PROBE_UNKNOWN)
-        probe = p;
+  while (probe == PROBE_UNKNOWN) {
+    char buffer[512];
+    size_t size = gdbrsp_recv(buffer, sizearray(buffer) - 1, 1000);
+    if (size > 0) {
+      assert(size < sizearray(buffer));
+      buffer[size] = '\0';
+      char *ptr;
+      if (buffer[0] == 'o') {
+        if (line[0] == 'o')
+          strlcat(line, buffer + 1, sizearray(line));
+        else
+          strlcpy(line, buffer, sizearray(line));
+        if ((ptr = strchr(line, '\n'))!= NULL) {
+          int p = check_versionstring(line + 1);
+          if (p != PROBE_UNKNOWN && 0)
+            probe = p;
+          memset(line, 0, sizeof line);
+        }
+      } else if ((ptr = strchr(buffer, 'o')) != NULL) {
+        strlcpy(line, ptr, sizearray(line));
+      } else if (size == 2 && memcmp(buffer, "OK", size) == 0) {
+        /* end response found (when arriving here, the version string has
+           probably not been recognized) */
+        break;
+      } else if (size == 0) {
+        /* no new data arrived within the time-out, assume failure */
+        return PROBE_UNKNOWN;
+      }
     }
-  } while (size > 0 && buffer[0] == 'o');
-  if (size != 2 || memcmp(buffer, "OK", size) != 0)
-    return PROBE_UNKNOWN;
+  }
   return probe;
 }
 
@@ -860,56 +879,75 @@ static int hex2byte_array(const char *hex, unsigned char *byte)
  *                  of required parameters depends on the stript. This parameter
  *                  may be NULL if the script needs no parameters at all.
  *
- *  \return 1 on success, 0 on failure.
+ *  \return true on success, false on failure.
  *
- *  \note When the line of a script has a magic value for the "value" field, it
- *        is replaced by a parameter.
+ *  \note If the script returns a value, this is stored in params[0] on return.
+ *        Thus, a script that has a result, should have a "params" parameter for
+ *        at least one element.
  */
-int bmp_runscript(const char *name, const char *mcu, const char *arch, const unsigned long *params)
+bool bmp_runscript(const char *name, const char *mcu, const char *arch, unsigned long *params, size_t paramcount)
 {
-  uint32_t address, value;
-  uint8_t size;
-  char oper;
-  int result;
-
   bmscript_clearcache();
-  bmscript_load(mcu, arch);  /* very quick if the scriptsfor the MCU are already in memory */
-  result = 1;
-  while (result && bmscript_line(name, &oper, &address, &value, &size)) {
+  bmscript_load(mcu, arch);  /* very quick if the scripts for the MCU are already in memory */
+  bool result = true;
+  OPERAND lvalue, rvalue;
+  uint16_t oper;
+  while (result && bmscript_line(name, &oper, &lvalue, &rvalue)) {
+    bool copyresult = false;
+    if (lvalue.type == OT_PARAM) {
+      if (params == NULL)
+        continue;
+      if (lvalue.data < paramcount)
+        lvalue.data = (uint32_t)params[lvalue.data];  /* replace address parameter */
+      else if (lvalue.data == ~0)
+        copyresult = true;  /* special "$" parameter */
+      else
+        continue;           /* ignore row on invalid parameter */
+    }
     char cmd[100];
     size_t len = 0;
-    if ((address & ~0xf) == SCRIPT_MAGIC) {
-      assert(params != NULL);
-      address = (uint32_t)params[address & 0xf];  /* replace address parameter */
-      if (address == ~0)
-        continue; /* ignore row on invalid address */
-    }
-    if ((value & ~0xf) == SCRIPT_MAGIC) {
-      assert(params != NULL);
-      value = (uint32_t)params[value & 0xf];      /* replace value parameter */
-    }
-    if (oper == '|' || oper == '&' || oper == '~') {
+    if (oper == OP_ORR || oper == OP_AND || oper == OP_AND_INV) {
       uint32_t cur = 0;
       uint8_t bytes[4] = { 0, 0, 0, 0 };
-      sprintf(cmd, "m%08X,%X:", address, size);
+      sprintf(cmd, "m%08X,%X:", lvalue.data, lvalue.size);
       gdbrsp_xmit(cmd, -1);
       len = gdbrsp_recv(cmd, sizearray(cmd), 1000);
       cmd[len] = '\0';
       hex2byte_array(cmd, bytes);
-      memmove(&cur, bytes, size);
-      if (oper == '|')
-        value |= cur;
-      else if (oper == '&')
-        value &= cur;
-      else
-        value &= ~cur;
+      memmove(&cur, bytes, lvalue.size);
+      if (oper == OP_ORR)
+        rvalue.data |= cur;
+      else if (oper == OP_AND)
+        rvalue.data &= cur;
+      else if (oper == OP_AND_INV)
+        rvalue.data &= ~cur;
     }
-    sprintf(cmd, "X%08X,%X:", address, size);
-    len = strlen(cmd);
-    memmove(cmd + len, &value, size);
-    gdbrsp_xmit(cmd, len + size);
-    len = gdbrsp_recv(cmd, sizearray(cmd), 1000);
-    result = (len == 2 && memcmp(cmd, "OK", len) == 0);
+    if (rvalue.type == OT_PARAM) {
+      if (params != NULL && rvalue.data < paramcount)
+        rvalue.data = (uint32_t)params[rvalue.data];  /* replace address parameter */
+      else
+        continue; /* ignore row on invalid parameter */
+    } else if (rvalue.type == OT_ADDRESS) {
+      uint8_t bytes[4] = { 0, 0, 0, 0 };
+      sprintf(cmd, "m%08X,%X:", rvalue.data, rvalue.size);
+      gdbrsp_xmit(cmd, -1);
+      len = gdbrsp_recv(cmd, sizearray(cmd), 1000);
+      cmd[len] = '\0';
+      hex2byte_array(cmd, bytes);
+      memmove(&rvalue.data, bytes, rvalue.size);
+    }
+    if (copyresult) {
+      assert(params != NULL);
+      params[0] = rvalue.data;
+      result = true;
+    } else {
+      sprintf(cmd, "X%08X,%X:", lvalue.data, lvalue.size);
+      len = strlen(cmd);
+      memmove(cmd + len, &rvalue.data, rvalue.size);
+      gdbrsp_xmit(cmd, len + rvalue.size);
+      len = gdbrsp_recv(cmd, sizearray(cmd), 1000);
+      result = (len == 2 && memcmp(cmd, "OK", len) == 0);
+    }
   }
 
   return result;

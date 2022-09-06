@@ -3,7 +3,7 @@
  * parser is the base for the tracegen code generation utility and the CTF
  * binary stream parser.
  *
- * Copyright 2019 CompuPhase
+ * Copyright 2019-2022 CompuPhase
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -58,6 +58,7 @@ enum {
   CTFERR_NAMEREQUIRED,  /* a name for ... is required */
   CTFERR_DUPLICATE_NAME,/* duplicate name ... */
   CTFERR_CLOCK_IS_INT,  /* clock must be mapped to integer type */
+  CTFERR_DUPLICATE_SETTING,
 };
 
 enum {
@@ -144,6 +145,7 @@ typedef struct tagCTF_EVENT {
   int id;
   int stream_id;
   char name[CTF_NAME_LENGTH];
+  char *attribute;
   CTF_EVENT_FIELD field_root;
 } CTF_EVENT;
 

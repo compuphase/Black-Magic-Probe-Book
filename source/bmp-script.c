@@ -3,7 +3,7 @@
  * automatically handle device-specific settings. It can use the GDB-RSP serial
  * interface, or the GDB-MI console interface.
  *
- * Copyright 2019-2021 CompuPhase
+ * Copyright 2019-2022 CompuPhase
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -36,6 +36,7 @@
 #endif
 #include <assert.h>
 #include <ctype.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -67,10 +68,9 @@ typedef struct tagSCRIPT_DEF {  /* hard-coded script (in this source file) */
 } SCRIPT_DEF;
 
 typedef struct tagSCRIPTLINE {  /* interpreted script instruction */
-  uint32_t address; /* register address (destination) */
-  uint32_t value;   /* value to store */
-  uint8_t size;     /* size of the value / register */
-  char oper;        /* '=', '|', '&' or '~' */
+  OPERAND lvalue;   /* register address (destination) */
+  OPERAND rvalue;   /* value to store */
+  uint16_t oper;    /* one of the OP_xxx values */
 } SCRIPTLINE;
 
 typedef struct tagSCRIPT {
@@ -89,11 +89,16 @@ typedef struct tagREG_CACHE {
 
 
 static const REG_DEF register_defaults[] = {
-  { "SYSCON_SYSMEMREMAP",   0x40048000, 4, "LPC8xx,LPC11xx*,LPC11Uxx,LPC12xx,LPC13xx" }, /**< LPC Cortex M0 series */
+  { "SYSCON_SYSMEMREMAP",   0x40048000, 4, "LPC8xx,LPC8N04,LPC11xx*,LPC11Uxx,"
+                                           "LPC12xx,LPC13xx,LPC11U3x" },        /**< LPC Cortex M0 series */
   { "SYSCON_SYSMEMREMAP",   0x40074000, 4, "LPC15xx" },                         /**< LPC15xx series */
   { "SCB_MEMMAP",           0x400FC040, 4, "LPC17xx" },                         /**< LPC175x/176x series */
   { "SCB_MEMMAP",           0xE01FC040, 4, "LPC21xx,LPC22xx,LPC23xx,LPC24xx" }, /**< LPC ARM7TDMI series */
   { "M4MEMMAP",             0x40043100, 4, "LPC43xx*" },                        /**< LPC43xx series */
+  { "PART_ID",              0X400483F4, 4, "LPC8N04,LPC11xx,LPC12xx,LPC13xx" }, /**< DEVICE_ID register, LPC Cortex M0 series */
+  { "PART_ID",              0x400483F8, 4, "LPC8xx,LPC11U3x,LPC11xx-XL" },      /**< DEVICE_ID register, LPC Cortex M0 series */
+  { "PART_ID",              0x400743F8, 4, "LPC15xx" },                         /**< DEVICE_ID register, LPC15xx series */
+  { "PART_ID",              0x40043200, 4, "LPC43xx" },                         /**< CHIP_ID register, LPC43xx series */
 
   { "RCC_APB2ENR",          0x40021018, 4, "STM32F1*" },                        /**< STM32F1 APB2 Peripheral Clock Enable Register */
   { "AFIO_MAPR",            0x40010004, 4, "STM32F1*" },                        /**< STM32F1 AF remap and debug I/O configuration */
@@ -102,11 +107,18 @@ static const REG_DEF register_defaults[] = {
   { "GPIOB_AFRL",           0x40020420, 4, "STM32F4*,STM32F7*" },               /**< STM32F4 GPIO Port B Alternate Function Low Register */
   { "GPIOB_OSPEEDR",        0x40020408, 4, "STM32F4*,STM32F7*" },               /**< STM32F4 GPIO Port B Output Speed Register */
   { "GPIOB_PUPDR",          0x4002040C, 4, "STM32F4*,STM32F7*" },               /**< STM32F4 GPIO Port B Pull-Up/Pull-Down Register */
-  { "DBGMCU_CR",            0xE0042004, 4, "STM32F03,STM32F05,STM32F07,STM32F09,STM32F1*,STM32F2*,STM32F3*,STM32F4*,STM32F7*" },  /**< STM32 Debug MCU Configuration Register */
+  { "DBGMCU_IDCODE",        0x40015800, 4, "STM32F03,STM32F05,STM32F07,STM32F09" }, /**< DBGMCU_IDCODE register, IDCODE in low 12 bits */
+  { "DBGMCU_IDCODE",        0xE0042000, 4, "STM32F1*,STM32F2*,STM32F3*,STM32F4*,"
+                                           "STM32F7*,GD32F1*,GD32F3*,GD32E230" },   /**< DBGMCU_IDCODE register, IDCODE in low 12 bits */
+  { "DBGMCU_CR",            0xE0042004, 4, "STM32F03,STM32F05,STM32F07,STM32F09,"
+                                           "STM32F1*,STM32F2*,STM32F3*,STM32F4*,"
+                                           "STM32F7*,GD32F1*,GD32F3*,GD32E230" },   /**< STM32 Debug MCU Configuration Register */
 
   { "TRACECLKDIV",          0x400480AC, 4, "LPC13xx" },
   { "TRACECLKDIV",          0x400740D8, 4, "LPC15xx" },
-  { "IOCON_PIO0_9",         0x40044024, 4, "LPC13xx" },
+  { "IOCON_PIO0_9",         0x40044024, 4, "LPC1315,LPC1316,LPC1317,LPC1345,LPC1346,LPC1347" },
+  { "IOCON_PIO0_9",         0x40044064, 4, "LPC1311,LPC1313,LPC1342,LPC1343" },
+  { "PINASSIGN15",          0x4003803C, 4, "LPC15xx" },
 
   { "SCB_DHCSR",            0xE000EDF0, 4, "*" },   /**< Debug Halting Control and Status Register */
   { "SCB_DCRSR",            0xE000EDF4, 4, "*" },   /**< Debug Core Register Selector Register */
@@ -162,11 +174,11 @@ static const SCRIPT_DEF script_defaults[] = {
   },
   { "swo_device", "STM32F4*,STM32F7*",
     "RCC_AHB1ENR |= 0x02 \n"    /* enable GPIOB clock */
-    "GPIOB_MODER ~= 0x00c0 \n"  /* PB3: use alternate function */
+    "GPIOB_MODER &= ~0x00c0 \n" /* PB3: use alternate function */
     "GPIOB_MODER |= 0x0080 \n"
-    "GPIOB_AFRL ~= 0xf000 \n"   /* set AF0 (==TRACESWO) on PB3 */
+    "GPIOB_AFRL &= ~0xf000 \n"  /* set AF0 (==TRACESWO) on PB3 */
     "GPIOB_OSPEEDR |= 0x00c0 \n"/* set max speed on PB3 */
-    "GPIOB_PUPDR ~= 0x00c0 \n"  /* no pull-up or pull-down on PB3 */
+    "GPIOB_PUPDR &= ~0x00c0 \n" /* no pull-up or pull-down on PB3 */
     "DBGMCU_CR |= 0x20 \n"      /* 1 << 5 */
   },
   { "swo_device", "LPC13xx",
@@ -174,26 +186,27 @@ static const SCRIPT_DEF script_defaults[] = {
      "IOCON_PIO0_9 = 0x93 \n"
   },
   { "swo_device", "LPC15xx",
-    "TRACECLKDIV = 1\n"
-    /* LPC_SWM->PINASSIGN15 = (LPC_SWM->PINASSIGN15 & ~(0xff << 8)) | (pin << 8); */
+    "TRACECLKDIV = 1 \n"
+    "PINASSIGN15 &= ~0x0000ff00 \n"
+    "PINASSIGN15 |=  0x00000100 \n" /* (pin << 8) */
   },
 
-  /* swo_generic
+  /* swo_trace
      $0 = mode: 1 = Manchester, 2 = Asynchronous
      $1 = CPU clock divider, MCU clock / bitrate
-     $2 = baudrate
+     $2 = baudrate (only used for Cortex M0/M0+)
      $3 = memory address for variable; Cortex M0/M0+ */
-  { "swo_generic", "*",
-    "SCB_DEMCR = 0x1000000 \n"  /* 1 << 24 */
+  { "swo_trace", "*",
+    "SCB_DEMCR = 0x1000000 \n"  /* TRCENA (1 << 24) */
     "TPIU_CSPSR = 1 \n"         /* protocol width = 1 bit */
     "TPIU_SPPR = $0 \n"         /* 1 = Manchester, 2 = Asynchronous */
     "TPIU_ACPR = $1 \n"         /* CPU clock divider */
     "TPIU_FFCR = 0 \n"          /* turn off formatter, discard ETM output */
     "ITM_LAR = 0xC5ACCE55 \n"   /* unlock access to ITM registers */
-    "ITM_TCR = 0x11 \n"         /* (1 << 4) | 1 */
+    "ITM_TCR = 0x11 \n"         /* SWOENA (1 << 4) | ITMENA (1 << 0) */
     "ITM_TPR = 0 \n"            /* privileged access is off */
   },
-  { "swo_generic", "[M0]",
+  { "swo_trace", "[M0]",
     "$3 = $2 \n"                /* overrule generic script for M0/M0+, set baudrate */
   },
 
@@ -206,6 +219,39 @@ static const SCRIPT_DEF script_defaults[] = {
   { "swo_channels", "[M0]",
     "$1 = $0 \n"                /* overrule generic script for M0/M0+, mark channel(s) as enabled */
   },
+
+  /* swo_profile (generic)
+     $0 = mode: 1 = Manchester, 2 = Asynchronous
+     $1 = CPU clock divider, MCU clock / bitrate
+     $2 = sampling interval divider (0=1K, 15=16K) */
+  { "swo_profile", "*",
+    "SCB_DEMCR = 0x1000000 \n"  /* TRCENA (1 << 24) */
+    "TPIU_CSPSR = 1 \n"         /* protocol width = 1 bit */
+    "TPIU_SPPR = $0 \n"         /* 1 = Manchester, 2 = Asynchronous */
+    "TPIU_ACPR = $1 \n"         /* CPU clock divider */
+    "TPIU_FFCR = 0 \n"          /* turn off formatter, discard ETM output */
+    "ITM_LAR = 0xC5ACCE55 \n"   /* unlock access to ITM registers */
+    "ITM_TCR = 0x10009 \n"      /* TraceBusID=1 (n << 16) | DWTENA (1 << 3) | ITMENA (1 << 0) */
+    "ITM_TPR = 0 \n"            /* privileged access is off */
+    "DWT_CTRL = 0x121F \n"      /* PCSAMPLENA (1 << 12) | CYCTAP (1 << 9) | POSTPRESET=15 (n << 1) | CYCCNTENA (1 << 0) */
+  },
+
+  /* swo_close (generic) */
+  { "swo_channels", "*",
+    "SCB_DEMCR = 0 \n"
+    "ITM_LAR = 0xC5ACCE55 \n"   /* unlock access to ITM registers */
+    "ITM_TCR = 0 \n"
+    "ITM_TPR = 0 \n"            /* privileged access is off */
+  },
+
+  /* reading microcontroller's "part id" */
+  { "partid", "STM32F*",
+    "$ = DBGMCU_IDCODE \n"
+  },
+  { "partid", "LPC8*,LPC11*,LPC12*,LPC13*,LPC15*,LPC43*",
+    "$ = PART_ID \n"
+  },
+
 };
 
 
@@ -233,7 +279,7 @@ static const char *skiptrailing(const char *base, const char *end)
  *  "architecture" string is a wildcard. The comparison is case-insensitive
  *  (but the "x" must be lower case).
  */
-int architecture_match(const char *architecture, const char *mcufamily)
+bool architecture_match(const char *architecture, const char *mcufamily)
 {
   int i;
 
@@ -241,12 +287,12 @@ int architecture_match(const char *architecture, const char *mcufamily)
     /* if the character in the architecture is a lower case "x", it is a
        wild-card; otherwise the comparison is case-insensitive */
     if (architecture[i] != 'x' && toupper(architecture[i]) != toupper(mcufamily[i]))
-      return 0;
+      return false;
   }
   return architecture[i] == '\0' && mcufamily[i] == '\0';
 }
 
-static int mcu_match(const char *mcufamily, const char *list)
+static bool mcu_match(const char *mcufamily, const char *list)
 {
   const char *head, *separator;
   char matchname[50];
@@ -277,7 +323,7 @@ static int mcu_match(const char *mcufamily, const char *list)
       strncpy(matchname, head, matchlen);
       matchname[matchlen] = '\0';
       if (architecture_match(matchname, mcufamily))
-        return 1;   /* exact match */
+        return true;   /* exact match */
     }
     head = (*separator != '\0') ? skipleading(separator + 1) : separator;
   }
@@ -295,7 +341,7 @@ static int mcu_match(const char *mcufamily, const char *list)
       /* wildcard must be at the end of the entry */
       assert(wildcard[1] == ',' || wildcard[1] == ' ' || wildcard[1] == '\0');
       if (matchlen == 0)
-        return 1;   /* match-all wildcard */
+        return true;   /* match-all wildcard */
       if (namelen > matchlen && matchlen < sizearray(matchname)) {
         char mcuname[50];
         strncpy(mcuname, mcufamily, matchlen);
@@ -303,20 +349,34 @@ static int mcu_match(const char *mcufamily, const char *list)
         strncpy(matchname, head, matchlen);
         matchname[matchlen] = '\0';
         if (architecture_match(matchname, mcuname))
-          return 1; /* match on prefix */
+          return true; /* match on prefix */
       }
     }
     head = (*separator != '\0') ? skipleading(separator + 1) : separator;
   }
 
-  return 0;
+  return false;
 }
 
+/** parseline() parses a script line, substituting registers and variable
+ *  definitions.
+ *
+ *  \param line       [in] Text line.
+ *  \param registers  [in] Array with registers that match the MCU.
+ *  \param reg_count  The size of the register array.
+ *  \param oper       [out] The operation code, should be one of the OP_xxx
+ *                    enumeration values.
+ *  \param lvalue     [out] The address of the register or memory location to
+ *                    set.
+ *  \param rvalue     [out] The value to set the register or memory location to,
+ *                    or an address for a dereferenced assignment.
+ *
+ *  \return Pointer to the start of the next line in the script, or NULL for a
+ *          syntax error.
+ */
 static const char *parseline(const char *line, const REG_DEF *registers, size_t reg_count,
-                             char *oper, uint32_t *address, uint32_t *value, uint8_t *size)
+                             uint16_t *oper, OPERAND *lvalue, OPERAND *rvalue)
 {
-  int invert = 0;
-
   assert(line != NULL);
 
   /* ignore any "set" command */
@@ -324,14 +384,83 @@ static const char *parseline(const char *line, const REG_DEF *registers, size_t 
   if (strncmp(line, "set", 3) == 0 && line[3] <= ' ')
     line = skipleading(line + 3);
 
-  /* memory address or register */
-  assert(address != NULL && size != NULL);
+  /* lvalue (memory address or register) */
+  assert(lvalue != NULL);
   if (isdigit(*line)) {
-    *address = strtoul(line, (char**)&line, 0);
-    *size = 4;
+    lvalue->data = strtoul(line, (char**)&line, 0);
+    lvalue->size = 4;
+    lvalue->type = OT_ADDRESS;
   } else if (*line == '$') {
-    *address = SCRIPT_MAGIC + (line[1] - '0');
-    *size = 4;
+    lvalue->data = isdigit(line[1]) ? line[1] - '0' : ~0;
+    lvalue->size = 4;
+    lvalue->type = OT_PARAM;
+    line += 1 + (isdigit(line[1]) != 0);
+  } else {
+    const char *tail;
+    size_t r;
+    for (tail = line; isalnum(*tail) || *tail == '_'; tail++)
+      {}
+    assert(registers != NULL);
+    for (r = 0; r < reg_count && strncmp(line, registers[r].name, (tail - line))!= 0; r++)
+      {}
+    assert(r < reg_count);  /* for predefined script, register should always be found */
+    if (r >= reg_count)
+      return NULL;
+    lvalue->data = registers[r].address;
+    lvalue->size = registers[r].size;
+    lvalue->type = OT_ADDRESS;
+    line = tail;
+  }
+
+  /* operation */
+  line = skipleading(line);
+  assert(oper != NULL);
+  switch (*line) {
+  case '=':
+    *oper = OP_MOV;
+    line++;
+    break;
+  case '|':
+    *oper = OP_ORR;
+    line++;
+    if (*line == '=')
+      line++;       /* '=' should follow '|', but this isn't enforced yet */
+    break;
+  case '&':
+    *oper = OP_AND;
+    line++;
+    if (*line == '=')
+      line++;       /* '=' should follow '&', but this isn't enforced yet */
+    line = skipleading(line);
+    if (*line == '~')
+      *oper = OP_AND_INV;
+    break;
+  default:
+    return NULL;
+  }
+
+  /* rvalue (literal, register or parameter) */
+  assert(rvalue != NULL);
+  bool dereferenced = false;
+  line = skipleading(line);
+  if (*line == '*') {
+    dereferenced = true;
+    line = skipleading(line);
+  }
+  if (isdigit(*line)) {
+    rvalue->data = strtoul(line, (char**)&line, 0);
+    rvalue->size = 4;
+    rvalue->type = dereferenced ? OT_ADDRESS : OT_LITERAL;
+    if (*oper==OP_AND_INV) {
+      rvalue->data = ~(rvalue->data); /* literal can be inverted right-away */
+      *oper=OP_AND;
+    }
+  } else if (*line == '$') {
+    if (!isdigit(line[1]))
+      return NULL;
+    rvalue->data = line[1] - '0';
+    rvalue->size = 4;
+    rvalue->type = OT_PARAM;  //??? limitation: cannot dereference a parameter
     line += 2;
   } else {
     const char *tail;
@@ -342,46 +471,20 @@ static const char *parseline(const char *line, const REG_DEF *registers, size_t 
     for (r = 0; r < reg_count && strncmp(line, registers[r].name, (tail - line))!= 0; r++)
       {}
     assert(r < reg_count);  /* for predefined script, register should always be found */
-    *address = registers[r].address;
-    *size = registers[r].size;
+    if (r >= reg_count)
+      return NULL;
+    rvalue->data = registers[r].address;
+    rvalue->size = registers[r].size;
+    rvalue->type = OT_ADDRESS;
     line = tail;
-  }
-
-  /* operation */
-  line = skipleading(line);
-  assert(*line == '=' || *line == '|' || *line == '&' || *line == '~');
-  assert(oper != NULL);
-  *oper = *line++;
-  if (*oper == '~') {
-    *oper = '&';
-    invert ^= 1;    /* "a ~= b" means "a &= ~b" */
-  }
-  if (*line == '=')
-    line++;         /* allow |= to mean | and &= to mean & */
-  line = skipleading(line);
-  if (*line == '~') {
-    invert ^= 1;
-    line = skipleading(line + 1);
-  }
-
-  /* parameter */
-  assert(value != NULL);
-  if (*line == '$') {
-    *value = SCRIPT_MAGIC + (line[1] - '0');
-    line += 2;
-    assert(!invert || *oper == '&');  /* limitation: only support parameter inversion with &= */
-    if (*oper == '&' && invert)
-      *oper = '~';
-  } else {
-    *value = strtoul(line, (char**)&line, 0);
-    if (invert)
-      *value = ~(*value);
   }
   #ifndef NDEBUG
     while (*line != '\0' && *line != '\n' && *line <= ' ')
       line++;
     assert(*line == '\n' || *line == '\0');
   #endif
+  if (*line > ' ')
+    return NULL;  /* after parsing the line, should land on whitespace or \0 */
 
   return skipleading(line); /* only needed for hard-coded scripts */
 }
@@ -396,6 +499,8 @@ static const char *parseline(const char *line, const REG_DEF *registers, size_t 
  *  \param mcu    The MCU family name. This parameter must be valid.
  *  \param arch   The Cortex architecture name (M0, M3, etc.). This parameter
  *                may be NULL.
+ *
+ *  \return The number of scripts that are loaded.
  */
 int bmscript_load(const char *mcu, const char *arch)
 {
@@ -409,7 +514,7 @@ int bmscript_load(const char *mcu, const char *arch)
   FILE *fp;
   unsigned idx;
 
-  /* the name in the root is set the the MCU name, to detect double loading of
+  /* the name in the root is set to the MCU name, to detect double loading of
      the same script */
   if (script_root.name != NULL && strcmp(script_root.name, mcu) == 0) {
     idx = 0;
@@ -523,10 +628,9 @@ int bmscript_load(const char *mcu, const char *arch)
     if (mcu_match(mcu, script_defaults[idx].mcu_list)
         || (arch_name[0] != '\0' && mcu_match(arch_name, script_defaults[idx].mcu_list)))
     {
-      const char *head;
       line_count = 0;
-      head = skipleading(script_defaults[idx].script);
-      while (*head != '\0') {
+      const char *head = skipleading(script_defaults[idx].script);
+      while (head != NULL && *head != '\0') {
         /* make space for a new entry in the line list */
         assert(line_count <= line_size);
         if (line_count == line_size) {
@@ -540,8 +644,8 @@ int bmscript_load(const char *mcu, const char *arch)
         }
         if (line_count < line_size) {
           head = parseline(head, registers, reg_count,
-                           &lines[line_count].oper, &lines[line_count].address,
-                           &lines[line_count].value, &lines[line_count].size);
+                           &lines[line_count].oper, &lines[line_count].lvalue,
+                           &lines[line_count].rvalue);
           line_count += 1;
         }
       }
@@ -618,8 +722,9 @@ int bmscript_load(const char *mcu, const char *arch)
         }
         if (line_count < line_size) {
           parseline(line, registers, reg_count,
-                    &lines[line_count].oper, &lines[line_count].address,
-                    &lines[line_count].value, &lines[line_count].size);
+                    &lines[line_count].oper, &lines[line_count].lvalue,
+                    &lines[line_count].rvalue);
+          //??? error message on parse error
           line_count += 1;
         }
       }
@@ -682,12 +787,14 @@ void bmscript_clearcache(void)
  *  the given mcu is returned. For every next call with the same parameters, the
  *  next instruction is returned, until the script completes.
  *
- *  \param name     The name of te script; may be set to NULL to continue on the
- *                  last active script.
- *  \param oper     The operation code, should be '=', '|' or '&'.
- *  \param address  The address of the register or memory location to set.
- *  \param value    The value to set the register or memory location to.
- *  \param size     The size of the register in bytes.
+ *  \param name     [in] The name of te script; may be set to NULL to continue
+ *                  on the last active script.
+ *  \param oper     [out] The operation code, should be one of the OP_xxx
+ *                  enumeration values.
+ *  \param lvalue   [out] The address of the register or memory location to set.
+ *  \param rvalue   [out] The value to set the register or memory location to,
+ *                  or an address for a dereferenced assigmnent.
+ *  \param size     [out] The size of the register/variable in bytes.
  *
  *  \return 1 of success, 0 on failure. Failure can mean that no script matches,
  *          or that the script contains no more instructions.
@@ -704,12 +811,12 @@ void bmscript_clearcache(void)
  *        option: a 1 bit in value, clears that bit im the register (so it is an
  *        AND with the inverse of "value").
  */
-int bmscript_line(const char *name, char *oper, uint32_t *address, uint32_t *value, uint8_t *size)
+bool bmscript_line(const char *name, uint16_t *oper, OPERAND *lvalue, OPERAND *rvalue)
 {
   if (name == NULL)
     name = cache.name;
   assert(name != NULL);
-  assert(oper != NULL && address != NULL && value != NULL && size != NULL);
+  assert(oper != NULL && lvalue != NULL && rvalue != NULL);
 
   if (cache.name == NULL || strcmp(name, cache.name) != 0) {
     const SCRIPT *script;
@@ -717,7 +824,7 @@ int bmscript_line(const char *name, char *oper, uint32_t *address, uint32_t *val
     for (script = script_root.next; script != NULL && stricmp(name, script->name) != 0; script = script->next)
       {}
     if (script == NULL)
-      return 0;     /* no script with matching name is found */
+      return false;     /* no script with matching name is found */
 
     cache.name = script->name;
     cache.lines = script->lines;
@@ -727,65 +834,84 @@ int bmscript_line(const char *name, char *oper, uint32_t *address, uint32_t *val
 
   assert(cache.index <= cache.count);
   if (cache.index == cache.count)
-    return 0; /* end of script reached */
+    return false; /* end of script reached */
   assert(cache.lines != NULL);
   *oper = cache.lines[cache.index].oper;
-  *address = cache.lines[cache.index].address;
-  *value = cache.lines[cache.index].value;
-  *size = cache.lines[cache.index].size;
+  *lvalue = cache.lines[cache.index].lvalue;
+  *rvalue = cache.lines[cache.index].rvalue;
   cache.index += 1;
 
-  return 1;
+  return true;
 }
 
-int bmscript_line_fmt(const char *name, char *line, const unsigned long *params)
+bool bmscript_line_fmt(const char *name, char *line, const unsigned long *params, size_t paramcount)
 {
-  char oper;
-  uint32_t address, value;
-  uint8_t size;
-  if (bmscript_line(name, &oper, &address, &value, &size)) {
+  uint16_t oper;
+  OPERAND lvalue, rvalue;
+  if (bmscript_line(name, &oper, &lvalue, &rvalue)) {
     char operstr[10];
     switch (oper) {
-    case '=':
+    case OP_MOV:
       strcpy(operstr, "=");
       break;
-    case '|':
+    case OP_ORR:
       strcpy(operstr, "|=");
       break;
-    case '&':
+    case OP_AND:
       strcpy(operstr, "&=");
       break;
-    case '~':
+    case OP_AND_INV:
       strcpy(operstr, "&= ~");
       break;
     default:
       assert(0);
     }
-    if ((address & ~0xf) == SCRIPT_MAGIC) {
-      assert(params != NULL);
-      address = (uint32_t)params[address & 0xf];  /* replace parameters */
-      if (address == ~0)
-        return 0; /* invalid address, variable not present */
+    if (rvalue.type == OT_ADDRESS)
+      strcat(operstr, " *");
+    bool print_cmd = false;
+    if (lvalue.type == OT_PARAM) {
+      if (lvalue.data == ~0)
+        print_cmd = true;
+      else if (params != NULL && lvalue.data < paramcount)
+        lvalue.data = (uint32_t)params[lvalue.data];  /* replace parameters */
+      else
+        return false; /* invalid parameter */
     }
-    if ((value & ~0xf) == SCRIPT_MAGIC) {
-      assert(params != NULL);
-      value = (uint32_t)params[value & 0xf];      /* replace parameters */
+    if (rvalue.type == OT_PARAM) {
+      if (params != NULL && rvalue.data < paramcount)
+        rvalue.data = (uint32_t)params[rvalue.data];  /* replace parameters */
+      else
+        return false; /* invalid parameter */
     }
-    switch (size) {
-    case 1:
-      sprintf(line, "set {char}0x%x %s 0x%x\n", address, operstr, value & 0xff);
-      break;
-    case 2:
-      sprintf(line, "set {short}0x%x %s 0x%x\n", address, operstr, value & 0xffff);
-      break;
-    case 4:
-      sprintf(line, "set {int}0x%x %s 0x%x\n", address, operstr, value);
-      break;
-    default:
-      assert(0);
+    if (print_cmd) {
+      switch (rvalue.size) {
+      case 1:
+        sprintf(line, "print /x {char}0x%x\n", rvalue.data);
+        break;
+      case 2:
+        sprintf(line, "print /x {short}0x%x\n", rvalue.data);
+        break;
+      default:
+        sprintf(line, "print /x {int}0x%x\n", rvalue.data);
+      }
+    } else {
+      uint16_t size =(lvalue.size > 0)? lvalue.size : rvalue.size;
+      switch (size) {
+      case 1:
+        sprintf(line, "set {char}0x%x %s 0x%x\n", lvalue.data, operstr, rvalue.data & 0xff);
+        break;
+      case 2:
+        sprintf(line, "set {short}0x%x %s 0x%x\n", lvalue.data, operstr, rvalue.data & 0xffff);
+        break;
+      case 4:
+        sprintf(line, "set {int}0x%x %s 0x%x\n", lvalue.data, operstr, rvalue.data);
+        break;
+      default:
+        assert(0);
+      }
     }
-    return 1;
+    return true;
   }
-  return 0;
+  return false;
 }
 

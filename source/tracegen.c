@@ -4,7 +4,7 @@
  * The * input is a file in the Trace Stream Description Language (TDSL), the
  * primary specification language for CTF.
  *
- * Copyright 2019-2021 CompuPhase
+ * Copyright 2019-2022 CompuPhase
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -160,10 +160,16 @@ static int generate_functionheader(FILE *fp, const CTF_EVENT *evt, unsigned flag
   char streamname[128], funcname[128];
   int paramcount;
 
-  if (flags & FLAG_NO_INSTR) {
+  if ((flags & FLAG_NO_INSTR)) {
     if (flags & FLAG_INDENT)
       fprintf(fp, "  ");
     fprintf(fp, "__attribute__((no_instrument_function))\n");
+  }
+
+  if (evt->attribute != NULL) {
+    if (flags & FLAG_INDENT)
+      fprintf(fp, "  ");
+    fprintf(fp, "__attribute__((%s))\n", evt->attribute);
   }
 
   if (flags & FLAG_INDENT)
@@ -484,7 +490,7 @@ static void usage(int status)
          "-i=path   Generate an #include <...> directive with this path.\n"
          "-I=path   Generate an #include \"...\" directive with this path.\n"
          "          The -i and -I options may appear multiple times.\n"
-         "-no-instr Add a \"no_instrument_function\" attribute to the generated functions.\n"
+         "-no-instr Add a \"no_instrument_function\" attribute to all generated functions.\n"
          "-o=name   Base output filename; a .c and .h suffix is added to this name.\n"
          "-s        SWO tracing: use channels for stream ids.\n"
          "-t        Force basic C types on arguments, if available.\n");

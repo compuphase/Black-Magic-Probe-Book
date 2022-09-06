@@ -426,8 +426,12 @@ int get_bmp_count(void)
 
 int check_versionstring(const char *string)
 {
-  if (strncmp(string, "Black Magic Probe", 17) == 0 && strstr(string, "(Hardware Version 3)") != NULL)
-    return PROBE_ORG_BMP;
+  if (strncmp(string, "Black Magic Probe", 17) == 0) {
+    if (strstr(string, "Hardware Version 3") != NULL)
+      return PROBE_BMPv21;
+    if (strstr(string, "Hardware Version 6") != NULL)
+      return PROBE_BMPv23;
+  }
   if (strncmp(string, "Wireless Debug Probe", 20) == 0)
     return PROBE_CTXLINK;
   return PROBE_UNKNOWN;

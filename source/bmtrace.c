@@ -23,7 +23,6 @@
   #define WIN32_LEAN_AND_MEAN
   #define _WIN32_WINNT   0x0500 /* for AttachConsole() */
   #include <windows.h>
-  #include <direct.h>
   #include <io.h>
   #include <malloc.h>
   #if defined __MINGW32__ || defined __MINGW64__
@@ -31,7 +30,6 @@
   #elif defined _MSC_VER
     #include "strlcpy.h"
     #define access(p,m)       _access((p),(m))
-    #define mkdir(p)          _mkdir(p)
   #endif
 #elif defined __linux__
   #include <alloca.h>
@@ -43,6 +41,7 @@
 #endif
 #include <assert.h>
 #include <ctype.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -50,12 +49,13 @@
 #include "guidriver.h"
 #include "bmcommon.h"
 #include "bmp-script.h"
-#include "bmp-support.h"
 #include "bmp-scan.h"
+#include "bmp-support.h"
 #include "demangle.h"
 #include "dwarf.h"
 #include "elf.h"
 #include "gdb-rsp.h"
+#include "mcu-info.h"
 #include "minIni.h"
 #include "noc_file_dialog.h"
 #include "nuklear_mousepointer.h"
@@ -97,9 +97,19 @@
   #define IS_OPTION(s)  ((s)[0] == '-')
 #endif
 
+
 static DWARF_LINELOOKUP dwarf_linetable = { NULL };
 static DWARF_SYMBOLLIST dwarf_symboltable = { NULL};
 static DWARF_PATHLIST dwarf_filetable = { NULL};
+
+#define WINDOW_WIDTH    700     /* default window size (window is resizable) */
+#define WINDOW_HEIGHT   400
+#define FONT_HEIGHT     14      /* default font size */
+#define ROW_HEIGHT      (1.6 * opt_fontsize)
+#define COMBOROW_CY     (0.9 * opt_fontsize)
+#define BROWSEBTN_WIDTH (1.5 * opt_fontsize)
+static float opt_fontsize = FONT_HEIGHT;
+
 
 int ctf_error_notify(int code, int linenr, const char *message)
 {
@@ -123,16 +133,7 @@ static int bmp_callback(int code, const char *message)
 }
 
 
-#define WINDOW_WIDTH    700     /* default window size (window is resizable) */
-#define WINDOW_HEIGHT   400
-#define FONT_HEIGHT     14      /* default font size */
-#define ROW_HEIGHT      (1.6 * opt_fontsize)
-#define COMBOROW_CY     (0.9 * opt_fontsize)
-#define BROWSEBTN_WIDTH (1.5 * opt_fontsize)
-static float opt_fontsize = FONT_HEIGHT;
-
 #define FILTER_MAXSTRING  128
-
 
 #define ERROR_NO_TSDL 0x0001
 #define ERROR_NO_ELF  0x0002
@@ -162,25 +163,26 @@ typedef struct tagAPPSTATE {
   int probe;                    /**< selected debug probe (index) */
   int netprobe;                 /**< index for the IP address (pseudo-probe) */
   const char **probelist;       /**< list of detected probes */
-  char mcu_driver[32];          /**< target driver (detected by BMP) */
-  char mcu_architecture[32];    /**< target Cortex architexture */
+  char mcu_family[64];          /**< detected MCU family (on attach), also the "driver" name of BMP */
+  char mcu_architecture[32];    /**< detected ARM architecture (on attach) */
+  unsigned long mcu_partid;     /**< specific ID code (0 if unknown) */
   int reinitialize;             /**< whether to re-initialize the traceswo interface */
   int trace_status;             /**< status of traceswo */
-  int trace_running;            /**< whether tracing is running or paused */
+  bool trace_running;           /**< whether tracing is running or paused */
   int error_flags;              /**< errors in initialization or decoding */
   char IPaddr[64];              /**< IP address for network probe */
   unsigned char trace_endpoint; /**< standard USB endpoint for tracing */
   int probe_type;               /**< BMP or ctxLink (needed to select manchester/async mode) */
-  int mode;                     /**< manchester or async */
+  int swomode;                  /**< manchester or async */
   int init_target;              /**< whether to configure the target MCU for tracing */
   int init_bmp;                 /**< whether to configure the debug probe for tracing */
   int connect_srst;             /**< whether to force reset while attaching */
   char cpuclock_str[16];        /**< edit buffer for CPU clock frequency */
-  unsigned long cpuclock;       /**< active CPU clock frequency */
+  unsigned long mcuclock;       /**< active CPU clock frequency */
   char bitrate_str[16];         /**< edit buffer for bitrate */
   unsigned long bitrate;        /**< active bitrate */
   int datasize;                 /**< packet size */
-  int reload_format;            /**< whether to reload the TSDL file */
+  bool reload_format;           /**< whether to reload the TSDL file */
   char TSDLfile[_MAX_PATH];     /**< CTF decoding, message file */
   char ELFfile[_MAX_PATH];      /**< ELF file for symbol/address look-up */
   TRACEFILTER *filterlist;      /**< filter expressions */
@@ -207,6 +209,166 @@ enum {
   MODE_MANCHESTER = 1,
   MODE_ASYNC
 };
+
+static bool save_settings(const char *filename, const APPSTATE *state,
+                          const enum nk_collapse_states tab_states[],
+                          const SPLITTERBAR *splitter_hor, const SPLITTERBAR *splitter_ver)
+{
+  assert(state != NULL);
+  assert(tab_states != NULL);
+  assert(splitter_hor != NULL && splitter_ver != NULL);
+
+  if (filename == NULL || strlen(filename) == 0)
+    return false;
+
+  char valstr[128];
+  for (int chan = 0; chan < NUM_CHANNELS; chan++) {
+    char key[40];
+    struct nk_color color = channel_getcolor(chan);
+    sprintf(key, "chan%d", chan);
+    sprintf(valstr, "%d #%06x %s", channel_getenabled(chan),
+            ((int)color.r << 16) | ((int)color.g << 8) | color.b,
+            channel_getname(chan, NULL, 0));
+    ini_puts("Channels", key, valstr, filename);
+  }
+  ini_putl("Filters", "count", state->filtercount, filename);
+  for (int idx = 0; idx < state->filtercount; idx++) {
+    char key[40], expr[FILTER_MAXSTRING+10];
+    assert(state->filterlist != NULL && state->filterlist[idx].expr != NULL);
+    sprintf(key, "filter%d", idx + 1);
+    sprintf(expr, "%d,%s", state->filterlist[idx].enabled, state->filterlist[idx].expr);
+    ini_puts("Filters", key, expr, filename);
+    free(state->filterlist[idx].expr);
+  }
+  if (state->filterlist != NULL)
+    free(state->filterlist);
+  sprintf(valstr, "%.2f %.2f", splitter_hor->ratio, splitter_ver->ratio);
+  ini_puts("Settings", "splitter", valstr, filename);
+  for (int idx = 0; idx < TAB_COUNT; idx++) {
+    char key[40];
+    sprintf(key, "view%d", idx);
+    sprintf(valstr, "%d", tab_states[idx]);
+    ini_puts("Settings", key, valstr, filename);
+  }
+  ini_putl("Settings", "mode", state->swomode, filename);
+  ini_putl("Settings", "init-target", state->init_target, filename);
+  ini_putl("Settings", "init-bmp", state->init_bmp, filename);
+  ini_putl("Settings", "connect-srst", state->connect_srst, filename);
+  ini_putl("Settings", "datasize", state->datasize, filename);
+  ini_puts("Settings", "tsdl", state->TSDLfile, filename);
+  ini_puts("Settings", "elf", state->ELFfile, filename);
+  ini_putl("Settings", "mcu-freq", state->mcuclock, filename);
+  ini_putl("Settings", "bitrate", state->bitrate, filename);
+
+  double spacing;
+  unsigned long scale, delta;
+  timeline_getconfig(&spacing, &scale, &delta);
+  sprintf(valstr, "%.2f %lu %lu", spacing, scale, delta);
+  ini_puts("Settings", "timeline", valstr, filename);
+
+  if (bmp_is_ip_address(state->IPaddr))
+    ini_puts("Settings", "ip-address", state->IPaddr, filename);
+  ini_putl("Settings", "probe", (state->probe == state->netprobe) ? 99 : state->probe, filename);
+
+  return access(filename, 0) == 0;
+}
+
+static bool load_settings(const char *filename, APPSTATE *state,
+                          enum nk_collapse_states tab_states[],
+                          SPLITTERBAR *splitter_hor, SPLITTERBAR *splitter_ver)
+{
+  assert(state != NULL);
+  assert(tab_states != NULL);
+  assert(splitter_hor != NULL && splitter_ver != NULL);
+
+  if (filename == NULL || strlen(filename) == 0 || access(filename, 0) != 0)
+    return false;
+
+  /* read channel configuration */
+  char valstr[128];
+  for (int chan = 0; chan < NUM_CHANNELS; chan++) {
+    char key[41];
+    unsigned clr;
+    int enabled, result;
+    channel_set(chan, (chan == 0), NULL, nk_rgb(190, 190, 190)); /* preset: port 0 is enabled by default, others disabled by default */
+    sprintf(key, "chan%d", chan);
+    ini_gets("Channels", key, "", valstr, sizearray(valstr), filename);
+    result = sscanf(valstr, "%d #%x %40s", &enabled, &clr, key);
+    if (result >= 2)
+      channel_set(chan, enabled, (result >= 3) ? key : NULL, nk_rgb(clr >> 16,(clr >> 8) & 0xff, clr & 0xff));
+  }
+  /* read filters (initialize the filter list) */
+  state->filtercount = ini_getl("Filters", "count", 0, filename);;
+  state->filterlistsize = state->filtercount + 1; /* at least 1 extra, for a NULL sentinel */
+  state->filterlist = malloc(state->filterlistsize * sizeof(TRACEFILTER));  /* make sure unused entries are NULL */
+  if (state->filterlist != NULL) {
+    memset(state->filterlist, 0, state->filterlistsize * sizeof(TRACEFILTER));
+    int idx;
+    for (idx = 0; idx < state->filtercount; idx++) {
+      char key[40], *ptr;
+      state->filterlist[idx].expr = malloc(sizearray(state->newfiltertext) * sizeof(char));
+      if (state->filterlist[idx].expr == NULL)
+        break;
+      sprintf(key, "filter%d", idx + 1);
+      ini_gets("Filters", key, "", state->newfiltertext, sizearray(state->newfiltertext), filename);
+      state->filterlist[idx].enabled = (int)strtol(state->newfiltertext, &ptr, 10);
+      assert(ptr != NULL && *ptr != '\0');  /* a comma should be found */
+      if (*ptr == ',')
+        ptr += 1;
+      strcpy(state->filterlist[idx].expr, ptr);
+    }
+    state->filtercount = idx;
+  } else {
+    state->filtercount = state->filterlistsize = 0;
+  }
+  state->newfiltertext[0] = '\0';
+
+  /* other configuration */
+  state->probe = (int)ini_getl("Settings", "probe", 0, filename);
+  ini_gets("Settings", "ip-address", "127.0.0.1", state->IPaddr, sizearray(state->IPaddr), filename);
+  state->swomode = (int)ini_getl("Settings", "mode", MODE_MANCHESTER, filename);
+  state->init_target = (int)ini_getl("Settings", "init-target", 1, filename);
+  state->init_bmp = (int)ini_getl("Settings", "init-bmp", 1, filename);
+  if (state->swomode == 0) {  /* legacy: state->mode == 0 was MODE_PASSIVE */
+    state->swomode = MODE_MANCHESTER;
+    state->init_target = 0;
+    state->init_bmp = 0;
+  }
+  state->connect_srst = (int)ini_getl("Settings", "connect-srst", 0, filename);
+  state->datasize = (int)ini_getl("Settings", "datasize", 1, filename);
+  ini_gets("Settings", "tsdl", "", state->TSDLfile, sizearray(state->TSDLfile), filename);
+  ini_gets("Settings", "elf", "", state->ELFfile, sizearray(state->ELFfile), filename);
+  ini_gets("Settings", "mcu-freq", "48000000", state->cpuclock_str, sizearray(state->cpuclock_str), filename);
+  ini_gets("Settings", "bitrate", "100000", state->bitrate_str, sizearray(state->bitrate_str), filename);
+  ini_gets("Settings", "timeline", "", valstr, sizearray(valstr), filename);
+  if (strlen(valstr) > 0) {
+    double spacing;
+    unsigned long scale, delta;
+    if (sscanf(valstr, "%lf %lu %lu", &spacing, &scale, &delta) == 3)
+      timeline_setconfig(spacing, scale, delta);
+  }
+
+  ini_gets("Settings", "splitter", "", valstr, sizearray(valstr), filename);
+  splitter_hor->ratio = splitter_ver->ratio = 0.0;
+  sscanf(valstr, "%f %f", &splitter_hor->ratio, &splitter_ver->ratio);
+  if (splitter_hor->ratio < 0.05 || splitter_hor->ratio > 0.95)
+    splitter_hor->ratio = 0.70;
+  if (splitter_ver->ratio < 0.05 || splitter_ver->ratio > 0.95)
+    splitter_ver->ratio = 0.70;
+
+  for (int idx = 0; idx < TAB_COUNT; idx++) {
+    char key[40];
+    int opened, result;
+    tab_states[idx] = (idx == TAB_CONFIGURATION) ? NK_MAXIMIZED : NK_MINIMIZED;
+    sprintf(key, "view%d", idx);
+    ini_gets("Settings", key, "", valstr, sizearray(valstr), filename);
+    result = sscanf(valstr, "%d", &opened);
+    if (result >= 1)
+      tab_states[idx] = opened;
+  }
+
+  return true;
+}
 
 static void find_popup(struct nk_context *ctx, APPSTATE *state, float canvas_width, float canvas_height)
 {
@@ -235,7 +397,7 @@ static void find_popup(struct nk_context *ctx, APPSTATE *state, float canvas_wid
           if (line != state->cur_match_line) {
             state->cur_match_line = line;
             state->find_popup = 0;
-            state->trace_running = nk_false;
+            state->trace_running = false;
           } else {
             state->cur_match_line = -1;
             state->find_popup = 2; /* to mark "string not found" */
@@ -311,12 +473,12 @@ static void panel_options(struct nk_context *ctx, APPSTATE *state,
       nk_layout_row_push(ctx, LABEL_WIDTH);
       nk_label(ctx, "Mode", NK_TEXT_ALIGN_LEFT | NK_TEXT_ALIGN_MIDDLE);
       nk_layout_row_push(ctx, VALUE_WIDTH);
-      int result = state->mode - MODE_MANCHESTER;
+      int result = state->swomode - MODE_MANCHESTER;
       result = nk_combo(ctx, mode_strings, NK_LEN(mode_strings), result, opt_fontsize, nk_vec2(VALUE_WIDTH,4.5*opt_fontsize));
-      if (state->mode != result + MODE_MANCHESTER) {
+      if (state->swomode != result + MODE_MANCHESTER) {
         /* mode is 1-based, the result of nk_combo() is 0-based, which is
            why MODE_MANCHESTER is added (MODE_MANCHESTER == 1) */
-        state->mode = result + MODE_MANCHESTER;
+        state->swomode = result + MODE_MANCHESTER;
         state->reinitialize = nk_true;
       }
       nk_layout_row_end(ctx);
@@ -340,11 +502,11 @@ static void panel_options(struct nk_context *ctx, APPSTATE *state,
       int result = editctrl_tooltip(ctx, NK_EDIT_FIELD|NK_EDIT_SIG_ENTER|NK_EDIT_CLIPBOARD,
                                     state->cpuclock_str, sizearray(state->cpuclock_str), nk_filter_decimal,
                                     "CPU clock of the target microcontroller");
-      if ((result & NK_EDIT_COMMITED) != 0 || ((result & NK_EDIT_DEACTIVATED) && strtoul(state->cpuclock_str, NULL, 10) != state->cpuclock))
+      if ((result & NK_EDIT_COMMITED) != 0 || ((result & NK_EDIT_DEACTIVATED) && strtoul(state->cpuclock_str, NULL, 10) != state->mcuclock))
         state->reinitialize = nk_true;
       nk_layout_row_end(ctx);
     }
-    if (state->init_target || (state->init_bmp && state->mode == MODE_ASYNC)) {
+    if (state->init_target || (state->init_bmp && state->swomode == MODE_ASYNC)) {
       nk_layout_row_begin(ctx, NK_STATIC, ROW_HEIGHT, 2);
       nk_layout_row_push(ctx, LABEL_WIDTH);
       nk_label(ctx, "Bit rate", NK_TEXT_ALIGN_LEFT | NK_TEXT_ALIGN_MIDDLE);
@@ -381,7 +543,7 @@ static void panel_options(struct nk_context *ctx, APPSTATE *state,
                               state->TSDLfile, sizearray(state->TSDLfile), nk_filter_ascii,
                               "Metadata file for Common Trace Format (CTF)");
     if (result & (NK_EDIT_COMMITED | NK_EDIT_DEACTIVATED))
-      state->reload_format = nk_true;
+      state->reload_format = true;
     if (state->error_flags & ERROR_NO_TSDL)
       nk_style_pop_color(ctx);
     nk_layout_row_push(ctx, BROWSEBTN_WIDTH);
@@ -392,7 +554,7 @@ static void panel_options(struct nk_context *ctx, APPSTATE *state,
                                            guidriver_apphandle());
       if (s != NULL && strlen(s) < sizearray(state->TSDLfile)) {
         strcpy(state->TSDLfile, s);
-        state->reload_format = nk_true;
+        state->reload_format = true;
         free((void*)s);
       }
     }
@@ -407,7 +569,7 @@ static void panel_options(struct nk_context *ctx, APPSTATE *state,
                               state->ELFfile, sizearray(state->ELFfile), nk_filter_ascii,
                               "ELF file for symbol lookup");
     if (result & (NK_EDIT_COMMITED | NK_EDIT_DEACTIVATED))
-      state->reload_format = nk_true;
+      state->reload_format = true;
     if (state->error_flags & ERROR_NO_ELF)
       nk_style_pop_color(ctx);
     nk_layout_row_push(ctx, BROWSEBTN_WIDTH);
@@ -418,7 +580,7 @@ static void panel_options(struct nk_context *ctx, APPSTATE *state,
                                            guidriver_apphandle());
       if (s != NULL && strlen(s) < sizearray(state->ELFfile)) {
         strcpy(state->ELFfile, s);
-        state->reload_format = nk_true;
+        state->reload_format = true;
         free((void*)s);
       }
     }
@@ -538,7 +700,7 @@ static void channel_options(struct nk_context *ctx, APPSTATE *state,
             unsigned long params[2];
             params[0] = state->channelmask;
             params[1] = (symbol != NULL) ? (unsigned long)symbol->data_addr : ~0;
-            bmp_runscript("swo_channels", state->mcu_driver, state->mcu_architecture, params);
+            bmp_runscript("swo_channels", state->mcu_family, state->mcu_architecture, params, 2);
           }
         }
       }
@@ -604,7 +766,7 @@ static void button_bar(struct nk_context *ctx, APPSTATE *state)
     if (state->trace_running && state->trace_status != TRACESTAT_OK) {
       state->trace_status = trace_init(state->trace_endpoint, (state->probe == state->netprobe) ? state->IPaddr : NULL);
       if (state->trace_status != TRACESTAT_OK)
-        state->trace_running = nk_false;
+        state->trace_running = false;
     }
   }
   nk_spacing(ctx, 1);
@@ -621,7 +783,7 @@ static void button_bar(struct nk_context *ctx, APPSTATE *state)
                                          "CSV files\0*.csv\0All files\0*.*\0",
                                          NULL, NULL, NULL, guidriver_apphandle());
     if (s != NULL) {
-      trace_save(s);
+      tracestring_save(s);
       free((void*)s);
     }
   }
@@ -634,9 +796,9 @@ static void handle_stateaction(APPSTATE *state)
     char msg[100];
     tracelog_statusclear();
     tracestring_clear();
-    if ((state->cpuclock = strtol(state->cpuclock_str, NULL, 10)) == 0)
-      state->cpuclock = 48000000;
-    if (state->mode == MODE_MANCHESTER || (state->bitrate = strtol(state->bitrate_str, NULL, 10)) == 0)
+    if ((state->mcuclock = strtol(state->cpuclock_str, NULL, 10)) == 0)
+      state->mcuclock = 48000000;
+    if (state->swomode == MODE_MANCHESTER || (state->bitrate = strtol(state->bitrate_str, NULL, 10)) == 0)
       state->bitrate = 100000;
     if (state->init_target || state->init_bmp) {
       /* open/reset the serial port/device if any initialization must be done */
@@ -645,7 +807,7 @@ static void handle_stateaction(APPSTATE *state)
       result = bmp_connect(state->probe, (state->probe == state->netprobe) ? state->IPaddr : NULL);
       if (result) /* bmp_connect() also opens the (virtual) serial port/device */
         result = bmp_attach(2, state->connect_srst,
-                            state->mcu_driver, sizearray(state->mcu_driver),
+                            state->mcu_family, sizearray(state->mcu_family),
                             state->mcu_architecture, sizearray(state->mcu_architecture));
       else
         state->trace_status = TRACESTAT_NO_CONNECT;
@@ -653,24 +815,36 @@ static void handle_stateaction(APPSTATE *state)
         /* overrule any default protocol setting, if the debug probe can be
            verified */
         state->probe_type = bmp_checkversionstring();
-        if (state->probe_type == PROBE_ORG_BMP)
-          state->mode = MODE_MANCHESTER;
+        if (state->probe_type == PROBE_BMPv21 || state->probe_type == PROBE_BMPv23)
+          state->swomode = MODE_MANCHESTER;
         else if (state->probe_type == PROBE_CTXLINK)
-         state->mode = MODE_ASYNC;
+         state->swomode = MODE_ASYNC;
       }
       if (result && state->init_target) {
+        unsigned long params[4];
+        /* check to get more specific information on the MCU (specifically to
+           update the mcu_family name, so that the appropriate scripts can be
+           loaded) */
+        if (bmp_runscript("partid", state->mcu_family, state->mcu_architecture, params, 1)) {
+          state->mcu_partid = params[0];
+          const MCUINFO *info = mcuinfo_lookup(state->mcu_family, state->mcu_partid);
+          if (info != NULL && info->mcuname != NULL) {
+            strlcpy(state->mcu_family, info->mcuname, sizearray(state->mcu_family));
+            bmscript_clear();
+          }
+        }
         /* initialize the target (target-specific configuration, generic
            configuration and channels */
-        unsigned long params[4];
-        const DWARF_SYMBOLLIST *symbol;
-        bmp_runscript("swo_device", state->mcu_driver, state->mcu_architecture, NULL);
-        assert(state->mode == MODE_MANCHESTER || state->mode == MODE_ASYNC);
-        symbol = dwarf_sym_from_name(&dwarf_symboltable, "TRACESWO_BPS", -1, -1);
-        params[0] = state->mode;
-        params[1] = state->cpuclock / state->bitrate - 1;
+        bmp_runscript("swo_device", state->mcu_family, state->mcu_architecture, NULL, 0);
+        const DWARF_SYMBOLLIST *symbol = dwarf_sym_from_name(&dwarf_symboltable, "TRACESWO_BPS", -1, -1);
+        assert(state->swomode == MODE_MANCHESTER || state->swomode == MODE_ASYNC);
+        unsigned swvclock = (state->swomode == MODE_MANCHESTER) ? 2 * state->bitrate : state->bitrate;
+        assert(state->mcuclock > 0 && swvclock > 0);
+        params[0] = state->swomode;
+        params[1] = state->mcuclock / swvclock - 1;
         params[2] = state->bitrate;
         params[3] = (symbol != NULL) ? (unsigned long)symbol->data_addr : ~0;
-        bmp_runscript("swo_generic", state->mcu_driver, state->mcu_architecture, params);
+        bmp_runscript("swo_trace", state->mcu_family, state->mcu_architecture, params, 4);
         /* enable active channels in the target (disable inactive channels) */
         state->channelmask = 0;
         for (int chan = 0; chan < NUM_CHANNELS; chan++)
@@ -679,7 +853,7 @@ static void handle_stateaction(APPSTATE *state)
         symbol = dwarf_sym_from_name(&dwarf_symboltable, "TRACESWO_TER", -1, -1);
         params[0] = state->channelmask;
         params[1] = (symbol != NULL) ? (unsigned long)symbol->data_addr : ~0;
-        bmp_runscript("swo_channels", state->mcu_driver, state->mcu_architecture, params);
+        bmp_runscript("swo_channels", state->mcu_family, state->mcu_architecture, params, 2);
       }
     } else if (bmp_isopen()) {
       /* no initialization is requested, if the serial port is open, close it
@@ -689,7 +863,7 @@ static void handle_stateaction(APPSTATE *state)
     }
     if (result) {
       if (state->init_bmp)
-        bmp_enabletrace((state->mode == MODE_ASYNC) ? state->bitrate : 0, &state->trace_endpoint);
+        bmp_enabletrace((state->swomode == MODE_ASYNC) ? state->bitrate : 0, &state->trace_endpoint);
       /* trace_init() does nothing if initialization had already succeeded */
       if (state->probe == state->netprobe)
         state->trace_status = trace_init(BMP_PORT_TRACE, state->IPaddr);
@@ -701,8 +875,8 @@ static void handle_stateaction(APPSTATE *state)
     switch (state->trace_status) {
     case TRACESTAT_OK:
       if (state->init_target || state->init_bmp) {
-        assert(strlen(state->mcu_driver) > 0);
-        sprintf(msg, "Connected [%s]", state->mcu_driver);
+        assert(strlen(state->mcu_family) > 0);
+        sprintf(msg, "Connected [%s]", state->mcu_family);
         tracelog_statusmsg(TRACESTATMSG_BMP, msg, BMPSTAT_SUCCESS);
       } else {
         tracelog_statusmsg(TRACESTATMSG_BMP, "Listening (passive mode)...", BMPSTAT_SUCCESS);
@@ -713,7 +887,7 @@ static void handle_stateaction(APPSTATE *state)
     case TRACESTAT_NO_DEVPATH:
     case TRACESTAT_NO_PIPE:
       strlcpy(msg, "Trace interface not available", sizearray(msg));
-      if (state->probe == state->netprobe && state->mode != MODE_ASYNC)
+      if (state->probe == state->netprobe && state->swomode != MODE_ASYNC)
         strlcat(msg, "; try NRZ/Async mode", sizearray(msg));
       tracelog_statusmsg(TRACESTATMSG_BMP, msg, BMPERR_GENERAL);
       break;
@@ -774,28 +948,20 @@ static void handle_stateaction(APPSTATE *state)
         state->error_flags &= ~ERROR_NO_ELF;
       }
     }
-    state->reload_format = nk_false;
+    state->reload_format = false;
   }
 }
 
 int main(int argc, char *argv[])
 {
-  struct nk_context *ctx;
-  SPLITTERBAR splitter_hor, splitter_ver;
-  int canvas_width, canvas_height;
-  enum nk_collapse_states tab_states[TAB_COUNT];
-  APPSTATE appstate;
-  char txtConfigFile[_MAX_PATH], valstr[128] = "";
-  int waitidle;
-  char opt_fontstd[64] = "", opt_fontmono[64] = "";
-
   /* global defaults */
+  APPSTATE appstate;
   memset(&appstate, 0, sizeof appstate);
   appstate.reinitialize = nk_true;
-  appstate.reload_format = nk_true;
+  appstate.reload_format = true;
   appstate.trace_status = TRACESTAT_NOT_INIT;
-  appstate.trace_running = nk_true;
-  appstate.mode = MODE_MANCHESTER;
+  appstate.trace_running = true;
+  appstate.swomode = MODE_MANCHESTER;
   appstate.probe_type = PROBE_UNKNOWN;
   appstate.trace_endpoint = BMP_EP_TRACE;
   appstate.init_target = nk_true;
@@ -804,102 +970,29 @@ int main(int argc, char *argv[])
   appstate.cur_chan_edit = -1;
   appstate.cur_match_line = -1;
   /* locate the configuration file for settings */
+  char txtConfigFile[_MAX_PATH];
   get_configfile(txtConfigFile, sizearray(txtConfigFile), "bmtrace.ini");
-
-  /* read channel configuration */
-  for (int chan = 0; chan < NUM_CHANNELS; chan++) {
-    char key[41];
-    unsigned clr;
-    int enabled, result;
-    channel_set(chan, (chan == 0), NULL, nk_rgb(190, 190, 190)); /* preset: port 0 is enabled by default, others disabled by default */
-    sprintf(key, "chan%d", chan);
-    ini_gets("Channels", key, "", valstr, sizearray(valstr), txtConfigFile);
-    result = sscanf(valstr, "%d #%x %40s", &enabled, &clr, key);
-    if (result >= 2)
-      channel_set(chan, enabled, (result >= 3) ? key : NULL, nk_rgb(clr >> 16,(clr >> 8) & 0xff, clr & 0xff));
-  }
-  /* read filters (initialize the filter list) */
-  appstate.filtercount = ini_getl("Filters", "count", 0, txtConfigFile);;
-  appstate.filterlistsize = appstate.filtercount + 1; /* at least 1 extra, for a NULL sentinel */
-  appstate.filterlist = malloc(appstate.filterlistsize * sizeof(TRACEFILTER));  /* make sure unused entries are NULL */
-  if (appstate.filterlist != NULL) {
-    memset(appstate.filterlist, 0, appstate.filterlistsize * sizeof(TRACEFILTER));
-    int idx;
-    for (idx = 0; idx < appstate.filtercount; idx++) {
-      char key[40], *ptr;
-      appstate.filterlist[idx].expr = malloc(sizearray(appstate.newfiltertext) * sizeof(char));
-      if (appstate.filterlist[idx].expr == NULL)
-        break;
-      sprintf(key, "filter%d", idx + 1);
-      ini_gets("Filters", key, "", appstate.newfiltertext, sizearray(appstate.newfiltertext), txtConfigFile);
-      appstate.filterlist[idx].enabled = (int)strtol(appstate.newfiltertext, &ptr, 10);
-      assert(ptr != NULL && *ptr != '\0');  /* a comma should be found */
-      if (*ptr == ',')
-        ptr += 1;
-      strcpy(appstate.filterlist[idx].expr, ptr);
-    }
-    appstate.filtercount = idx;
-  } else {
-    appstate.filtercount = appstate.filterlistsize = 0;
-  }
-  appstate.newfiltertext[0] = '\0';
-
+  SPLITTERBAR splitter_hor, splitter_ver;
+  enum nk_collapse_states tab_states[TAB_COUNT];
+  load_settings(txtConfigFile, &appstate, tab_states, &splitter_hor, &splitter_ver);
   /* other configuration */
-  appstate.probe = (int)ini_getl("Settings", "probe", 0, txtConfigFile);
-  ini_gets("Settings", "ip-address", "127.0.0.1", appstate.IPaddr, sizearray(appstate.IPaddr), txtConfigFile);
-  appstate.mode = (int)ini_getl("Settings", "mode", MODE_MANCHESTER, txtConfigFile);
-  appstate.init_target = (int)ini_getl("Settings", "init-target", 1, txtConfigFile);
-  appstate.init_bmp = (int)ini_getl("Settings", "init-bmp", 1, txtConfigFile);
-  if (appstate.mode == 0) {  /* legacy: appstate.mode == 0 was MODE_PASSIVE */
-    appstate.mode = MODE_MANCHESTER;
-    appstate.init_target = 0;
-    appstate.init_bmp = 0;
-  }
-  appstate.connect_srst = (int)ini_getl("Settings", "connect-srst", 0, txtConfigFile);
-  appstate.datasize = (int)ini_getl("Settings", "datasize", 1, txtConfigFile);
-  ini_gets("Settings", "tsdl", "", appstate.TSDLfile, sizearray(appstate.TSDLfile), txtConfigFile);
-  ini_gets("Settings", "elf", "", appstate.ELFfile, sizearray(appstate.ELFfile), txtConfigFile);
-  ini_gets("Settings", "mcu-freq", "48000000", appstate.cpuclock_str, sizearray(appstate.cpuclock_str), txtConfigFile);
-  ini_gets("Settings", "bitrate", "100000", appstate.bitrate_str, sizearray(appstate.bitrate_str), txtConfigFile);
-  ini_gets("Settings", "size", "", valstr, sizearray(valstr), txtConfigFile);
   opt_fontsize = ini_getf("Settings", "fontsize", FONT_HEIGHT, txtConfigFile);
+  char opt_fontstd[64] = "", opt_fontmono[64] = "";
   ini_gets("Settings", "fontstd", "", opt_fontstd, sizearray(opt_fontstd), txtConfigFile);
   ini_gets("Settings", "fontmono", "", opt_fontmono, sizearray(opt_fontmono), txtConfigFile);
+  char valstr[128];
+  int canvas_width, canvas_height;
+  ini_gets("Settings", "size", "", valstr, sizearray(valstr), txtConfigFile);
   if (sscanf(valstr, "%d %d", &canvas_width, &canvas_height) != 2 || canvas_width < 100 || canvas_height < 50) {
     canvas_width = WINDOW_WIDTH;
     canvas_height = WINDOW_HEIGHT;
   }
-  ini_gets("Settings", "timeline", "", valstr, sizearray(valstr), txtConfigFile);
-  if (strlen(valstr) > 0) {
-    double spacing;
-    unsigned long scale, delta;
-    if (sscanf(valstr, "%lf %lu %lu", &spacing, &scale, &delta) == 3)
-      timeline_setconfig(spacing, scale, delta);
-  }
 
-  ini_gets("Settings", "splitter", "", valstr, sizearray(valstr), txtConfigFile);
-  splitter_hor.ratio = splitter_ver.ratio = 0.0;
-  sscanf(valstr, "%f %f", &splitter_hor.ratio, &splitter_ver.ratio);
-  if (splitter_hor.ratio < 0.05 || splitter_hor.ratio > 0.95)
-    splitter_hor.ratio = 0.70;
-  if (splitter_ver.ratio < 0.05 || splitter_ver.ratio > 0.95)
-    splitter_ver.ratio = 0.70;
   #define SEPARATOR_HOR 4
   #define SEPARATOR_VER 4
   #define SPACING       4
   nk_splitter_init(&splitter_hor, canvas_width - 3 * SPACING, SEPARATOR_HOR, splitter_hor.ratio);
   nk_splitter_init(&splitter_ver, canvas_height - (ROW_HEIGHT + 8 * SPACING), SEPARATOR_VER, splitter_ver.ratio);
-
-  for (int idx = 0; idx < TAB_COUNT; idx++) {
-    char key[40];
-    int opened, result;
-    tab_states[idx] = (idx == TAB_CONFIGURATION) ? NK_MAXIMIZED : NK_MINIMIZED;
-    sprintf(key, "view%d", idx);
-    ini_gets("Settings", key, "", valstr, sizearray(valstr), txtConfigFile);
-    result = sscanf(valstr, "%d", &opened);
-    if (result >= 1)
-      tab_states[idx] = opened;
-  }
 
   for (int idx = 1; idx < argc; idx++) {
     if (IS_OPTION(argv[idx])) {
@@ -971,11 +1064,12 @@ int main(int argc, char *argv[])
   appstate.reinitialize = 2; /* skip first iteration, so window is updated */
   tracelog_statusmsg(TRACESTATMSG_BMP, "Initializing...", BMPSTAT_SUCCESS);
 
-  ctx = guidriver_init("BlackMagic Trace Viewer", canvas_width, canvas_height,
-                       GUIDRV_RESIZEABLE | GUIDRV_TIMER, opt_fontstd, opt_fontmono, opt_fontsize);
+  struct nk_context *ctx = guidriver_init("BlackMagic Trace Viewer", canvas_width, canvas_height,
+                                          GUIDRV_RESIZEABLE | GUIDRV_TIMER,
+                                          opt_fontstd, opt_fontmono, opt_fontsize);
   nuklear_style(ctx);
 
-  waitidle = 1;
+  int waitidle = 1;
   for ( ;; ) {
     /* handle state, (re-)connect and/or (re-)load of CTF definitions */
     handle_stateaction(&appstate);
@@ -1054,58 +1148,12 @@ int main(int argc, char *argv[])
   }
 
   /* save configuration */
-  for (int chan = 0; chan < NUM_CHANNELS; chan++) {
-    char key[40];
-    struct nk_color color = channel_getcolor(chan);
-    sprintf(key, "chan%d", chan);
-    sprintf(valstr, "%d #%06x %s", channel_getenabled(chan),
-            ((int)color.r << 16) | ((int)color.g << 8) | color.b,
-            channel_getname(chan, NULL, 0));
-    ini_puts("Channels", key, valstr, txtConfigFile);
-  }
-  ini_putl("Filters", "count", appstate.filtercount, txtConfigFile);
-  for (int idx = 0; idx < appstate.filtercount; idx++) {
-    char key[40], expr[FILTER_MAXSTRING+10];
-    assert(appstate.filterlist != NULL && appstate.filterlist[idx].expr != NULL);
-    sprintf(key, "filter%d", idx + 1);
-    sprintf(expr, "%d,%s", appstate.filterlist[idx].enabled, appstate.filterlist[idx].expr);
-    ini_puts("Filters", key, expr, txtConfigFile);
-    free(appstate.filterlist[idx].expr);
-  }
-  if (appstate.filterlist != NULL)
-    free(appstate.filterlist);
-  sprintf(valstr, "%.2f %.2f", splitter_hor.ratio, splitter_ver.ratio);
-  ini_puts("Settings", "splitter", valstr, txtConfigFile);
-  for (int idx = 0; idx < TAB_COUNT; idx++) {
-    char key[40];
-    sprintf(key, "view%d", idx);
-    sprintf(valstr, "%d", tab_states[idx]);
-    ini_puts("Settings", key, valstr, txtConfigFile);
-  }
+  save_settings(txtConfigFile, &appstate, tab_states, &splitter_hor, &splitter_ver);
   ini_putf("Settings", "fontsize", opt_fontsize, txtConfigFile);
   ini_puts("Settings", "fontstd", opt_fontstd, txtConfigFile);
   ini_puts("Settings", "fontmono", opt_fontmono, txtConfigFile);
-  ini_putl("Settings", "mode", appstate.mode, txtConfigFile);
-  ini_putl("Settings", "init-target", appstate.init_target, txtConfigFile);
-  ini_putl("Settings", "init-bmp", appstate.init_bmp, txtConfigFile);
-  ini_putl("Settings", "connect-srst", appstate.connect_srst, txtConfigFile);
-  ini_putl("Settings", "datasize", appstate.datasize, txtConfigFile);
-  ini_puts("Settings", "tsdl", appstate.TSDLfile, txtConfigFile);
-  ini_puts("Settings", "elf", appstate.ELFfile, txtConfigFile);
-  ini_putl("Settings", "mcu-freq", appstate.cpuclock, txtConfigFile);
-  ini_putl("Settings", "bitrate", appstate.bitrate, txtConfigFile);
   sprintf(valstr, "%d %d", canvas_width, canvas_height);
   ini_puts("Settings", "size", valstr, txtConfigFile);
-  {
-    double spacing;
-    unsigned long scale, delta;
-    timeline_getconfig(&spacing, &scale, &delta);
-    sprintf(valstr, "%.2f %lu %lu", spacing, scale, delta);
-    ini_puts("Settings", "timeline", valstr, txtConfigFile);
-  }
-  if (bmp_is_ip_address(appstate.IPaddr))
-    ini_puts("Settings", "ip-address", appstate.IPaddr, txtConfigFile);
-  ini_putl("Settings", "probe", (appstate.probe == appstate.netprobe) ? 99 : appstate.probe, txtConfigFile);
 
   clear_probelist(appstate.probelist, appstate.netprobe);
   trace_close();

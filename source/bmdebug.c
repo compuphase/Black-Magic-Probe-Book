@@ -72,13 +72,14 @@
 #include "dwarf.h"
 #include "elf.h"
 #include "guidriver.h"
+#include "mcu-info.h"
 #include "memdump.h"
+#include "minIni.h"
 #include "noc_file_dialog.h"
 #include "nuklear_mousepointer.h"
 #include "nuklear_style.h"
 #include "nuklear_splitter.h"
 #include "nuklear_tooltip.h"
-#include "minIni.h"
 #include "serialmon.h"
 #include "specialfolder.h"
 #include "svd-support.h"
@@ -3681,6 +3682,7 @@ enum {
   STATE_GET_SOURCES,
   STATE_MEMACCESS_1,
   STATE_MEMACCESS_2,
+  STATE_PARTID,
   STATE_VERIFY,
   STATE_DOWNLOAD,
   STATE_CHECK_MAIN,
@@ -3745,21 +3747,22 @@ enum {
 };
 
 
-static int save_settings(const char *filename, const char *entrypoint,
-                         int tpwr, int connect_srst, int autodownload,
-                         const char *svdfile, const SWOSETTINGS *swo)
+static bool save_targetoptions(const char *filename, const char *entrypoint,
+                          int tpwr, int connect_srst, int autodownload,
+                          const char *svdfile, const SWOSETTINGS *swo)
 {
   int idx;
 
   if (filename == NULL || strlen(filename) == 0)
-    return 0;
+    return false;
 
   assert(entrypoint != NULL);
   ini_puts("Target", "entrypoint", entrypoint, filename);
   ini_puts("Target", "cmsis-svd", svdfile, filename);
 
-  ini_putl("Flash", "tpwr", tpwr, filename);
-  ini_putl("Flash", "connect_srst", connect_srst, filename);
+  ini_putl("Settings", "tpwr", tpwr, filename);
+  ini_putl("Settings", "connect_srst", connect_srst, filename);
+
   ini_putl("Flash", "auto-download", autodownload, filename);
 
   ini_putl("SWO trace", "mode", swo->mode, filename);
@@ -3785,23 +3788,24 @@ static int save_settings(const char *filename, const char *entrypoint,
   return access(filename, 0) == 0;
 }
 
-static int load_settings(const char *filename, char *entrypoint, size_t entrypoint_sz,
-                         int *tpwr, int *connect_srst, int *autodownload,
-                         char *svdfile, size_t svdfile_sz, SWOSETTINGS *swo)
+static bool load_targetoptions(const char *filename, char *entrypoint, size_t entrypoint_sz,
+                          int *tpwr, int *connect_srst, int *autodownload,
+                          char *svdfile, size_t svdfile_sz, SWOSETTINGS *swo)
 {
   int idx, mode;
 
   if (filename == NULL || strlen(filename) == 0 || access(filename, 0) != 0)
-    return 0;
+    return false;
 
   assert(entrypoint != NULL);
   ini_gets("Target", "entrypoint", "main", entrypoint, entrypoint_sz, filename);
   ini_gets("Target", "cmsis-svd", "", svdfile, svdfile_sz, filename);
 
   assert(tpwr != NULL);
-  *tpwr =(int)ini_getl("Flash", "tpwr", 0, filename);
+  *tpwr =(int)ini_getl("Settings", "tpwr", 0, filename);
   assert(connect_srst != NULL);
-  *connect_srst = (int)ini_getl("Flash", "connect_srst", 0, filename);
+  *connect_srst = (int)ini_getl("Settings", "connect_srst", 0, filename);
+
   assert(autodownload != NULL);
   *autodownload = (int)ini_getl("Flash", "auto-download", 1, filename);
 
@@ -3837,7 +3841,7 @@ static int load_settings(const char *filename, char *entrypoint, size_t entrypoi
     sermon_setmetadata(swo->metadata);
   }
 
-  return 1;
+  return true;
 }
 
 static void svd_info(const char *params, STRINGLIST *textroot)
@@ -5161,8 +5165,9 @@ typedef struct tagAPPSTATE {
   int probe_type;               /**< BMP or ctxLink (needed to select manchester/async mode) */
   char port_gdb[64];            /**< COM port for GDB */
   char IPaddr[64];              /**< IP address for network probe */
-  char mcu_family[64];          /**< detected MCU family (on attach) */
+  char mcu_family[64];          /**< detected MCU family (on attach), also the "driver" name of BMP */
   char mcu_architecture[32];    /**< detected ARM architecture (on attach) */
+  unsigned long mcu_partid;     /**< specific ID code (0 if unknown) */
   char GDBpath[_MAX_PATH];      /**< path to GDB executable */
   TASK task;                    /**< GDB task */
   char *cmdline;                /**< command & response buffer (for GDB task) */
@@ -5188,7 +5193,7 @@ typedef struct tagAPPSTATE {
   const STRINGLIST *console_mark;/**< marker to help parsing GDB output */
   STRINGLIST consoleedit_root;  /**< edit history */
   const STRINGLIST *consoleedit_next; /**< start point in history to search backward from */
-  char Filename[_MAX_PATH];     /**< ELF file being debugged */
+  char ELFfile[_MAX_PATH];      /**< ELF file being debugged */
   char ParamFile[_MAX_PATH];    /**< debug parameters for the ELF file */
   char SVDfile[_MAX_PATH];      /**< target MCU definitions */
   char EntryPoint[64];          /**< name of the entry-point function (e.g. "main") */
@@ -5338,8 +5343,8 @@ static void button_bar(struct nk_context *ctx, APPSTATE *state, float panel_widt
   nk_layout_row_push(ctx, BUTTON_WIDTH);
   if (button_tooltip(ctx, "reset", NK_KEY_CTRL_F2, (state->curstate != STATE_RUNNING),
                      "Reload and restart the program (Ctrl+F2)")) {
-    if (strlen(state->Filename) > 0 && access(state->Filename, 0) == 0)
-      save_settings(state->ParamFile, state->EntryPoint, state->tpwr, state->connect_srst,
+    if (strlen(state->ELFfile) > 0 && access(state->ELFfile, 0) == 0)
+      save_targetoptions(state->ParamFile, state->EntryPoint, state->tpwr, state->connect_srst,
                     state->autodownload, state->SVDfile, &state->swo);
     RESETSTATE(state, STATE_FILE);
   }
@@ -5454,7 +5459,7 @@ static void sourcecode_view(struct nk_context *ctx, APPSTATE *state)
     for (item = source_firstline(source_cursorfile); item != NULL && item->linenumber != 0; item = item->next)
       {}  /* lines in assembly have address set, but no linenumber */
     if (item == NULL) {
-      bool ok = sourcefile_disassemble(state->Filename, &sources[source_cursorfile], &state->armstate);
+      bool ok = sourcefile_disassemble(state->ELFfile, &sources[source_cursorfile], &state->armstate);
       if (!ok) {
         /* on failure, switch disassembly off (otherwise, this routine will be
            re-entered each update) */
@@ -5561,7 +5566,7 @@ static void console_view(struct nk_context *ctx, APPSTATE *state,
         } else if (handle_display_cmd(state->console_edit, state->stateparam, state->statesymbol, sizearray(state->statesymbol))) {
           RESETSTATE(state, STATE_WATCH_TOGGLE);
           tab_states[TAB_WATCHES] = NK_MAXIMIZED; /* make sure the watch view to open */
-        } else if ((result = handle_file_load_reset(state->console_edit, state->Filename, sizearray(state->Filename))) != 0) {
+        } else if ((result = handle_file_load_reset(state->console_edit, state->ELFfile, sizearray(state->ELFfile))) != 0) {
           state->force_download = nk_false;
           if (result == HARD_RESET) {
             RESETSTATE(state, STATE_HARDRESET);
@@ -5576,8 +5581,8 @@ static void console_view(struct nk_context *ctx, APPSTATE *state,
           /* save target-specific settings in the parameter file before
              switching to the new file (new options are loaded in the
              STATE_FILE case) */
-          if (strlen(state->Filename) > 0 && access(state->Filename, 0) == 0)
-            save_settings(state->ParamFile, state->EntryPoint, state->tpwr,
+          if (strlen(state->ELFfile) > 0 && access(state->ELFfile, 0) == 0)
+            save_targetoptions(state->ParamFile, state->EntryPoint, state->tpwr,
                           state->connect_srst, state->autodownload, state->SVDfile,
                           &state->swo);
         } else if ((result = handle_serial_cmd(state->console_edit,
@@ -5765,26 +5770,26 @@ static void panel_configuration(struct nk_context *ctx, APPSTATE *state,
     nk_layout_row_end(ctx);
 
     /* target executable */
-    p = strrchr(state->Filename, '/');
-    strlcpy(basename, (p == NULL) ? state->Filename : p + 1, sizearray(basename));
+    p = strrchr(state->ELFfile, '/');
+    strlcpy(basename, (p == NULL) ? state->ELFfile : p + 1, sizearray(basename));
     nk_layout_row_begin(ctx, NK_STATIC, ROW_HEIGHT, 3);
     nk_layout_row_push(ctx, LABEL_WIDTH);
     nk_label(ctx, "File", NK_TEXT_LEFT);
     nk_layout_row_push(ctx, edtwidth);
-    strlcpy(tooltip, (strlen(state->Filename) > 0) ? state->Filename : "Path to the target ELF file", sizearray(tooltip));
+    strlcpy(tooltip, (strlen(state->ELFfile) > 0) ? state->ELFfile : "Path to the target ELF file", sizearray(tooltip));
     editctrl_tooltip(ctx, NK_EDIT_FIELD | NK_EDIT_READ_ONLY,
                      basename, sizearray(basename), nk_filter_ascii, tooltip);
     nk_layout_row_push(ctx, BROWSEBTN_WIDTH);
     if (nk_button_symbol(ctx, NK_SYMBOL_TRIPLE_DOT)) {
       const char *s;
-      translate_path(state->Filename, 1);
+      translate_path(state->ELFfile, 1);
       s = noc_file_dialog_open(NOC_FILE_DIALOG_OPEN,
                                "ELF Executables\0*.elf;*.bin;*.\0All files\0*.*\0",
-                               NULL, state->Filename, "Select ELF Executable",
+                               NULL, state->ELFfile, "Select ELF Executable",
                                guidriver_apphandle());
-      if (s != NULL && strlen(s) < sizearray(state->Filename)) {
-        strcpy(state->Filename, s);
-        translate_path(state->Filename, 0);
+      if (s != NULL && strlen(s) < sizearray(state->ELFfile)) {
+        strcpy(state->ELFfile, s);
+        translate_path(state->ELFfile, 0);
         free((void*)s);
         if (state->curstate > STATE_FILE)
           RESETSTATE(state, STATE_FILE);
@@ -6528,13 +6533,13 @@ static void handle_stateaction(APPSTATE *state, enum nk_collapse_states tab_stat
         dwarf_cleanup(&dwarf_linetable, &dwarf_symboltable, &dwarf_filetable);
         svd_clear();
         /* create parameter filename from target filename, then read target-specific settings */
-        strlcpy(state->ParamFile, state->Filename, sizearray(state->ParamFile));
+        strlcpy(state->ParamFile, state->ELFfile, sizearray(state->ParamFile));
         strlcat(state->ParamFile, ".bmcfg", sizearray(state->ParamFile));
-        load_settings(state->ParamFile, state->EntryPoint, sizearray(state->EntryPoint),
+        load_targetoptions(state->ParamFile, state->EntryPoint, sizearray(state->EntryPoint),
                       &state->tpwr, &state->connect_srst, &state->autodownload,
                       state->SVDfile, sizearray(state->SVDfile), &state->swo);
         /* load target filename in GDB */
-        snprintf(state->cmdline, CMD_BUFSIZE, "-file-exec-and-symbols %s\n", enquote(temp, state->Filename, sizeof(temp)));
+        snprintf(state->cmdline, CMD_BUFSIZE, "-file-exec-and-symbols %s\n", enquote(temp, state->ELFfile, sizeof(temp)));
         if (task_stdin(&state->task, state->cmdline))
           console_input(state->cmdline);
         state->atprompt = nk_false;
@@ -6542,7 +6547,7 @@ static void handle_stateaction(APPSTATE *state, enum nk_collapse_states tab_stat
       } else if (gdbmi_isresult() != NULL) {
         if (strncmp(gdbmi_isresult(), "done", 4) == 0) {
           /* read the DWARF information (for function and variable lookup) */
-          FILE *fp = fopen(state->Filename, "rb");
+          FILE *fp = fopen(state->ELFfile, "rb");
           if (fp != NULL) {
             int address_size;
             if (!dwarf_read(fp, &dwarf_linetable, &dwarf_symboltable, &dwarf_filetable, &address_size))
@@ -6617,7 +6622,7 @@ static void handle_stateaction(APPSTATE *state, enum nk_collapse_states tab_stat
           if (type != PROBE_UNKNOWN) {
             state->probe_type = type;
             /* overrule defaults, if we know the probe */
-            if (state->probe_type == PROBE_ORG_BMP)
+            if (state->probe_type == PROBE_BMPv21 || state->probe_type == PROBE_BMPv23)
               state->swo.mode = SWOMODE_MANCHESTER;
             else if (state->probe_type == PROBE_CTXLINK)
               state->swo.mode = SWOMODE_ASYNC;
@@ -6656,6 +6661,7 @@ static void handle_stateaction(APPSTATE *state, enum nk_collapse_states tab_stat
         MARKSTATE(state);
         state->mcu_family[0] = '\0';
         state->mcu_architecture[0] = '\0';
+        state->mcu_partid = 0;
       } else if (gdbmi_isresult() != NULL) {
         if (strncmp(gdbmi_isresult(), "done", 4) == 0) {
           /* save architecture */
@@ -6757,7 +6763,7 @@ static void handle_stateaction(APPSTATE *state, enum nk_collapse_states tab_stat
         if (strncmp(gdbmi_isresult(), "done,", 5) == 0) {
           sources_parse(gdbmi_isresult() + 5);      /* + 5 to skip "done" and comma */
           state->sourcefiles = sources_getnames();  /* create array with names for the dropdown */
-          state->warn_source_tstamps = !elf_up_to_date(state->Filename); /* check timestamps of sources against elf file */
+          state->warn_source_tstamps = !elf_up_to_date(state->ELFfile); /* check timestamps of sources against elf file */
           MOVESTATE(state, STATE_MEMACCESS_1);
         } else {
           if (strncmp(gdbmi_isresult(), "error", 5) == 0) {
@@ -6790,7 +6796,34 @@ static void handle_stateaction(APPSTATE *state, enum nk_collapse_states tab_stat
       if (!state->atprompt)
         break;
       if (STATESWITCH(state)) {
-        if (bmscript_line_fmt("memremap", state->cmdline, NULL)) {
+        if (bmscript_line_fmt("memremap", state->cmdline, NULL, 0)) {
+          /* run first line from the script */
+          task_stdin(&state->task, state->cmdline);
+          state->atprompt = nk_false;
+          MARKSTATE(state);
+          console_replaceflags = STRFLG_LOG;  /* move LOG to SCRIPT, to hide script output by default */
+          console_xlateflags = STRFLG_SCRIPT;
+        } else {
+          MOVESTATE(state, STATE_PARTID);
+        }
+      } else if (gdbmi_isresult() != NULL) {
+        /* run next line from the script (on the end of the script, move to
+           the next state) */
+        if (bmscript_line_fmt(NULL, state->cmdline, NULL, 0)) {
+          task_stdin(&state->task, state->cmdline);
+          state->atprompt = nk_false;
+        } else {
+          console_replaceflags = console_xlateflags = 0;
+          MOVESTATE(state, STATE_PARTID);
+        }
+        gdbmi_sethandled(nk_false);
+      }
+      break;
+    case STATE_PARTID:
+      if (!state->atprompt)
+        break;
+      if (STATESWITCH(state)) {
+        if (bmscript_line_fmt("partid", state->cmdline, NULL, 0)) {
           /* run first line from the script */
           task_stdin(&state->task, state->cmdline);
           state->atprompt = nk_false;
@@ -6803,10 +6836,23 @@ static void handle_stateaction(APPSTATE *state, enum nk_collapse_states tab_stat
       } else if (gdbmi_isresult() != NULL) {
         /* run next line from the script (on the end of the script, move to
            the next state) */
-        if (bmscript_line_fmt(NULL, state->cmdline, NULL)) {
+        if (bmscript_line_fmt(NULL, state->cmdline, NULL, 0)) {
           task_stdin(&state->task, state->cmdline);
           state->atprompt = nk_false;
         } else {
+          /* read the last response of the script, because it contains the ID */
+          STRINGLIST *item = stringlist_getlast(&consolestring_root, 0, STRFLG_RESULT|STRFLG_HANDLED);
+          unsigned long id;
+          if (sscanf(item->text, "$%*d = 0x%lx", &id) == 1) {
+            state->mcu_partid = id;
+            /* see whether to translate the mcu_family name, and to reload the scripts */
+            const MCUINFO *info = mcuinfo_lookup(state->mcu_family, state->mcu_partid);
+            if (info != NULL && info->mcuname != NULL) {
+              strlcpy(state->mcu_family, info->mcuname, sizearray(state->mcu_family));
+              bmscript_clear();
+              bmscript_load(state->mcu_family, state->mcu_architecture);
+            }
+          }
           console_replaceflags = console_xlateflags = 0;
           MOVESTATE(state, state->force_download ? STATE_DOWNLOAD : STATE_VERIFY);
         }
@@ -7239,7 +7285,7 @@ static void handle_stateaction(APPSTATE *state, enum nk_collapse_states tab_stat
           tracelog_statusmsg(TRACESTATMSG_BMP, "Disabled", -1);
         ctf_error_notify(CTFERR_NONE, 0, NULL);
         if (!state->swo.force_plain
-            && ctf_findmetadata(state->Filename, state->swo.metadata, sizearray(state->swo.metadata))
+            && ctf_findmetadata(state->ELFfile, state->swo.metadata, sizearray(state->swo.metadata))
             && ctf_parse_init(state->swo.metadata) && ctf_parse_run())
         {
           const CTF_STREAM *stream;
@@ -7299,7 +7345,7 @@ static void handle_stateaction(APPSTATE *state, enum nk_collapse_states tab_stat
       if (!state->atprompt)
         break;
       if (STATESWITCH(state)) {
-        if (bmscript_line_fmt("swo_device", state->cmdline, NULL)) {
+        if (bmscript_line_fmt("swo_device", state->cmdline, NULL, 0)) {
           /* run first line from the script */
           task_stdin(&state->task, state->cmdline);
           state->atprompt = nk_false;
@@ -7312,7 +7358,7 @@ static void handle_stateaction(APPSTATE *state, enum nk_collapse_states tab_stat
       } else if (gdbmi_isresult() != NULL) {
         /* run next line from the script (on the end of the script, move to
            the next state) */
-        if (bmscript_line_fmt(NULL, state->cmdline, NULL)) {
+        if (bmscript_line_fmt(NULL, state->cmdline, NULL, 0)) {
           task_stdin(&state->task, state->cmdline);
           state->atprompt = nk_false;
         } else {
@@ -7332,11 +7378,12 @@ static void handle_stateaction(APPSTATE *state, enum nk_collapse_states tab_stat
       if (STATESWITCH(state)) {
         const DWARF_SYMBOLLIST *symbol = dwarf_sym_from_name(&dwarf_symboltable, "TRACESWO_BPS", -1, -1);
         assert(state->swo.bitrate > 0 && state->swo.clock > 0);
+        unsigned swvclock = (state->swo.mode == SWOMODE_MANCHESTER) ? 2 * state->swo.bitrate : state->swo.bitrate;
         state->scriptparams[0] = (state->swo.mode == SWOMODE_MANCHESTER) ? 1 : 2;
-        state->scriptparams[1] = state->swo.clock / state->swo.bitrate - 1;
+        state->scriptparams[1] = state->swo.clock / swvclock - 1;
         state->scriptparams[2] = state->swo.bitrate;
         state->scriptparams[3] = (symbol != NULL) ? (unsigned long)symbol->data_addr : ~0;
-        if (bmscript_line_fmt("swo_generic", state->cmdline, state->scriptparams)) {
+        if (bmscript_line_fmt("swo_trace", state->cmdline, state->scriptparams, 4)) {
           /* run first line from the script */
           task_stdin(&state->task, state->cmdline);
           state->atprompt = nk_false;
@@ -7349,7 +7396,7 @@ static void handle_stateaction(APPSTATE *state, enum nk_collapse_states tab_stat
       } else if (gdbmi_isresult() != NULL) {
         /* run next line from the script (on the end of the script, move to
            the next state) */
-        if (bmscript_line_fmt(NULL, state->cmdline, state->scriptparams)) {
+        if (bmscript_line_fmt(NULL, state->cmdline, state->scriptparams, 4)) {
           task_stdin(&state->task, state->cmdline);
           state->atprompt = nk_false;
         } else {
@@ -7374,7 +7421,7 @@ static void handle_stateaction(APPSTATE *state, enum nk_collapse_states tab_stat
             if (channel_getenabled(idx))
               state->scriptparams[0] |= (1 << idx);
         }
-        if (bmscript_line_fmt("swo_channels", state->cmdline, state->scriptparams)) {
+        if (bmscript_line_fmt("swo_channels", state->cmdline, state->scriptparams, 2)) {
           /* run first line from the script */
           task_stdin(&state->task, state->cmdline);
           state->atprompt = nk_false;
@@ -7387,7 +7434,7 @@ static void handle_stateaction(APPSTATE *state, enum nk_collapse_states tab_stat
       } else if (gdbmi_isresult() != NULL) {
         /* run next line from the script (on the end of the script, move to
            the next state) */
-        if (bmscript_line_fmt(NULL, state->cmdline, state->scriptparams)) {
+        if (bmscript_line_fmt(NULL, state->cmdline, state->scriptparams, 2)) {
           task_stdin(&state->task, state->cmdline);
           state->atprompt = nk_false;
         } else {
@@ -7452,7 +7499,6 @@ int main(int argc, char *argv[])
   struct nk_context *ctx;
   APPSTATE appstate;
   SPLITTERBAR splitter_hor, splitter_ver;
-  char txtConfigFile[_MAX_PATH];
   char valstr[128];
   int canvas_width, canvas_height;
   enum nk_collapse_states tab_states[TAB_COUNT];
@@ -7471,6 +7517,7 @@ int main(int argc, char *argv[])
   if (appstate.cmdline == NULL)
     return 1;
   /* locate the configuration file for settings */
+  char txtConfigFile[_MAX_PATH];
   get_configfile(txtConfigFile, sizearray(txtConfigFile), "bmdebug.ini");
 
   #if defined _WIN32
@@ -7568,22 +7615,22 @@ int main(int argc, char *argv[])
       /* filename on the command line must be in native format (using backslashes
          on Windows) */
       if (access(argv[idx], 0) == 0) {
-        strlcpy(appstate.Filename, argv[idx], sizearray(appstate.Filename));
-        translate_path(appstate.Filename, 0);
+        strlcpy(appstate.ELFfile, argv[idx], sizearray(appstate.ELFfile));
+        translate_path(appstate.ELFfile, 0);
       }
     }
   }
-  if (strlen(appstate.Filename) == 0) {
-    ini_gets("Session", "recent", "", appstate.Filename, sizearray(appstate.Filename), txtConfigFile);
+  if (strlen(appstate.ELFfile) == 0) {
+    ini_gets("Session", "recent", "", appstate.ELFfile, sizearray(appstate.ELFfile), txtConfigFile);
     /* filename from the configuration file is stored in the GDB format (convert
        it to native format to test whether it exists) */
-    translate_path(appstate.Filename, 1);
-    if (access(appstate.Filename, 0) != 0)
-      appstate.Filename[0] = '\0';
+    translate_path(appstate.ELFfile, 1);
+    if (access(appstate.ELFfile, 0) != 0)
+      appstate.ELFfile[0] = '\0';
     else
-      translate_path(appstate.Filename, 0); /* convert back to GDB format */
+      translate_path(appstate.ELFfile, 0); /* convert back to GDB format */
   }
-  assert(strchr(appstate.Filename, '\\') == 0); /* backslashes should already have been replaced */
+  assert(strchr(appstate.ELFfile, '\\') == 0); /* backslashes should already have been replaced */
   /* if a target filename is known, create the parameter filename from target
      filename and read target-specific options */
   memset(&appstate.swo, 0, sizeof(appstate.swo));
@@ -7591,11 +7638,11 @@ int main(int argc, char *argv[])
   appstate.swo.clock = 48000000;
   appstate.swo.bitrate = 100000;
   appstate.swo.datasize = 1;
-  if (strlen(appstate.Filename) > 0) {
-    strlcpy(appstate.ParamFile, appstate.Filename, sizearray(appstate.ParamFile));
+  if (strlen(appstate.ELFfile) > 0) {
+    strlcpy(appstate.ParamFile, appstate.ELFfile, sizearray(appstate.ParamFile));
     strlcat(appstate.ParamFile, ".bmcfg", sizearray(appstate.ParamFile));
     translate_path(appstate.ParamFile, 1);
-    load_settings(appstate.ParamFile, appstate.EntryPoint, sizearray(appstate.EntryPoint), &appstate.tpwr,
+    load_targetoptions(appstate.ParamFile, appstate.EntryPoint, sizearray(appstate.EntryPoint), &appstate.tpwr,
                   &appstate.connect_srst, &appstate.autodownload, appstate.SVDfile, sizearray(appstate.SVDfile),
                   &appstate.swo);
   }
@@ -7742,8 +7789,8 @@ int main(int argc, char *argv[])
   exitcode = task_close(&appstate.task);
 
   /* save parameter file */
-  if (strlen(appstate.Filename) > 0 && access(appstate.Filename, 0) == 0)
-    save_settings(appstate.ParamFile, appstate.EntryPoint, appstate.tpwr, appstate.connect_srst,
+  if (strlen(appstate.ELFfile) > 0 && access(appstate.ELFfile, 0) == 0)
+    save_targetoptions(appstate.ParamFile, appstate.EntryPoint, appstate.tpwr, appstate.connect_srst,
                   appstate.autodownload, appstate.SVDfile, &appstate.swo);
 
   /* save settings */
@@ -7765,7 +7812,7 @@ int main(int argc, char *argv[])
   ini_putf("Settings", "fontsize", opt_fontsize, txtConfigFile);
   ini_puts("Settings", "fontstd", opt_fontstd, txtConfigFile);
   ini_puts("Settings", "fontmono", opt_fontmono, txtConfigFile);
-  ini_puts("Session", "recent", appstate.Filename, txtConfigFile);
+  ini_puts("Session", "recent", appstate.ELFfile, txtConfigFile);
   /* save history of commands */
   ini_puts("Commands", NULL, NULL, txtConfigFile);  /* erase section first */
   idx = 1;

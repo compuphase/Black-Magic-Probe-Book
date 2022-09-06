@@ -3,7 +3,7 @@
  * parser is the base for the tracegen code generation utility and the CTF
  * binary stream decoder.
  *
- * Copyright 2019-2021 CompuPhase
+ * Copyright 2019-2022 CompuPhase
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -764,6 +764,8 @@ static void event_cleanup(void)
       iter->field_root.next = fld->next;
       free((void*)fld);
     }
+    if (iter->attribute != NULL)
+      free((void*)iter->attribute);
     free((void*)iter);
   }
 }
@@ -1776,6 +1778,8 @@ static void parse_event(void)
         event->id = (int)token_getlong();
         id_set = 1;
       } else if (strcmp(token_gettext(), "stream_id") == 0) {
+        if (streamid_set)
+          ctf_error(CTFERR_DUPLICATE_SETTING, token_gettext());
         token_need('=');
         if (token_match(TOK_LSTRING)) {
           stream = stream_by_name(token_gettext());
@@ -1789,9 +1793,17 @@ static void parse_event(void)
         }
         streamid_set = 1;
       } else if (strcmp(token_gettext(), "name") == 0) {
+        if (event->name[0] != '\0')
+          ctf_error(CTFERR_DUPLICATE_SETTING, token_gettext());
         token_need('=');
         token_need(TOK_IDENTIFIER);
         strlcpy(event->name, token_gettext(), sizearray(event->name));
+      } else if (strcmp(token_gettext(), "attribute") == 0) {
+        if (event->attribute != NULL)
+          ctf_error(CTFERR_DUPLICATE_SETTING, token_gettext());
+        token_need('=');
+        token_need(TOK_IDENTIFIER);
+        event->attribute = strdup(token_gettext());
       }
       token_need(';');
     } else if (tok == TOK_STREAM) {

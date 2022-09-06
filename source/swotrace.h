@@ -18,6 +18,7 @@
 #ifndef _SWOTRACE_H
 #define _SWOTRACE_H
 
+#include <stdbool.h>
 #include "nuklear.h"
 
 #define NUM_CHANNELS  32  /* number of SWO channels */
@@ -65,10 +66,12 @@ void   tracestring_add(unsigned channel, const unsigned char *buffer, size_t len
 void   tracestring_clear(void);
 int    tracestring_isempty(void);
 unsigned tracestring_count(void);
-int    tracestring_process(int enabled);
-int    trace_save(const char *filename);
+int    tracestring_process(bool enabled);
+int    tracestring_save(const char *filename);
 int    tracestring_find(const char *text, int curline);
 int    tracestring_findtimestamp(double timestamp);
+
+int    traceprofile_process(bool enabled, unsigned *overflow);
 
 void   tracelog_statusmsg(int type, const char *msg, int code);
 void   tracelog_statusclear(void);

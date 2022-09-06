@@ -42,7 +42,8 @@
 
 enum {
   PROBE_UNKNOWN,
-  PROBE_ORG_BMP,          /* original BMP */
+  PROBE_BMPv21,           /* original BMP, hardware revision 3 */
+  PROBE_BMPv23,           /* original BMP, hardware revision 6 */
   PROBE_CTXLINK,          /* ctxLink */
 };
 

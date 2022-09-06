@@ -1,6 +1,6 @@
 /*
  * Shared code for SWO Trace for the bmtrace and bmdebug utilities. It uses
- * WinUSB under Microsoft Windows and libusb 1.0 under Linux.
+ * WinUSB or libusbK on Microsoft Windows, and libusb 1.0 on Linux.
  *
  * Copyright 2019-2020 CompuPhase
  *
@@ -173,13 +173,13 @@ static SOCKET TraceSocket = INVALID_SOCKET;
 static TRACESTRING tracestring_root = { NULL, NULL };
 static TRACESTRING *tracestring_tail = NULL;
 
-static unsigned char itm_cache[5]; /* we may need to cache an ITM data packet that does
-                                      not fit completely in an USB packet; ITM data
-                                      packets are 5 bytes max. */
+static unsigned char itm_cache[5]; /**< we may need to cache an ITM data packet that does
+                                        not fit completely in an USB packet; ITM data
+                                        packets are 5 bytes max. */
 static size_t itm_cachefilled = 0;
 static unsigned short itm_datasize = 1;    /* size in bytes (not bits) */
 static short itm_datasz_auto = 0;
-static int itm_packet_errors = 0;
+static unsigned itm_packet_errors = 0;
 
 #define ITM_VALIDHDR(b)   (((b) & 0x07) >= 1 && ((b) & 0x07) <= 3)
 #define ITM_CHANNEL(b)    (unsigned)(((b) >> 3) & 0x1f) /* get channel number from ITM packet header */
@@ -343,7 +343,7 @@ unsigned tracestring_count(void)
   return count;
 }
 
-int tracestring_process(int enabled)
+int tracestring_process(bool enabled)
 {
   int count = 0;
   while (tracequeue_head != tracequeue_tail) {
@@ -387,6 +387,12 @@ int tracestring_process(int enabled)
       }
 
       while (pktlen > 0) {
+        if (!ITM_VALIDHDR(*pktdata)) {
+          //??? this may be valid profile data
+          ctf_decode_reset();
+          itm_packet_errors += 1;
+          goto skip_packet;     /* not a valid ITM packet, ignore it */
+        }
         /* if the channel changes in the middle of a packet, add a string and
            restart */
         if (chan != ITM_CHANNEL(*pktdata)) {
@@ -394,11 +400,6 @@ int tracestring_process(int enabled)
             tracestring_add(chan, buffer, buflen, trace_queue[tracequeue_head].timestamp);
           chan = ITM_CHANNEL(*pktdata);
           buflen = 0;
-        }
-        if (!ITM_VALIDHDR(*pktdata)) {
-          ctf_decode_reset();
-          itm_packet_errors += 1;
-          goto skip_packet;     /* not a valid ITM packet, ignore it */
         }
         len = ITM_LENGTH(*pktdata);
         if (pktlen < len + 1) {
@@ -495,7 +496,7 @@ int tracestring_findtimestamp(double timestamp)
   return line - 1;
 }
 
-int trace_save(const char *filename)
+int tracestring_save(const char *filename)
 {
   FILE *fp;
   TRACESTRING *item;
@@ -553,6 +554,87 @@ int trace_getpacketerrors(void)
   return itm_packet_errors;
 }
 
+
+int traceprofile_process(bool enabled, unsigned *overflow)
+{
+  int count = 0;
+  int overflow_count = 0;
+  while (tracequeue_head != tracequeue_tail) {
+    if (enabled) {
+      const unsigned char *pktdata = trace_queue[tracequeue_head].data;
+      size_t pktlen = trace_queue[tracequeue_head].length;
+
+      /* first handle cached data (that crosses USB packets) */
+      if (itm_cachefilled > 0) {
+        unsigned char buffer[5];
+        memcpy(buffer, itm_cache, itm_cachefilled);
+        size_t needed = ITM_VALIDHDR(itm_cache[0]) ? ITM_LENGTH(itm_cache[0]) + 1 : 5;
+        assert(itm_cachefilled < needed);
+        needed -= itm_cachefilled;
+        if (needed > pktlen) {
+          /* cached data plus new data block *still* do not make a complete packet */
+          memcpy(itm_cache + itm_cachefilled, pktdata, pktlen);
+          itm_cachefilled += pktlen;
+          pktlen = 0; /* avoid dropping into the "while" below */
+        } else {
+          memcpy(buffer + itm_cachefilled, pktdata, needed);
+          pktdata += needed;
+          pktlen -= needed;
+          /* handling the packet is simpler now, because we know that we have
+             a full packet (plus: we don't care about unsupported packets,
+             because we can simply drop the cache, and we don't handle the
+             overflow packet because it is only one byte, so it can never
+             overflow */
+          if (buffer[0] == 0x17) {
+            uint32_t pc;
+            memcpy(&pc, buffer + 1, 4);
+            printf("%x\n", pc);  //???
+          }
+          itm_cachefilled = 0;
+        }
+      }
+
+      while (pktlen > 0) {
+        if (*pktdata == 0x17) {
+          /* PC sample packet */
+          if (pktlen >= 5) {
+            uint32_t pc;
+            memcpy(&pc, pktdata + 1, 4);
+            printf("%x\n", pc);  //???
+            pktlen -= 5;
+            pktdata += 5;
+          } else {
+            memcpy(itm_cache, pktdata, pktlen);
+            itm_cachefilled = pktlen;
+            pktlen = 0;
+          }
+        } else if (*pktdata == 0x70) {
+          /* overflow packet */
+          pktlen -= 1;
+          pktdata += 1;
+          overflow_count += 1;
+        } else {
+          /* unknown/unsupported packet */
+          unsigned len = ITM_VALIDHDR(*pktdata) ? ITM_LENGTH(*pktdata) : 4;
+          len += 1; /* include packet header */
+          if (pktlen >= len) {
+            pktlen -= len;
+            pktdata += len;
+          } else {
+            memcpy(itm_cache, pktdata, pktlen);
+            itm_cachefilled = pktlen;
+            pktlen = 0;
+          }
+        }
+      }
+    }
+    tracequeue_head = (tracequeue_head + 1) % PACKET_NUM;
+  }
+
+  if (overflow != NULL)
+    *overflow = overflow_count;
+  return count;
+}
 
 #if defined WIN32 || defined _WIN32
 
@@ -829,7 +911,7 @@ static DWORD __stdcall trace_read(LPVOID arg)
           PostMessage((HWND)guidriver_apphandle(), WM_USER, 0, 0L); /* just a flag to wake up the GUI */
         }
       } else {
-        Sleep(100);
+        Sleep(50);
       }
     }
   } else if (UsbK_IsActive()) {
@@ -846,7 +928,7 @@ static DWORD __stdcall trace_read(LPVOID arg)
           PostMessage((HWND)guidriver_apphandle(), WM_USER, 0, 0L); /* just a flag to wake up the GUI */
         }
       } else {
-        Sleep(100);
+        Sleep(50);
       }
     }
   }

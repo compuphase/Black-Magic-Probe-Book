@@ -19,6 +19,7 @@
 #ifndef _BMP_SUPPORT_H
 #define _BMP_SUPPORT_H
 
+#include <stdbool.h>
 #include <stdio.h>
 #include "rs232.h"
 
@@ -75,7 +76,7 @@ int bmp_enabletrace(int async_bitrate, unsigned char *endpoint);
 int bmp_restart(void);
 int bmp_break(void);
 
-int bmp_runscript(const char *name, const char *driver, const char *arch, const unsigned long *params);
+bool bmp_runscript(const char *name, const char *driver, const char *arch, unsigned long *params, size_t paramcount);
 
 #if defined __cplusplus
   }

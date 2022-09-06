@@ -48,6 +48,7 @@
 #include <assert.h>
 #include <ctype.h>
 #include <limits.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -740,12 +741,10 @@ static int tools_popup(struct nk_context *ctx, const struct nk_rect *anchor_butt
   /* check whether the mouse was clicked outside this popup (this closes the
      popup), but skip this check at the initial "open" */
   if (prev_active == TOOL_OPEN) {
-    int i;
-    for (i = 0; i < NK_BUTTON_MAX; i++) {
+    for (int i = 0; i < NK_BUTTON_MAX; i++)
       if (nk_input_is_mouse_pressed(&ctx->input, (enum nk_buttons)i)
           && !nk_input_is_mouse_click_in_rect(&ctx->input, (enum nk_buttons)i, rc))
         is_active = TOOL_CLOSE;
-    }
   }
 
   if (nk_popup_begin(ctx, NK_POPUP_STATIC, "Tools", NK_WINDOW_NO_SCROLLBAR, rc)) {
@@ -798,8 +797,9 @@ typedef struct tagAPPSTATE {
   char Serial[32];              /**< serialization: serial number */
   char SerialSize[32];          /**< serialization: size (in bytes of characters) */
   char SerialIncr[32];          /**< serialization: increment */
-  char Filename[_MAX_PATH];     /**< ELF path/filename (target) */
+  char ELFfile[_MAX_PATH];      /**< ELF path/filename (target) */
   char ParamFile[_MAX_PATH];    /**< configuration file for the target */
+  char SerialFile[_MAX_PATH];   /**< optional file for serialization settings */
   FILE *fpTgt;                  /**< target file */
   FILE *fpWork;                 /**< intermediate work file */
   coro coro_download;           /**< co-routine handle */
@@ -842,21 +842,42 @@ enum {
   STATE_FULLERASE,
 };
 
+static char *getpath(char *path, size_t pathlength, const char *basename, const char *basepath)
+{
+  assert(path != NULL && pathlength > 0);
+  assert(basename != NULL);
+  assert(basepath != NULL);
+
+  if (basename[0] == DIRSEP_CHAR || (strlen(basename) >= 3 && basename[1] == ':' && basename[2] == '\\')) {
+    /* absolute path (ignore basepath) */
+    strlcpy(path, basename, pathlength);
+  } else {
+    /* relative path, use directory part of the basepath parameter */
+    strlcpy(path, basepath, pathlength);
+    char *ptr = strrchr(path, DIRSEP_CHAR);
+    size_t len = (ptr != NULL) ? (ptr - path) + 1 : 0;
+    path[len] = '\0';
+    strlcat(path, basename, pathlength);
+  }
+  return path;
+}
+
 static const char *architectures[] = { "Standard", "LPC8xx", "LPC11xx", "LPC15xx",
                                        "LPC17xx", "LPC21xx", "LPC22xx", "LPC23xx",
                                        "LPC24xx", "LPC43xx" };
 
-static int load_targetparams(const char *filename, APPSTATE *state)
+static bool load_targetparams(const char *filename, APPSTATE *state)
 {
   assert(filename != NULL);
   assert(state != NULL);
   if (access(filename, 0) != 0)
-    return 0;
+    return false;
 
   state->connect_srst = (nk_bool)ini_getl("Settings", "connect-srst", 0, filename);
   state->write_log = (nk_bool)ini_getl("Settings", "write-log", 0, filename);
   state->print_time = (nk_bool)ini_getl("Settings", "print-time", 0, filename);
-  char field[200];
+
+  char field[_MAX_PATH];
   ini_gets("Flash", "architecture", "", field, sizearray(field), filename);
   for (state->architecture = 0; state->architecture < sizearray(architectures); state->architecture++)
     if (architecture_match(architectures[state->architecture], field))
@@ -866,21 +887,29 @@ static int load_targetparams(const char *filename, APPSTATE *state)
   state->tpwr = (int)ini_getl("Flash", "tpwr", 0, filename);
   state->fullerase = (int)ini_getl("Flash", "full-erase", 0, filename);
   ini_gets("Flash", "postprocess", "", state->PostProcess, sizearray(state->PostProcess), filename);
-  state->serialize = (int)ini_getl("Serialize", "option", 0, filename);
-  ini_gets("Serialize", "address", ".text:0", field, sizearray(field), filename);
+
+  strlcpy(state->SerialFile, filename, sizearray(state->SerialFile));
+  ini_gets("Serialize", "file", "", state->SerialFile, sizearray(state->SerialFile), filename);
+  char serialfile[_MAX_PATH];
+  strlcpy(serialfile, filename, sizearray(serialfile));
+  if (strlen(state->SerialFile) > 0)
+    getpath(serialfile, sizearray(serialfile), state->SerialFile, filename);
+
+  state->serialize = (int)ini_getl("Serialize", "option", 0, serialfile);
+  ini_gets("Serialize", "address", ".text:0", field, sizearray(field), serialfile);
   char *ptr;
   if ((ptr = strchr(field, ':')) != NULL) {
     *ptr++ = '\0';
     strlcpy(state->Section, field, sizearray(state->Section));
     strlcpy(state->Address, ptr, sizearray(state->Address));
   }
-  ini_gets("Serialize", "match", ":0", field, sizearray(field), filename);
+  ini_gets("Serialize", "match", ":0", field, sizearray(field), serialfile);
   if ((ptr = strchr(field, ':')) != NULL) {
     *ptr++ = '\0';
     strlcpy(state->Match, field, sizearray(state->Match));
     strlcpy(state->Prefix, ptr, sizearray(state->Prefix));
   }
-  ini_gets("Serialize", "serial", "1:4:0:1", field, sizearray(field), filename);
+  ini_gets("Serialize", "serial", "1:4:0:1", field, sizearray(field), serialfile);
   ptr = (char*)skipwhite(field);
   if (isalpha(*ptr) && *(ptr + 1) == ':')
     ptr += 2; /* looks like the start of a Windows path */
@@ -897,7 +926,40 @@ static int load_targetparams(const char *filename, APPSTATE *state)
     }
   }
 
-  return 1;
+  return true;
+}
+
+static bool save_targetparams(const char *filename, const APPSTATE *state)
+{
+  assert(filename != NULL);
+  assert(state != NULL);
+
+  ini_putl("Settings", "connect-srst", state->connect_srst, filename);
+  ini_putl("Settings", "write-log", state->write_log, filename);
+  ini_putl("Settings", "print-time", state->print_time, filename);
+
+  char field[200] = "";
+  if (state->architecture > 0 && state->architecture < sizearray(architectures))
+    strcpy(field, architectures[state->architecture]);
+  ini_puts("Flash", "architecture", field, filename);
+  ini_putl("Flash", "tpwr", state->tpwr, filename);
+  ini_putl("Flash", "full-erase", state->fullerase, filename);
+  ini_puts("Flash", "postprocess", state->PostProcess, filename);
+
+  ini_puts("Serialize", "file", state->SerialFile, filename);
+  char serialfile[_MAX_PATH];
+  strlcpy(serialfile, filename, sizearray(serialfile));
+  if (strlen(state->SerialFile) > 0)
+    getpath(serialfile, sizearray(serialfile), state->SerialFile, filename);
+  ini_putl("Serialize", "option", state->serialize, serialfile);
+  sprintf(field, "%s:%s", state->Section, state->Address);
+  ini_puts("Serialize", "address", field, serialfile);
+  sprintf(field, "%s:%s", state->Match, state->Prefix);
+  ini_puts("Serialize", "match", field, serialfile);
+  sprintf(field, "%s:%s:%d:%s", state->Serial, state->SerialSize, state->SerialFmt, state->SerialIncr);
+  ini_puts("Serialize", "serial", field, serialfile);
+
+  return true;
 }
 
 static void panel_options(struct nk_context *ctx, APPSTATE *state,
@@ -1028,11 +1090,16 @@ static void panel_serialize(struct nk_context *ctx, APPSTATE *state,
       state->SerialFmt = FMT_ASCII;
     if (nk_option_label(ctx, "Unicode", (state->SerialFmt == FMT_UNICODE), NK_TEXT_LEFT))
       state->SerialFmt = FMT_UNICODE;
-    nk_layout_row(ctx, NK_DYNAMIC, ROW_HEIGHT, 5, nk_ratio(5, 0.05, 0.193, 0.3, 0.45));
+    nk_layout_row(ctx, NK_DYNAMIC, ROW_HEIGHT, 5, nk_ratio(5, 0.05, 0.193, 0.25, 0.5));
     nk_spacing(ctx, 1);
     nk_label(ctx, "Increment", NK_TEXT_ALIGN_LEFT | NK_TEXT_ALIGN_MIDDLE);
     editctrl_tooltip(ctx, NK_EDIT_FIELD|NK_EDIT_CLIPBOARD, state->SerialIncr, sizearray(state->SerialIncr),
                      nk_filter_decimal, "The increment for the serial number");
+    nk_layout_row(ctx, NK_DYNAMIC, ROW_HEIGHT, 4, nk_ratio(5, 0.05, 0.19, 0.75));
+    nk_spacing(ctx, 1);
+    nk_label(ctx, "File", NK_TEXT_ALIGN_LEFT | NK_TEXT_ALIGN_MIDDLE);
+    editctrl_tooltip(ctx, NK_EDIT_FIELD|NK_EDIT_CLIPBOARD, state->SerialFile, sizearray(state->SerialFile),
+                     nk_filter_ascii, "The file to store the serialization settings in\nLeave empty to use the local configuration file");
     nk_tree_state_pop(ctx);
   }
 }
@@ -1077,29 +1144,11 @@ static int handle_stateaction(APPSTATE *state, enum nk_collapse_states tab_state
     tab_states[TAB_OPTIONS] = NK_MINIMIZED;
     tab_states[TAB_SERIALIZATION] = NK_MINIMIZED;
     tab_states[TAB_STATUS] = NK_MAXIMIZED;
-    if (access(state->Filename, 0) == 0) {
-      char field[200];
+    if (access(state->ELFfile, 0) == 0) {
       /* save settings in cache file */
-      strlcpy(state->ParamFile, state->Filename, sizearray(state->ParamFile));
+      strlcpy(state->ParamFile, state->ELFfile, sizearray(state->ParamFile));
       strlcat(state->ParamFile, ".bmcfg", sizearray(state->ParamFile));
-      if (state->architecture > 0 && state->architecture < sizearray(architectures))
-        strcpy(field, architectures[state->architecture]);
-      else
-        field[0] = '\0';
-      ini_putl("Settings", "connect-srst", state->connect_srst, state->ParamFile);
-      ini_putl("Settings", "write-log", state->write_log, state->ParamFile);
-      ini_putl("Settings", "print-time", state->print_time, state->ParamFile);
-      ini_puts("Flash", "architecture", field, state->ParamFile);
-      ini_putl("Flash", "tpwr", state->tpwr, state->ParamFile);
-      ini_putl("Flash", "full-erase", state->fullerase, state->ParamFile);
-      ini_puts("Flash", "postprocess", state->PostProcess, state->ParamFile);
-      ini_putl("Serialize", "option", state->serialize, state->ParamFile);
-      sprintf(field, "%s:%s", state->Section, state->Address);
-      ini_puts("Serialize", "address", field, state->ParamFile);
-      sprintf(field, "%s:%s", state->Match, state->Prefix);
-      ini_puts("Serialize", "match", field, state->ParamFile);
-      sprintf(field, "%s:%s:%d:%s", state->Serial, state->SerialSize, state->SerialFmt, state->SerialIncr);
-      ini_puts("Serialize", "serial", field, state->ParamFile);
+      save_targetparams(state->ParamFile, state);
       state->curstate = STATE_ATTACH;
       state->tstamp_start = clock();
     } else {
@@ -1116,8 +1165,8 @@ static int handle_stateaction(APPSTATE *state, enum nk_collapse_states tab_state
       char mcufamily[32];
       state->is_attached = bmp_attach(state->tpwr, state->connect_srst, mcufamily, sizearray(mcufamily), NULL, 0);
       if (state->is_attached) {
+        /* check for particular architectures, try exact match first */
         int arch;
-        /* try exact match first */
         for (arch = 0; arch < sizearray(architectures); arch++)
           if (architecture_match(architectures[arch], mcufamily))
             break;
@@ -1149,7 +1198,7 @@ static int handle_stateaction(APPSTATE *state, enum nk_collapse_states tab_state
 
   case STATE_PRE_DOWNLOAD:
     /* open the working file */
-    state->fpTgt = fopen(state->Filename, "rb");
+    state->fpTgt = fopen(state->ELFfile, "rb");
     if (state->fpTgt == NULL) {
       log_addstring("^1Failed to load the target file\n");
       state->curstate = STATE_IDLE;
@@ -1199,7 +1248,7 @@ static int handle_stateaction(APPSTATE *state, enum nk_collapse_states tab_state
   case STATE_CLEARFLASH:
     if (!state->skip_download && state->fullerase) {
       if (state->architecture > 0)
-        bmp_runscript("memremap", architectures[state->architecture], NULL, NULL);
+        bmp_runscript("memremap", architectures[state->architecture], NULL, NULL, 0);
       result = bmp_fullerase();
       state->curstate = result ? STATE_DOWNLOAD : STATE_IDLE;
     } else {
@@ -1212,7 +1261,7 @@ static int handle_stateaction(APPSTATE *state, enum nk_collapse_states tab_state
     /* download to target */
     if (!state->skip_download) {
       if (state->architecture > 0)
-        bmp_runscript("memremap", architectures[state->architecture], NULL, NULL);
+        bmp_runscript("memremap", architectures[state->architecture], NULL, NULL, 0);
       /* create a coroutine for the function that does the download, so that
          this loop continues with updating the message log, while the download
          is in progress */
@@ -1256,7 +1305,7 @@ static int handle_stateaction(APPSTATE *state, enum nk_collapse_states tab_state
     }
     /* compare the checksum of Flash memory to the file */
     if (state->architecture > 0)
-      bmp_runscript("memremap", architectures[state->architecture], NULL, NULL);
+      bmp_runscript("memremap", architectures[state->architecture], NULL, NULL, 0);
     result = bmp_verify((state->fpWork != NULL)? state->fpWork : state->fpTgt);
     state->curstate = result ? STATE_FINISH : STATE_IDLE;
     if (result && state->print_time) {
@@ -1270,15 +1319,15 @@ static int handle_stateaction(APPSTATE *state, enum nk_collapse_states tab_state
 
   case STATE_FINISH:
     /* optionally log the download */
-    if (state->write_log && !writelog(state->Filename, (state->serialize != SER_NONE) ? state->Serial : NULL))
+    if (state->write_log && !writelog(state->ELFfile, (state->serialize != SER_NONE) ? state->Serial : NULL))
       log_addstring("^3Failed to write to log file\n");
     /* optionally perform a post-processing step */
     if (strlen(state->PostProcess) > 0) {
       #if defined WIN32 || defined _WIN32
         if (state->serialize != SER_NONE)
-          result = spawnlp(P_WAIT, state->PostProcess, state->PostProcess, state->Filename, state->Serial, NULL);
+          result = spawnlp(P_WAIT, state->PostProcess, state->PostProcess, state->ELFfile, state->Serial, NULL);
         else
-          result = spawnlp(P_WAIT, state->PostProcess, state->PostProcess, state->Filename, NULL);
+          result = spawnlp(P_WAIT, state->PostProcess, state->PostProcess, state->ELFfile, NULL);
       #elif defined __linux__
         pid_t pid = fork();
         if (pid > 0) {
@@ -1291,9 +1340,9 @@ static int handle_stateaction(APPSTATE *state, enum nk_collapse_states tab_state
         } else {
           if (pid == 0) {
             if (state->serialize != SER_NONE)
-              execlp(state->PostProcess, state->PostProcess, state->Filename, state->Serial, NULL);
+              execlp(state->PostProcess, state->PostProcess, state->ELFfile, state->Serial, NULL);
             else
-              execlp(state->PostProcess, state->PostProcess, state->Filename, NULL);
+              execlp(state->PostProcess, state->PostProcess, state->ELFfile, NULL);
           }
           _exit(EXIT_FAILURE); /* this point is only reached on error, because execlp() does not return */
         }
@@ -1359,7 +1408,7 @@ static int handle_stateaction(APPSTATE *state, enum nk_collapse_states tab_state
     {
       state->is_attached = 1;
       if (state->architecture > 0)
-        bmp_runscript("memremap", architectures[state->architecture], NULL, NULL);
+        bmp_runscript("memremap", architectures[state->architecture], NULL, NULL, 0);
       bmp_fullerase();
     }
     state->curstate = STATE_IDLE;
@@ -1434,20 +1483,20 @@ int main(int argc, char *argv[])
       }
     } else {
       if (access(argv[idx], 0) == 0) {
-        strlcpy(appstate.Filename, argv[idx], sizearray(appstate.Filename));
+        strlcpy(appstate.ELFfile, argv[idx], sizearray(appstate.ELFfile));
         load_options = 1;
       }
     }
   }
-  if (strlen(appstate.Filename) == 0) {
-    ini_gets("Session", "recent", "", appstate.Filename, sizearray(appstate.Filename), txtConfigFile);
-    if (access(appstate.Filename, 0) == 0)
+  if (strlen(appstate.ELFfile) == 0) {
+    ini_gets("Session", "recent", "", appstate.ELFfile, sizearray(appstate.ELFfile), txtConfigFile);
+    if (access(appstate.ELFfile, 0) == 0)
       load_options = 1;
     else
-      appstate.Filename[0] = '\0';
+      appstate.ELFfile[0] = '\0';
   }
 
-  strlcpy(appstate.ParamFile, appstate.Filename, sizearray(appstate.ParamFile));
+  strlcpy(appstate.ParamFile, appstate.ELFfile, sizearray(appstate.ParamFile));
   strlcat(appstate.ParamFile, ".bmcfg", sizearray(appstate.ParamFile));
 
   ctx = guidriver_init("BlackMagic Flash Programmer", WINDOW_WIDTH, WINDOW_HEIGHT,
@@ -1476,11 +1525,11 @@ int main(int argc, char *argv[])
       nk_layout_row_begin(ctx, NK_STATIC, ROW_HEIGHT, 2);
       nk_layout_row_push(ctx, WINDOW_WIDTH - 4 * opt_fontsize);
       result = nk_edit_string_zero_terminated(ctx, NK_EDIT_FIELD|NK_EDIT_SIG_ENTER|NK_EDIT_CLIPBOARD,
-                                              appstate.Filename, sizearray(appstate.Filename), nk_filter_ascii);
+                                              appstate.ELFfile, sizearray(appstate.ELFfile), nk_filter_ascii);
       if (result & NK_EDIT_COMMITED)
         load_options = 2;
       else if ((result & NK_EDIT_DEACTIVATED) != 0
-               && strncmp(appstate.Filename, appstate.ParamFile, strlen(appstate.Filename)) != 0)
+               && strncmp(appstate.ELFfile, appstate.ParamFile, strlen(appstate.ELFfile)) != 0)
         load_options = 2;
       nk_layout_row_push(ctx, BROWSEBTN_WIDTH);
       if (nk_button_symbol(ctx, NK_SYMBOL_TRIPLE_DOT) || nk_input_is_key_pressed(&ctx->input, NK_KEY_OPEN)) {
@@ -1488,8 +1537,8 @@ int main(int argc, char *argv[])
                                              "ELF Executables\0*.elf;*.bin;*.\0All files\0*.*\0",
                                              NULL, NULL, "Select ELF Executable",
                                              guidriver_apphandle());
-        if (s != NULL && strlen(s) < sizearray(appstate.Filename)) {
-          strcpy(appstate.Filename, s);
+        if (s != NULL && strlen(s) < sizearray(appstate.ELFfile)) {
+          strcpy(appstate.ELFfile, s);
           load_options = 2;
           free((void*)s);
         }
@@ -1519,7 +1568,7 @@ int main(int argc, char *argv[])
       /* the options are best reloaded after handling other settings, but before
          handling the download action */
       if (load_options != 0) {
-        strlcpy(appstate.ParamFile, appstate.Filename, sizearray(appstate.ParamFile));
+        strlcpy(appstate.ParamFile, appstate.ELFfile, sizearray(appstate.ParamFile));
         strlcat(appstate.ParamFile, ".bmcfg", sizearray(appstate.ParamFile));
         if (load_targetparams(appstate.ParamFile, &appstate)) {
           if (load_options == 2)
@@ -1528,7 +1577,7 @@ int main(int argc, char *argv[])
             log_addstring("Settings for target loaded\n");
           /* for an LPC* target, check CRP */
           if (appstate.architecture > 0) {
-            appstate.fpTgt = fopen(appstate.Filename, "rb");
+            appstate.fpTgt = fopen(appstate.ELFfile, "rb");
             if (appstate.fpTgt != NULL) {
               result = elf_check_crp(appstate.fpTgt, &idx);
               fclose(appstate.fpTgt);
@@ -1541,7 +1590,7 @@ int main(int argc, char *argv[])
             }
           }
         } else if (load_options == 2) {
-          if (access(appstate.Filename, 0) != 0)
+          if (access(appstate.ELFfile, 0) != 0)
             log_addstring("^1Target not found\n");
           else
             log_addstring("New target, please check settings\n");
@@ -1598,15 +1647,17 @@ int main(int argc, char *argv[])
     guidriver_render(nk_rgb(30,30,30));
   }
 
+  if (strlen(appstate.ParamFile) > 0 && access(appstate.ParamFile, 0) == 0)
+    save_targetparams(appstate.ParamFile, &appstate);
   ini_putf("Settings", "fontsize", opt_fontsize, txtConfigFile);
   ini_puts("Settings", "fontstd", opt_fontstd, txtConfigFile);
   ini_puts("Settings", "fontmono", opt_fontmono, txtConfigFile);
   if (strlen(txtConfigFile) > 0)
-    ini_puts("Session", "recent", appstate.Filename, txtConfigFile);
-
+    ini_puts("Session", "recent", appstate.ELFfile, txtConfigFile);
   if (bmp_is_ip_address(appstate.IPaddr))
     ini_puts("Settings", "ip-address", appstate.IPaddr, txtConfigFile);
   ini_putl("Settings", "appstate.probe", (appstate.probe == appstate.netprobe) ? 99 : appstate.probe, txtConfigFile);
+
   clear_probelist(appstate.probelist, appstate.netprobe);
   guidriver_close();
   bmscript_clear();

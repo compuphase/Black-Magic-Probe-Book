@@ -1,4 +1,4 @@
-#define NK_BUTTON_TRIGGER_ON_RELEASE
+//#define NK_BUTTON_TRIGGER_ON_RELEASE  // gives problems with dragging scroll bars
 #define NK_INCLUDE_FIXED_TYPES
 #define NK_INCLUDE_STANDARD_VARARGS
 #define NK_INCLUDE_DEFAULT_ALLOCATOR
