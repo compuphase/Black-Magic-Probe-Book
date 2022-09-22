@@ -10,7 +10,25 @@ Several utilities accompagny this guide. Some are small, such as `bmscan` to loc
 
 The software is licensed under the [Apache License, version 2.0](https://www.apache.org/licenses/LICENSE-2.0).
 
-For the purpose of troubleshooting, pre-build versions of the "hosted" variant of the Black Magic firmware are also available for Windows and Linux (see [Releases](https://github.com/compuphase/Black-Magic-Probe-Book/releases)).
+A summary of the utilities:
+<table>
+<tr>
+<td> <img src="https://www.compuphase.com/electronics/icon_debug_64.png" alt="Icon">    </td><td> bmdebug      </td><td> A front-end for GDB with specific support for the Black Magic Probe and debugging embedded targets. </td>
+</tr><tr>
+<td> <img src="https://www.compuphase.com/electronics/icon_download_64.png" alt="Icon"> </td><td> bmflash      </td><td> A utility to download firmware into the Flash memory of a microcontroller, with support for serialization. </td>
+</tr><tr>
+<td> <img src="https://www.compuphase.com/electronics/icon_profile_64.png" alt="Icon">  </td><td> bmprofile    </td><td> A sampling profiler using the CoreSight debugging features and the TRACESWO channel. </td>
+</tr><tr>
+<td> <img src="https://www.compuphase.com/electronics/icon_trace_64.png" alt="Icon">    </td><td> bmtrace      </td><td> A utility to monitor SWO trace messages, with support for filtering, multiple channels and the <a href="https://diamon.org/ctf/">Common Trace Format</a>. </td>
+</tr><tr>
+<td>                                                                                    </td><td> bmscan       </td><td> A command-line utility to check the COM port (Windows) or ttyACM device (Linux) that the Black Magic Probe is attached to. It can locate the IP address of a ctxLink probe by doing a network scan. </td>
+</tr><tr>
+<td>                                                                                    </td><td> elf&#x2011;postlink </td><td> A utility to set the checksum in the vector table for NXP microcontrollers in the LPC series. As the name suggests, this utility can be run on an ELF file after the "link" stage. </td>
+</tr><tr>
+<td>                                                                                    </td><td> tracegen     </td><td> A utility to generate C source files from a TSDL specification for the <a href="https://diamon.org/ctf/">Common Trace Format</a>. </td>
+</tr>
+</table>
+
 ## Building the software
 Several makefiles are provided for various compilers. Use the one that is appropriate for your system. It is most convenient if you rename the correct makefile (for your system) to `Makefile`, so that you don't have to specify it on the command line each time you run `make`.
 
