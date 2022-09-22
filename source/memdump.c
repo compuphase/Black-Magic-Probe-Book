@@ -257,19 +257,15 @@ int memdump_parse(const char *gdbresult, MEMDUMP *memdump)
 static void calc_layout(struct nk_context *ctx, struct nk_user_font const *font,
                         float widget_width, MEMDUMP *memdump)
 {
-  int idx;
-  float char_width;
-  unsigned len, maxlen;
-  const char *head, *tail;
-
   /* check size of address label and max. size of field */
   assert(font != NULL && font->width != NULL);
-  char_width = font->width(font->userdata, font->height, "A", 1);
+  float char_width = font->width(font->userdata, font->height, "A", 1);
   memdump->addr_width = (8 + 1) * char_width;
 
-  maxlen = 0;
-  head = memdump->data;
+  unsigned maxlen = 0;
+  const char *head = memdump->data;
   while (*head != '\0') {
+    const char *tail;
     if (*head == '"') {
       tail = skipstring(head);
     } else {
@@ -277,7 +273,7 @@ static void calc_layout(struct nk_context *ctx, struct nk_user_font const *font,
       if (tail == NULL)
         tail = strchr(head, '\0');
     }
-    len = (tail - head);
+    unsigned len = (tail - head);
     if (len >= maxlen)
       maxlen = len;
     head = tail;
@@ -287,7 +283,7 @@ static void calc_layout(struct nk_context *ctx, struct nk_user_font const *font,
   memdump->item_width = (maxlen + 0.5) * char_width;
 
   memdump->columns = (widget_width - memdump->addr_width) / memdump->item_width;
-  for (idx = 1; idx < 8; idx++) { /* round # columns down to the nearest power of 2 below it */
+  for (int idx = 1; idx < 8; idx++) { /* round # columns down to the nearest power of 2 below it */
     if (memdump->columns < (1 << idx)) {
       memdump->columns = 1 << (idx - 1);
       break;

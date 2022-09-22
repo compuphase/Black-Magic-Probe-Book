@@ -46,7 +46,6 @@ LNK       := $(CDIR_BIN)gcc
 LFLAGS    :=
 LFLAGS_GUI:= -Wl,-subsystem,windows
 
-
 ifdef NDEBUG
     # retail version
     CFLAGS += -DNDEBUG
@@ -70,24 +69,35 @@ endif
 # -------------------------------------------------------------
 
 OBJLIST_BMDEBUG = bmdebug.o armdisasm.o bmcommon.o bmp-scan.o bmp-script.o \
-                  demangle.o dwarf.o elf.o guidriver.o mcu-info.o memdump.o minIni.o \
-                  nuklear_mousepointer.o nuklear_splitter.o nuklear_style.o \
-                  nuklear_tooltip.o rs232.o serialmon.o specialfolder.o strlcpy.o \
-                  svd-support.o swotrace.o tcpip.o usb-support.o xmltractor.o \
-                  decodectf.o parsetsdl.o \
+                  demangle.o dwarf.o elf.o guidriver.o mcu-info.o memdump.o \
+                  minIni.o nuklear_mousepointer.o nuklear_splitter.o nuklear_style.o \
+                  nuklear_tooltip.o rs232.o serialmon.o specialfolder.o svd-support.o \
+                  swotrace.o tcpip.o xmltractor.o decodectf.o parsetsdl.o \
+                  strlcpy.o usb-support.o \
                   nuklear.o nuklear_gdip.o noc_file_dialog.o
 
 OBJLIST_BMFLASH = bmflash.o bmcommon.o bmp-scan.o bmp-script.o bmp-support.o \
                   cksum.o crc32.o elf.o gdb-rsp.o guidriver.o ident.o minIni.o \
                   nuklear_mousepointer.o nuklear_style.o nuklear_tooltip.o \
-                  picoro.o rs232.o specialfolder.o strlcpy.o tcpip.o xmltractor.o \
+                  picoro.o rs232.o specialfolder.o tcpip.o xmltractor.o \
+                  strlcpy.o \
                   nuklear.o nuklear_gdip.o noc_file_dialog.o
+
+OBJLIST_BMPROFILE = bmprofile.o bmcommon.o bmp-scan.o bmp-script.o \
+                    bmp-support.o crc32.o decodectf.o demangle.o dwarf.o \
+                    elf.o gdb-rsp.o guidriver.o mcu-info.o minIni.o \
+                    parsetsdl.o picoro.o rs232.o specialfolder.o swotrace.o \
+                    tcpip.o xmltractor.o nuklear_mousepointer.o \
+                    nuklear_splitter.o nuklear_style.o nuklear_tooltip.o \
+                    strlcpy.o usb-support.o \
+                    nuklear.o nuklear_gdip.o noc_file_dialog.o
 
 OBJLIST_BMTRACE = bmtrace.o bmcommon.o bmp-scan.o bmp-script.o bmp-support.o \
                   crc32.o demangle.o dwarf.o elf.o gdb-rsp.o guidriver.o mcu-info.o \
                   minIni.o nuklear_mousepointer.o nuklear_splitter.o nuklear_style.o \
                   nuklear_tooltip.o picoro.o rs232.o specialfolder.o swotrace.o \
-                  strlcpy.o tcpip.o usb-support.o xmltractor.o decodectf.o parsetsdl.o \
+                  tcpip.o xmltractor.o decodectf.o parsetsdl.o \
+                  strlcpy.o usb-support.o \
                   nuklear.o nuklear_gdip.o noc_file_dialog.o
 
 OBJLIST_BMSCAN = bmscan.o bmp-scan.o tcpip.o
@@ -97,12 +107,13 @@ OBJLIST_POSTLINK = elf-postlink.o elf.o strlcpy.o
 OBJLIST_TRACEGEN = tracegen.o parsetsdl.o strlcpy.o
 
 
-project : bmdebug.exe bmflash.exe bmtrace.exe bmscan.exe elf-postlink.exe tracegen.exe
+project : bmdebug.exe bmflash.exe bmprofile.exe bmtrace.exe bmscan.exe elf-postlink.exe tracegen.exe
 
 depend :
 	makedepend -b -fmakefile.dep $(OBJLIST_BMDEBUG:.o=.c) $(OBJLIST_BMFLASH:.o=.c) \
-		   $(OBJLIST_BMTRACE:.o=.c) $(OBJLIST_BMSCAN:.o=.c) $(OBJLIST_POSTLINK:.o=.c) \
-		   $(OBJLIST_TRACEGEN:.o=.c)
+                   $(OBJLIST_BMPROFILE:.o=.c) $(OBJLIST_BMTRACE:.o=.c) \
+                   $(OBJLIST_BMSCAN:.o=.c) $(OBJLIST_POSTLINK:.o=.c) \
+                   $(OBJLIST_TRACEGEN:.o=.c)
 
 
 ##### C files #####
@@ -114,6 +125,8 @@ bmcommon.o : bmcommon.c
 bmdebug.o : bmdebug.c
 
 bmflash.o : bmflash.c
+
+bmprofile.o : bmprofile.c
 
 bmscan.o : bmscan.c
 
@@ -164,7 +177,7 @@ nuklear_tooltip.o : nuklear_tooltip.c
 
 parsetsdl.o : parsetsdl.c
 
-picoro.o: picoro.c
+picoro.o : picoro.c
 
 rs232.o : rs232.c
 
@@ -202,13 +215,16 @@ bmtrace.res : bmtrace.rc
 
 ##### Executables #####
 
-bmdebug.exe : $(OBJLIST_BMDEBUG)
+bmdebug.exe : $(OBJLIST_BMDEBUG) bmdebug.res
 	$(LNK) $(LFLAGS) $(LFLAGS_GUI) -o$@ $^ -lm -lcomdlg32 -lgdi32 -lgdiplus -lsetupapi -lshlwapi -lws2_32
 
-bmflash.exe : $(OBJLIST_BMFLASH)
+bmflash.exe : $(OBJLIST_BMFLASH) bmflash.res
 	$(LNK) $(LFLAGS) $(LFLAGS_GUI) -o$@ $^ -lm -lcomdlg32 -lgdi32 -lgdiplus -lshlwapi -lws2_32
 
-bmtrace.exe : $(OBJLIST_BMTRACE)
+bmprofile.exe : $(OBJLIST_BMPROFILE)
+	$(LNK) $(LFLAGS) $(LFLAGS_GUI) -o$@ $^ -lm -lcomdlg32 -lgdi32 -lgdiplus -lsetupapi -lshlwapi -lws2_32
+
+bmtrace.exe : $(OBJLIST_BMTRACE) bmtrace.res
 	$(LNK) $(LFLAGS) $(LFLAGS_GUI) -o$@ $^ -lm -lcomdlg32 -lgdi32 -lgdiplus -lsetupapi -lshlwapi -lws2_32
 
 bmscan.exe : $(OBJLIST_BMSCAN)

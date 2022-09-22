@@ -19,6 +19,7 @@
  */
 #include <assert.h>
 #include <stdio.h>
+#include <stdbool.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -624,7 +625,7 @@ static int pathxref_find(const PATHXREF *root,int unit,int file)
 
   assert(root!=NULL);
   for (cur=root->next; cur!=NULL && (cur->unit!=unit || cur->file!=file); cur=cur->next)
-    /* nothing */;
+    {}
   return (cur!=NULL) ? cur->index : -1;
 }
 
@@ -661,7 +662,7 @@ static void path_deletetable(DWARF_PATHLIST *root)
     free(cur->name);
     free(cur);
     cur=next;
-  } /* while */
+  }
   memset(root,0,sizeof(DWARF_PATHLIST));
 }
 
@@ -671,7 +672,7 @@ static char *path_get(const DWARF_PATHLIST *root,int index)
 
   assert(root!=NULL);
   for (cur=root->next; cur!=NULL && index-->0; cur=cur->next)
-    /* nothing */;
+    {}
   if (cur!=NULL) {
     assert(cur->name!=NULL);
     return cur->name;
@@ -699,7 +700,7 @@ static DWARF_LINELOOKUP *line_findline(const DWARF_LINELOOKUP *root,int line,int
 
   assert(root!=NULL);
   for (cur=root->next; cur!=NULL && (cur->line!=line || cur->fileindex!=fileindex); cur=cur->next)
-    /* nothing */;
+    {}
   return cur;
 }
 
@@ -709,7 +710,7 @@ static DWARF_LINELOOKUP *line_findaddress(const DWARF_LINELOOKUP *root,unsigned 
 
   assert(root!=NULL);
   for (cur=root->next; cur!=NULL && (cur->address!=address || cur->fileindex!=fileindex); cur=cur->next)
-    /* nothing */;
+    {}
   return cur;
 }
 
@@ -738,7 +739,7 @@ static DWARF_LINELOOKUP *line_insert(DWARF_LINELOOKUP *root,int line,unsigned ad
     cur->fileindex=fileindex;
     /* find insertion position (keep the list sorted on address) */
     for (pred=root; pred->next!=NULL && pred->next->address<address; pred=pred->next)
-      /* nothing */;
+      {}
     /* insert */
     assert(pred!=NULL);
     cur->next=pred->next;
@@ -779,7 +780,7 @@ static DWARF_SYMBOLLIST *symname_insert(DWARF_SYMBOLLIST *root,const char *name,
     cur->name=strdup(demangled);
   else
     cur->name=strdup(name);
-  if (cur==NULL) {
+  if (cur->name==NULL) {
     free(cur);
     return NULL;      /* insufficient memory */
   }
@@ -798,7 +799,7 @@ static DWARF_SYMBOLLIST *symname_insert(DWARF_SYMBOLLIST *root,const char *name,
     cur->scope=SCOPE_UNKNOWN;
   /* insert sorted on name */
   for (pred=root; pred->next!=NULL && strcmp(name,pred->next->name)>0; pred=pred->next)
-    /* nothing */;
+    {}
   /* insert */
   assert(pred!=NULL);
   cur->next=pred->next;
@@ -1220,9 +1221,9 @@ static void clear_state(STATE *state,int default_is_stmt)
    a list of filenames. The each element of the line number structure includes
    an index into the file list. The line number list is sorted on the code
    address */
-static int dwarf_linetable(FILE *fp,const DWARFTABLE tables[],
-                           DWARF_LINELOOKUP *linetable,DWARF_PATHLIST *filetable,
-                           PATHXREF *xreftable)
+static bool dwarf_linetable(FILE *fp,const DWARFTABLE tables[],
+                            DWARF_LINELOOKUP *linetable,DWARF_PATHLIST *filetable,
+                            PATHXREF *xreftable)
 {
   DWARF_PROLOGUE32 prologue;
   STATE state;
@@ -1262,7 +1263,7 @@ static int dwarf_linetable(FILE *fp,const DWARFTABLE tables[],
     /* read the argument counts for the standard opcodes */
     std_argcnt=(uint8_t*)malloc(prologue.opcode_base-1*sizeof(uint8_t));
     if (std_argcnt==NULL)
-      return 0;
+      return false;
     fread(std_argcnt,1,prologue.opcode_base-1,fp);
     assert(prologue.version<5); //??? for DWARF 5+, the format for the include-paths and filenames tables is different
     /* read the include-paths table */
@@ -1424,7 +1425,7 @@ static int dwarf_linetable(FILE *fp,const DWARFTABLE tables[],
     for (fileitem=file_list.next; fileitem!=NULL; fileitem=fileitem->next) {
       /* check whether this file is referenced at all */
       for (lineitem=line_list.next; lineitem!=NULL && lineitem->fileindex!=idx; lineitem=lineitem->next)
-        /* nothing */;
+        {}
       if (lineitem!=NULL) {
         /* so this file is referenced, now see whether it is already in the global
            file table */
@@ -1457,14 +1458,14 @@ static int dwarf_linetable(FILE *fp,const DWARFTABLE tables[],
     unit+=1;
   } /* while (tablesize) */
 
-  return 1;
+  return true;
 }
 
 /* dwarf_infotable() parses the .debug_info table and collects the functions.
  */
-static int dwarf_infotable(FILE *fp,const DWARFTABLE tables[],
-                           DWARF_SYMBOLLIST *symboltable,int *address_size,
-                           const PATHXREF *xreftable)
+static bool dwarf_infotable(FILE *fp,const DWARFTABLE tables[],
+                            DWARF_SYMBOLLIST *symboltable,int *address_size,
+                            const PATHXREF *xreftable)
 {
   UNIT_HDR32 header;
   ABBREVLIST abbrev_root = { NULL };
@@ -1636,7 +1637,7 @@ static int dwarf_infotable(FILE *fp,const DWARFTABLE tables[],
     unit+=1;
   }
   abbrev_deletetable(&abbrev_root);
-  return 1;
+  return true;
 }
 
 static void dwarf_postprocess(DWARF_SYMBOLLIST *symboltable,const DWARF_LINELOOKUP *linetable)
@@ -1672,17 +1673,13 @@ static void dwarf_postprocess(DWARF_SYMBOLLIST *symboltable,const DWARF_LINELOOK
   }
 }
 
-/* dwarf_read() returns three lists: a list with source code line numbers,
- * a list with functions and a list with the file paths (referred to by the
- * other two lists)
+/** dwarf_read() returns three lists: a list with source code line numbers,
+ *  a list with functions and a list with the file paths (referred to by the
+ *  other two lists)
  */
-int dwarf_read(FILE *fp,DWARF_LINELOOKUP *linetable,DWARF_SYMBOLLIST *symboltable,
-               DWARF_PATHLIST *filetable,int *address_size)
+bool dwarf_read(FILE *fp,DWARF_LINELOOKUP *linetable,DWARF_SYMBOLLIST *symboltable,
+                DWARF_PATHLIST *filetable,int *address_size)
 {
-  DWARFTABLE tables[TABLE_COUNT];
-  PATHXREF xreftable = { NULL };
-  int result,wordsize;
-
   assert(fp!=NULL);
   assert(linetable!=NULL);        /* tables must be valid, but empty */
   assert(linetable->next==NULL);
@@ -1692,14 +1689,16 @@ int dwarf_read(FILE *fp,DWARF_LINELOOKUP *linetable,DWARF_SYMBOLLIST *symboltabl
   assert(filetable->next==NULL);
   assert(address_size!=NULL);
 
-  result=elf_info(fp,&wordsize,NULL,NULL,NULL);
-  if (result!=ELFERR_NONE || wordsize!=32) {
+  int wordsize;
+  int err=elf_info(fp,&wordsize,NULL,NULL,NULL);
+  if (err!=ELFERR_NONE || wordsize!=32) {
     /* only 32-bit architectures at this time */
     fclose(fp);
-    return 0;
+    return false;
   }
 
   /* get offsets to various debug tables */
+  DWARFTABLE tables[TABLE_COUNT];
   elf_section_by_name(fp,".debug_info",&tables[TABLE_INFO].offset,NULL,&tables[TABLE_INFO].size);
   elf_section_by_name(fp,".debug_abbrev",&tables[TABLE_ABBREV].offset,NULL,&tables[TABLE_ABBREV].size);
   elf_section_by_name(fp,".debug_str",&tables[TABLE_STR].offset,NULL,&tables[TABLE_STR].size);
@@ -1707,7 +1706,8 @@ int dwarf_read(FILE *fp,DWARF_LINELOOKUP *linetable,DWARF_SYMBOLLIST *symboltabl
   elf_section_by_name(fp,".debug_pubnames",&tables[TABLE_PUBNAME].offset,NULL,&tables[TABLE_PUBNAME].size);
   elf_section_by_name(fp,".debug_line_str",&tables[TABLE_LINE_STR].offset,NULL,&tables[TABLE_LINE_STR].size);
 
-  result=1;
+  PATHXREF xreftable = { NULL };
+  bool result=true;
   /* the line table also holds information for the file path table and the path
      cross-reference; the table is therefore mandatory in the DWARF format and
      it is the first one to parse */
@@ -1817,26 +1817,39 @@ const DWARF_SYMBOLLIST *dwarf_sym_from_index(const DWARF_SYMBOLLIST *symboltable
 /** dwarf_collect_functions_in_file() stores the pointers to all "code" symbols
  *  that appear in a file into a list.
  *
- *  To check the size of the list, call this function with parameter "list" set
- *  to 0. The number of entries to allocate is returned. Then allocate a buffer
- *  of sufficient size, and call this function again with that buffer.
+ *  \param symboltable  [in] The table returned by dwarf_read().
+ *  \param fileindex    The index of the source file to return the functions
+ *                      for, or -1 to return all functions (in all source
+ *                      files).
+ *  \param sort         One of DWARF_SORT_NAME or DWARF_SORT_ADDRESS.
+ *  \param list         [out] An array that will be filled with pointers to the
+ *                      function information. This parameter may be NULL, in
+ *                      order to query the number of functions in the file.
+ *  \param numentries   The size of the "list" array.
  *
- *  Note that the returned list holds pointers to symbols, not the symbols
- *  themselves. The list can be sorted on function names or function addresses.
+ *  \return The number of functions collected.
+ *
+ *  \note   To check the size of the list, call this function with parameter
+ *          "list" set to NULL. The number of entries to allocate is returned.
+ *          Then allocate a buffer of sufficient size, and call this function
+ *          again with that buffer.
+ *
+ *  \note   Note that the returned list holds pointers to symbols, not the
+ *          symbols themselves. The list can be sorted on function names or
+ *          function addresses.
  */
 unsigned dwarf_collect_functions_in_file(const DWARF_SYMBOLLIST *symboltable,int fileindex,
                                          int sort,const DWARF_SYMBOLLIST *list[],int numentries)
 {
-  const DWARF_SYMBOLLIST *sym;
-  int count;
-
   assert(symboltable!=NULL);
+  assert(fileindex==-1 || fileindex>=0);
+  assert(sort==DWARF_SORT_NAME || sort==DWARF_SORT_ADDRESS);
   if (list==NULL)
     numentries=0;
 
-  count=0;
-  for (sym=symboltable->next; sym!=NULL; sym=sym->next) {
-    if (sym->fileindex==fileindex && DWARF_IS_FUNCTION(sym)) {
+  unsigned count=0;
+  for (const DWARF_SYMBOLLIST *sym=symboltable->next; sym!=NULL; sym=sym->next) {
+    if (DWARF_IS_FUNCTION(sym) && (fileindex==-1 || sym->fileindex==fileindex)) {
       if (count<numentries) {
         int pos;
         if (sort==DWARF_SORT_ADDRESS) {

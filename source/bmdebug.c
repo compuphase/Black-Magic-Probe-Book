@@ -701,12 +701,12 @@ static void console_clear(void)
   console_bufsize = 0;
 }
 
-static int console_add(const char *text, int flags)
+static bool console_add(const char *text, int flags)
 {
   static int curflags = -1;
   const char *head, *ptr;
-  int addstring = 0;
-  int foundprompt = 0;
+  bool addstring = false;
+  bool foundprompt = false;
 
   console_growbuffer(strlen(text));
 
@@ -732,9 +732,9 @@ static int console_add(const char *text, int flags)
     const char *tail = strpbrk(head, "\r\n");
     if (tail == NULL) {
       tail = head + strlen(head);
-      addstring = 0;  /* string is not terminated, wait for more characters to come in */
+      addstring = false;  /* string is not terminated, wait for more characters to come in */
     } else {
-      addstring = 1;
+      addstring = true;
     }
     pos = strlen(console_buffer);
     len = tail - head;
@@ -754,7 +754,7 @@ static int console_add(const char *text, int flags)
         xtraflags = (xtraflags & ~STRFLG_TARGET) | STRFLG_STATUS;
       prompt = is_gdb_prompt(ptr) && (xtraflags & STRFLG_TARGET) == 0;
       if (prompt) {
-        foundprompt = 1;  /* don't add prompt to the output console, but mark that we've seen it */
+        foundprompt = true; /* don't add prompt to the output console, but mark that we've seen it */
       } else {
         /* after gdbmi_leader(), there may again be '\n' characters in the resulting string */
         char *tok;
@@ -1380,7 +1380,7 @@ static bool sourcefile_disassemble(const char *path, const SOURCEFILE *source, A
   if (elf_symbols == NULL) {
     FILE *fp = fopen(path, "rb");
     if (fp != NULL) {
-      int count = 0;
+      unsigned count = 0;
       if (elf_load_symbols(fp, NULL, &count) == ELFERR_NONE && count > 0) {
         elf_symbols = malloc(count * sizeof(ELF_SYMBOL));
         if (elf_symbols != NULL) {
@@ -1449,7 +1449,7 @@ static bool sourcefile_disassemble(const char *path, const SOURCEFILE *source, A
     return false;   /* no functions in this file (like in a header file) */
   unsigned addr_range = addr_high - addr_low;
 
-  unsigned char *bincode;
+  unsigned char *bincode = NULL;
   int mode = ARMMODE_UNKNOWN;
   FILE *fp = fopen(path, "rb");
   if (fp != NULL) {
@@ -3538,17 +3538,15 @@ static int source_mouse2char(struct nk_context *ctx, const char *id,
                              float rowheight, struct nk_rect widget_bounds,
                              int *row, int *col)
 {
-  struct nk_mouse *mouse;
-  unsigned xscroll, yscroll;
-
   assert(ctx != NULL);
-  mouse = &ctx->input.mouse;
+  struct nk_mouse *mouse = &ctx->input.mouse;
   assert(mouse != NULL);
   if (!NK_INBOX(mouse->pos.x, mouse->pos.y, widget_bounds.x, widget_bounds.y, widget_bounds.w, widget_bounds.h))
     return 0;
   assert(id != NULL);
+  unsigned xscroll, yscroll;
   nk_group_get_scroll(ctx, id, &xscroll, &yscroll);
-  if (source_lineheight <= 0)
+  if (source_lineheight < 0.1)
     return 0;
   if (row != NULL)
     *row = (int)(((mouse->pos.y - widget_bounds.y) + yscroll) / source_lineheight) + 1;
@@ -3912,7 +3910,7 @@ static void svd_info(const char *params, STRINGLIST *textroot)
               len -= 1;
             if (len == 0) {
               /* single "word" of 80 characters or longer */
-              int len = cutoff;
+              len = cutoff;
               while (head[len] > ' ')
                 len += 1;
             }
@@ -3990,7 +3988,7 @@ static void svd_info(const char *params, STRINGLIST *textroot)
         stringlist_append(textroot, "Registers:", 0);
         unsigned long offset;
         int range;
-        const char *name, *description;
+        const char *name;
         int idx = 0;
         while ((name = svd_register(periph_name, idx, &offset, &range, &description)) != NULL) {
           char formatted_name[50];
@@ -4749,7 +4747,7 @@ static int handle_trace_cmd(const char *command, SWOSETTINGS *swo)
   if (*ptr == '\0' || TERM_EQU(ptr, "info", 4))
     return 3; /* if only "trace" is typed, interpret it as "trace info" */
 
-  if ((ptr = strstr(cmdcopy, "clear")) != 0 && TERM_END(ptr, 5)) {
+  if ((ptr = strstr(cmdcopy, "clear")) != NULL && TERM_END(ptr, 5)) {
     tracestring_clear();
     memset(ptr, ' ', 5);    /* erase the parameter from the string */
   }
@@ -5755,13 +5753,12 @@ static void panel_configuration(struct nk_context *ctx, APPSTATE *state,
                      basename, sizearray(basename), nk_filter_ascii, tooltip);
     nk_layout_row_push(ctx, BROWSEBTN_WIDTH);
     if (nk_button_symbol(ctx, NK_SYMBOL_TRIPLE_DOT)) {
-      const char *s;
-      s = noc_file_dialog_open(NOC_FILE_DIALOG_OPEN,
-                               "Executables\0*.elf;*.\0All files\0*.*\0",
-                               NULL, state->GDBpath, "Select GDB program",
-                               guidriver_apphandle());
+      const char *s = noc_file_dialog_open(NOC_FILE_DIALOG_OPEN,
+                                           "Executables\0*.elf;*.\0All files\0*.*\0",
+                                           NULL, state->GDBpath, "Select GDB program",
+                                           guidriver_apphandle());
       if (s != NULL && strlen(s) < sizearray(state->GDBpath)) {
-        strcpy(state->GDBpath, s);
+        strlcpy(state->GDBpath, s, sizearray(state->GDBpath));
         free((void*)s);
         task_close(&state->task);  /* terminate running instance of GDB */
         RESETSTATE(state, STATE_INIT);
@@ -5781,12 +5778,11 @@ static void panel_configuration(struct nk_context *ctx, APPSTATE *state,
                      basename, sizearray(basename), nk_filter_ascii, tooltip);
     nk_layout_row_push(ctx, BROWSEBTN_WIDTH);
     if (nk_button_symbol(ctx, NK_SYMBOL_TRIPLE_DOT)) {
-      const char *s;
       translate_path(state->ELFfile, 1);
-      s = noc_file_dialog_open(NOC_FILE_DIALOG_OPEN,
-                               "ELF Executables\0*.elf;*.bin;*.\0All files\0*.*\0",
-                               NULL, state->ELFfile, "Select ELF Executable",
-                               guidriver_apphandle());
+      const char *s = noc_file_dialog_open(NOC_FILE_DIALOG_OPEN,
+                                           "ELF Executables\0*.elf;*.bin;*.\0All files\0*.*\0",
+                                           NULL, state->ELFfile, "Select ELF Executable",
+                                           guidriver_apphandle());
       if (s != NULL && strlen(s) < sizearray(state->ELFfile)) {
         strcpy(state->ELFfile, s);
         translate_path(state->ELFfile, 0);
@@ -5821,12 +5817,11 @@ static void panel_configuration(struct nk_context *ctx, APPSTATE *state,
                      basename, sizearray(basename), nk_filter_ascii, tooltip);
     nk_layout_row_push(ctx, BROWSEBTN_WIDTH);
     if (nk_button_symbol(ctx, NK_SYMBOL_TRIPLE_DOT)) {
-      const char *s;
       translate_path(state->SVDfile, 1);
-      s = noc_file_dialog_open(NOC_FILE_DIALOG_OPEN,
-                               "CMSIS SVD files\0*.svd\0All files\0*.*\0",
-                               NULL, state->SVDfile, "Select CMSIS SVD file",
-                               guidriver_apphandle());
+      const char *s = noc_file_dialog_open(NOC_FILE_DIALOG_OPEN,
+                                           "CMSIS SVD files\0*.svd\0All files\0*.*\0",
+                                           NULL, state->SVDfile, "Select CMSIS SVD file",
+                                           guidriver_apphandle());
       if (s != NULL && strlen(s) < sizearray(state->SVDfile)) {
         strcpy(state->SVDfile, s);
         free((void*)s);
@@ -6154,9 +6149,9 @@ static void panel_watches(struct nk_context *ctx, APPSTATE *state,
     if (w < 150)
       w = 150;
     nk_layout_row_push(ctx, w);
-    int result = nk_edit_string_zero_terminated(ctx, NK_EDIT_FIELD|NK_EDIT_SIG_ENTER|NK_EDIT_CLIPBOARD,
-                                                state->watch_edit, sizearray(state->watch_edit),
-                                                nk_filter_ascii);
+    result = nk_edit_string_zero_terminated(ctx, NK_EDIT_FIELD|NK_EDIT_SIG_ENTER|NK_EDIT_CLIPBOARD,
+                                            state->watch_edit, sizearray(state->watch_edit),
+                                            nk_filter_ascii);
     nk_layout_row_push(ctx, ROW_HEIGHT);
     if ((nk_button_symbol(ctx, NK_SYMBOL_PLUS) || (result & NK_EDIT_COMMITED))
         && state->curstate == STATE_STOPPED && strlen(state->watch_edit) > 0) {
@@ -6419,7 +6414,7 @@ static void handle_kbdinput_main(struct nk_context *ctx, APPSTATE *state)
   }
 }
 
-static void handle_stateaction(APPSTATE *state, enum nk_collapse_states tab_states[TAB_COUNT])
+static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states tab_states[TAB_COUNT])
 {
   assert(state != NULL);
   assert(state->cmdline != NULL);

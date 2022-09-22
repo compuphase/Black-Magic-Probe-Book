@@ -112,9 +112,6 @@ void gdbrsp_packetsize(size_t size)
  */
 size_t gdbrsp_recv(char *buffer, size_t size, int timeout)
 {
-  size_t head, tail, idx;
-  int cycles, chk_cache;
-
   if (!bmp_isopen())
     return 0;
   if (cache == NULL) {
@@ -123,9 +120,9 @@ size_t gdbrsp_recv(char *buffer, size_t size, int timeout)
       return 0;
   }
 
-  cycles = (timeout < 0) ? -1 : timeout / POLL_INTERVAL;
-  chk_cache = (cache_idx > 0);  /* analyse data in the cache even if no new data is received */
-  head = tail = 0;
+  int cycles = (timeout < 0) ? -1 : timeout / POLL_INTERVAL;
+  int chk_cache = (cache_idx > 0);  /* analyse data in the cache even if no new data is received */
+  size_t head = 0;
   while (cache_idx < cache_size) {
     size_t count;
     if (bmp_comport() != NULL)
@@ -137,6 +134,7 @@ size_t gdbrsp_recv(char *buffer, size_t size, int timeout)
       chk_cache = 0;
       /* check start character (throw away everything before this) */
       if (head == 0) {
+        size_t idx;
         for (idx = 0; idx < cache_idx && cache[idx] != '$'; idx++)
           /* nothing */;
         if (idx == cache_idx) {
@@ -147,13 +145,14 @@ size_t gdbrsp_recv(char *buffer, size_t size, int timeout)
         }
       }
       /* check whether we have an end mark and a checksum */
+      size_t tail;
       for (tail = head; tail < cache_idx && cache[tail] != '#'; tail++)
         /* nothing */;
       if (tail + 2 < cache_idx) {
         /* '#' found and 2 characters follow, verify the checksum */
         int chksum = (hex2int(cache[tail + 1]) << 4) | hex2int(cache[tail + 2]);
         int sum = 0;
-        for (idx = head; idx < tail; idx++)
+        for (size_t idx = head; idx < tail; idx++)
           sum += cache[idx];
         sum &= 0xff;
         if (sum == chksum) {
@@ -164,15 +163,17 @@ size_t gdbrsp_recv(char *buffer, size_t size, int timeout)
             tcpip_xmit((const unsigned char*)"+", 1);
           count = tail - head;  /* number of payload bytes */
           if (count >= 3 && cache[head] == 'O' && isxdigit(cache[head + 1]) && isxdigit(cache[head + 2])) {
-            unsigned c;
             /* convert the first letter to a lower-case 'o', so that an output
                message of the single letter 'K' won't be mis-interpreted as 'OK' */
             buffer[0] = 'o';
             count = (count + 1) / 2;
+            unsigned c;
+            size_t idx;
             for (c = 1, idx = head + 1; c < count && c < size; c += 1, idx += 2)
               buffer[c] = (char)((hex2int(cache[idx]) << 4) | hex2int(cache[idx + 1]));
           } else {
             unsigned c;
+            size_t idx;
             for (c = 0, idx = head; c < count && c < size; c += 1, idx += 1) {
               if (cache[idx] == '}') {
                 /* escaped binary encoding */

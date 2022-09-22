@@ -1,0 +1,26 @@
+# Available scripts
+#
+# memremap  - to map Flash memory to the base address
+#       no parameters
+#
+# swo_device  - for MCU-specific initialization of SWO tracing and profiling
+#       no parameters
+#
+# swo_trace  - to perform general initialization for SWO tracing
+#       $0 = SWO mode: 1 = Manchester, 2 = Asynchronous
+#       $1 = CPU clock divider (MCU clock / bitrate), to set the SWO bitrate
+#
+# swo_channels  - to enable/disable SWO channels (SWO tracing)
+#       $0 = enabled channel bit-mask
+#
+# swo_profile  - to perform general initialization for sampling profiling
+#       $0 = SWO mode: 1 = Manchester, 2 = Asynchronous
+#       $1 = CPU clock divider (MCU clock / bitrate), to set the SWO bitrate
+#       $2 = sampling interval divider (0=1K, 15=16K)
+#
+# swo_close  - shut down SWO tracing and profiling
+#       no parameters
+#
+# partid  - to return the part-ID code (if any)
+#       $ = return value
+

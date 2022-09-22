@@ -17,7 +17,7 @@
  *  License for the specific language governing permissions and limitations
  *  under the License.
  *
- *  Version: $Id: minIni.c 5994 2019-07-08 15:03:53Z thiadmer $
+ *  Version: $Id: minIni.c 6758 2022-09-22 14:32:01Z thiadmer $
  */
 
 #if (defined _UNICODE || defined __UNICODE__ || defined UNICODE) && !defined INI_ANSIONLY
@@ -641,7 +641,8 @@ int ini_puts(const TCHAR *Section, const TCHAR *Key, const TCHAR *Value, const T
     if (Key != NULL && Value != NULL) {
       if (!ini_openwrite(Filename, &wfp))
         return 0;
-      writesection(LocalBuffer, Section, &wfp);
+      if (Section != NULL)
+        writesection(LocalBuffer, Section, &wfp);
       writekey(LocalBuffer, Key, Value, &wfp);
       (void)ini_close(&wfp);
     } /* if */

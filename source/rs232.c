@@ -78,11 +78,10 @@ HCOM* rs232_open(const char *port, unsigned baud, int databits, int stopbits, in
     struct termios newtio;
   #endif
   HCOM *hCom = NULL;
-  int i;
 
   /* find available slot */
   check_init();
-  for (i = 0; hCom == NULL && i < MAX_COMPORTS; i++)
+  for (int i = 0; hCom == NULL && i < MAX_COMPORTS; i++)
     if (comport[i] == INVALID_HANDLE_VALUE)
       hCom = &comport[i];
   if (hCom == NULL)
@@ -238,7 +237,7 @@ void rs232_close(HCOM *hCom)
   }
 }
 
-int rs232_isopen(HCOM *hCom)
+int rs232_isopen(const HCOM *hCom)
 {
   int i;
 

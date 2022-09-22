@@ -113,13 +113,13 @@ void bmp_setcallback(BMP_STATCALLBACK func)
  *  \param ipaddress  NULL to connect to an USB probe, or a valid IP address to
  *                    connect to a gdbserver over TCP/IP.
  *
- *  \return 1 on success, 0 on failure. Status and error messages are passed via
- *          the callback.
+ *  \return true on success, false on failure. Status and error messages are
+ *          passed via the callback.
  */
-int bmp_connect(int probe, const char *ipaddress)
+bool bmp_connect(int probe, const char *ipaddress)
 {
   char devname[128], probename[64];
-  int initialize = 0;
+  bool initialize = false;
 
   /* if switching between probes, reconnect (so close the current connection) */
   if ((probe != CurrentProbe && ipaddress == NULL) || (CurrentProbe >= 0 && ipaddress != NULL)) {
@@ -144,7 +144,7 @@ int bmp_connect(int probe, const char *ipaddress)
       hCom = rs232_open(devname, 115200, 8, 1, PAR_NONE);
       if (!rs232_isopen(hCom)) {
         notice(BMPERR_PORTACCESS, "Failure opening port %s", devname);
-        return 0;
+        return false;
       }
       rs232_rts(hCom, 1);
       rs232_dtr(hCom, 1); /* required by GDB RSP */
@@ -167,9 +167,9 @@ int bmp_connect(int probe, const char *ipaddress)
         notice(BMPERR_NORESPONSE, "No response on %s", devname);
         rs232_close(hCom);
         hCom = NULL;
-        return 0;
+        return false;
       }
-      initialize = 1;
+      initialize = true;
     }
   }
 
@@ -178,16 +178,16 @@ int bmp_connect(int probe, const char *ipaddress)
     tcpip_open(ipaddress);
     if (!tcpip_isopen()) {
       notice(BMPERR_PORTACCESS, "Failure opening gdbserver at %s", devname);
-      return 0;
+      return false;
     }
-    initialize = 1;
+    initialize = true;
   }
 
   /* check whether opening the communication interface succeeded */
   if ((CurrentProbe >= 0 && !rs232_isopen(hCom)) || (CurrentProbe < 0 && !tcpip_isopen())) {
     /* initialization failed */
     notice(BMPERR_NODETECT, "%s not detected", probename);
-    return 0;
+    return false;
   }
 
   if (initialize) {
@@ -217,33 +217,33 @@ int bmp_connect(int probe, const char *ipaddress)
     if (retry == 0) {
       notice(BMPERR_NOCONNECT, "Connect failed on %s", devname);
       bmp_disconnect();
-      return 0;
+      return false;
     }
     notice(BMPSTAT_SUCCESS, "Connected to %s (%s)", probename, devname);
   }
 
-  return 1;
+  return true;
 }
 
 /** bmp_disconnect() closes the connection to the Black Magic Probe, it one was
  *  active.
  *
- *  \return 1 on success, 0 if no connection was open.
+ *  \return true on success, false if no connection was open.
  */
-int bmp_disconnect(void)
+bool bmp_disconnect(void)
 {
-  int result = 0;
+  bool result = false;
 
   if (rs232_isopen(hCom)) {
     rs232_dtr(hCom, 0);
     rs232_rts(hCom, 0);
     rs232_close(hCom);
     hCom = NULL;
-    result = 1;
+    result = true;
   }
   if (tcpip_isopen()) {
     tcpip_close();
-    result = 1;
+    result = true;
   }
   return result;
 }
@@ -259,7 +259,7 @@ HCOM *bmp_comport(void)
 /** bmp_isopen() returns whether a connection to a Black Magic Probe or a
  *  ctxLink is open, via USB (virtual COM port) or TCP/IP.
  */
-int bmp_isopen(void)
+bool bmp_isopen(void)
 {
   return rs232_isopen(hCom) || tcpip_isopen();
 }
@@ -475,9 +475,9 @@ int bmp_checkversionstring(void)
           strlcat(line, buffer + 1, sizearray(line));
         else
           strlcpy(line, buffer, sizearray(line));
-        if ((ptr = strchr(line, '\n'))!= NULL) {
+        if (strchr(line, '\n') != NULL) {
           int p = check_versionstring(line + 1);
-          if (p != PROBE_UNKNOWN && 0)
+          if (p != PROBE_UNKNOWN)
             probe = p;
           memset(line, 0, sizeof line);
         }
@@ -487,10 +487,10 @@ int bmp_checkversionstring(void)
         /* end response found (when arriving here, the version string has
            probably not been recognized) */
         break;
-      } else if (size == 0) {
-        /* no new data arrived within the time-out, assume failure */
-        return PROBE_UNKNOWN;
       }
+    } else {
+      /* no new data arrived within the time-out, assume failure */
+      return PROBE_UNKNOWN;
     }
   }
   return probe;
@@ -622,8 +622,8 @@ int bmp_download(FILE *fp)
     unsigned long topaddr, flashsectors, paddr, vaddr, fileoffs, filesize;
     /* walk through all segments in the ELF file that fall into this region */
     topaddr = 0;
-    for (segment = 0; elf_segment_by_index(fp, segment, &type, &fileoffs, &filesize, NULL, &paddr, NULL) == ELFERR_NONE; segment++) {
-      if (type == 1 && paddr >= FlashRgn[rgn].address && paddr < FlashRgn[rgn].address + FlashRgn[rgn].size) {
+    for (segment = 0; elf_segment_by_index(fp, segment, &type, NULL, &fileoffs, &filesize, NULL, &paddr, NULL) == ELFERR_NONE; segment++) {
+      if (type == ELF_PT_LOAD && paddr >= FlashRgn[rgn].address && paddr < FlashRgn[rgn].address + FlashRgn[rgn].size) {
         topaddr = paddr + filesize;
         progress_range += filesize;
       }
@@ -648,10 +648,10 @@ int bmp_download(FILE *fp)
     }
     bmp_progress_step(1);
     /* walk through all segments again, to download the payload */
-    for (segment = 0; elf_segment_by_index(fp, segment, &type, &fileoffs, &filesize, &vaddr, &paddr, NULL) == ELFERR_NONE; segment++) {
+    for (segment = 0; elf_segment_by_index(fp, segment, &type, NULL, &fileoffs, &filesize, &vaddr, &paddr, NULL) == ELFERR_NONE; segment++) {
       unsigned char *data;
       unsigned pos, numbytes, esccount, idx;
-      if (type != 1 || filesize == 0 || paddr < FlashRgn[rgn].address || paddr >= FlashRgn[rgn].address + FlashRgn[rgn].size)
+      if (type != ELF_PT_LOAD || filesize == 0 || paddr < FlashRgn[rgn].address || paddr >= FlashRgn[rgn].address + FlashRgn[rgn].size)
         continue;
       notice(BMPSTAT_NOTICE, "%d: %s segment at 0x%x length 0x%x", segment, (vaddr == paddr) ? "Code" : "Data", (unsigned)paddr, (unsigned)filesize);
       data = malloc(filesize);
@@ -727,14 +727,14 @@ int bmp_verify(FILE *fp)
   allmatch = 1;
   assert(fp != NULL);
   for (segment = 0;
-       elf_segment_by_index(fp, segment, &type, &offset, &filesize, NULL, &paddr, NULL) == ELFERR_NONE;
+       elf_segment_by_index(fp, segment, &type, NULL, &offset, &filesize, NULL, &paddr, NULL) == ELFERR_NONE;
        segment++)
   {
     unsigned char *data;
     unsigned crc_src, crc_tgt;
     size_t rcvd;
 
-    if (type != 1 || filesize == 0)
+    if (type != ELF_PT_LOAD || filesize == 0)
       continue;   /* no loadable data */
     /* also check that paddr falls within a Flash memory sector */
     for (sector = 0; sector < FlashRgnCount; sector++)
@@ -927,6 +927,9 @@ bool bmp_runscript(const char *name, const char *mcu, const char *arch, unsigned
         rvalue.data = (uint32_t)params[rvalue.data];  /* replace address parameter */
       else
         continue; /* ignore row on invalid parameter */
+      if (rvalue.pshift > 0)
+        rvalue.data <<= rvalue.pshift;
+      rvalue.data |= rvalue.plit;
     } else if (rvalue.type == OT_ADDRESS) {
       uint8_t bytes[4] = { 0, 0, 0, 0 };
       sprintf(cmd, "m%08X,%X:", rvalue.data, rvalue.size);

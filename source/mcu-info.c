@@ -19,14 +19,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <string.h>
-
-typedef struct tagMCUINFO {
-  uint32_t partid;
-  uint32_t maskid;
-  const char *prefix;   /* brand/family prefix */
-  const char *mcuname;  /* name to use in scripts, if applicable */
-  const char *description;
-} MCUINFO;
+#include "mcu-info.h"
 
 #if defined __linux__ || defined __FreeBSD__ || defined __APPLE__
 #  define stricmp(s1,s2)    strcasecmp((s1),(s2))

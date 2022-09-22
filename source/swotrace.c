@@ -19,6 +19,7 @@
 
 #include <assert.h>
 #include <ctype.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -555,12 +556,22 @@ int trace_getpacketerrors(void)
 }
 
 
-int traceprofile_process(bool enabled, unsigned *overflow)
+static void addsample(uint32_t pc, unsigned *sample_map, uint32_t code_base, uint32_t code_top)
+{
+  assert(sample_map != NULL);
+  if (pc < code_base || pc >= code_top)
+    pc = code_top;
+  unsigned idx = Address2Index(pc, code_base);
+  sample_map[idx] += 1;
+}
+
+int traceprofile_process(bool enabled, unsigned *sample_map, uint32_t code_base, uint32_t code_top,
+                         unsigned *overflow)
 {
   int count = 0;
   int overflow_count = 0;
   while (tracequeue_head != tracequeue_tail) {
-    if (enabled) {
+    if (enabled && sample_map != NULL) {
       const unsigned char *pktdata = trace_queue[tracequeue_head].data;
       size_t pktlen = trace_queue[tracequeue_head].length;
 
@@ -588,7 +599,8 @@ int traceprofile_process(bool enabled, unsigned *overflow)
           if (buffer[0] == 0x17) {
             uint32_t pc;
             memcpy(&pc, buffer + 1, 4);
-            printf("%x\n", pc);  //???
+            addsample(pc, sample_map, code_base, code_top);
+            count += 1;
           }
           itm_cachefilled = 0;
         }
@@ -600,9 +612,10 @@ int traceprofile_process(bool enabled, unsigned *overflow)
           if (pktlen >= 5) {
             uint32_t pc;
             memcpy(&pc, pktdata + 1, 4);
-            printf("%x\n", pc);  //???
+            addsample(pc, sample_map, code_base, code_top);
             pktlen -= 5;
             pktdata += 5;
+            count += 1;
           } else {
             memcpy(itm_cache, pktdata, pktlen);
             itm_cachefilled = pktlen;
@@ -865,9 +878,10 @@ static BOOL usb_ConfigEndpoint(USB_INTERFACE_HANDLE hUSB, unsigned char endpoint
   return FALSE;
 }
 
-/** get_timestamp() return precision timestamp in seconds.
+/** get_timestamp() returns a precision timestamp; the returned value is in
+ *  seconds, but the fractional part has a precision of at least milliseconds.
  */
-static double get_timestamp(void)
+double get_timestamp(void)
 {
   LARGE_INTEGER t;
 
@@ -1038,7 +1052,10 @@ static int memicmp(const unsigned char *p1, const unsigned char *p2, size_t coun
   return diff;
 }
 
-static double timestamp(void)
+/** get_timestamp() returns a precision timestamp; the returned value is in
+ *  seconds, but the fractional part has a precision of at least milliseconds.
+ */
+double get_timestamp(void)
 {
   struct timeval tv;
   gettimeofday(&tv,NULL);
@@ -1058,7 +1075,7 @@ static void *trace_read(void *arg)
       if (numread > 0 && next != tracequeue_head) {
         memcpy(trace_queue[tracequeue_tail].data, buffer, numread);
         trace_queue[tracequeue_tail].length = numread;
-        trace_queue[tracequeue_tail].timestamp = timestamp();
+        trace_queue[tracequeue_tail].timestamp = get_timestamp();
         tracequeue_tail = next;
       }
     }
@@ -1119,7 +1136,6 @@ static int usb_OpenDevice(libusb_device_handle **hUSB, const char *path)
 
 int trace_init(unsigned short endpoint, const char *ipaddress)
 {
-  char dev_id[50];
   int result;
 
   usbTraceEP = endpoint;
@@ -1145,6 +1161,7 @@ int trace_init(unsigned short endpoint, const char *ipaddress)
       return TRACESTAT_NO_PIPE;
     }
   } else {
+    char dev_id[50];
     if (!find_bmp(0, BMP_IF_TRACE, dev_id, sizearray(dev_id)))
       return TRACESTAT_NO_INTERFACE;  /* Black Magic Probe not found (trace interface not found) */
 
@@ -1226,6 +1243,15 @@ void tracelog_statusclear(void)
   }
 }
 
+const char *tracelog_getstatusmsg(int idx)
+{
+  for (TRACESTRING *item = statusmessage_root.next; item != NULL; item = item->next) {
+    if (idx-- == 0)
+      return item->text;
+  }
+  return NULL;
+}
+
 float tracelog_labelwidth(float rowheight)
 {
   int idx;
@@ -1272,8 +1298,6 @@ void tracelog_widget(struct nk_context *ctx, const char *id, float rowheight, in
     int lines = 0, widgetlines = 0, ypos;
     float lineheight = 0;
     for (item = tracestring_root.next; item != NULL; item = item->next) {
-      int textwidth;
-      struct nk_color clrtxt;
       assert(item->text != NULL);
       if (filters != NULL && filters[0].expr != NULL && filters[0].enabled) {
         /* check filters (first count how many there are) */
@@ -1324,6 +1348,7 @@ void tracelog_widget(struct nk_context *ctx, const char *id, float rowheight, in
       stbtn.normal.data.color = stbtn.hover.data.color
         = stbtn.active.data.color = stbtn.text_background
         = channels[item->channel].color;
+      struct nk_color clrtxt;
       if (channels[item->channel].color.r + 2 * channels[item->channel].color.g + channels[item->channel].color.b < 700)
         clrtxt = nk_rgb(255,255,255);
       else
@@ -1336,7 +1361,7 @@ void tracelog_widget(struct nk_context *ctx, const char *id, float rowheight, in
       nk_label_colored(ctx, item->timefmt, NK_TEXT_RIGHT, nk_rgb(255, 255, 128));
       /* calculate size of the text */
       assert(font != NULL && font->width != NULL);
-      textwidth = (int)font->width(font->userdata, font->height, item->text, item->length) + 10;
+      int textwidth = (int)font->width(font->userdata, font->height, item->text, item->length) + 10;
       nk_layout_row_push(ctx, textwidth);
       if (lines == markline)
         nk_text_colored(ctx, item->text, item->length, NK_TEXT_LEFT, nk_rgb(255, 255, 128));
@@ -1540,16 +1565,12 @@ double timeline_widget(struct nk_context *ctx, const char *id, float rowheight, 
     static float timeline_maxpos_prev = 0.0f;
     struct nk_window *win = ctx->current;
     struct nk_user_font const *font = ctx->style.font;
-    struct nk_rect rc;
-    long mark_stamp, mark_inv_scale;
-    int submark_count, submark_iter;
-    int chan;
     char valstr[60];
     float x1, x2;
     const char *unit;
     nk_uint xscroll, yscroll;
 
-    submark_count = 10;
+    int submark_count = 10;
     if (mark_spacing / submark_count < 20)
       submark_count = 5;
     if (mark_spacing / submark_count < 20)
@@ -1572,11 +1593,12 @@ double timeline_widget(struct nk_context *ctx, const char *id, float rowheight, 
     }
     nk_layout_row_begin(ctx, NK_STATIC, rowheight + VERPADDING, 3);
     nk_layout_row_push(ctx, rcwidget.w - 2 * (1.5f * rowheight));
-    rc = nk_layout_widget_bounds(ctx);
+    struct nk_rect rc = nk_layout_widget_bounds(ctx);
     nk_fill_rect(&win->buffer, rc, 0.0f, nk_rgb(35, 52, 71));
     x2 = rc.x + rc.w;
-    mark_stamp = submark_iter = 0;
-    mark_inv_scale = MARK_SECOND / mark_scale;
+    int submark_iter = 0;
+    long mark_stamp = 0;
+    long mark_inv_scale = MARK_SECOND / mark_scale;
     for (x1 = rc.x + labelwidth + HORPADDING - xscroll; x1 < x2; x1 += mark_spacing / submark_count) {
       if (submark_iter == 0) {
         struct nk_color clr;
@@ -1643,7 +1665,7 @@ double timeline_widget(struct nk_context *ctx, const char *id, float rowheight, 
     sprintf(valstr, "%s_label", id);
     if (nk_group_begin(ctx, valstr, NK_WINDOW_NO_SCROLLBAR)) {
       /* labels */
-      for (chan = 0; chan < NUM_CHANNELS; chan++) {
+      for (int chan = 0; chan < NUM_CHANNELS; chan++) {
         struct nk_color clrtxt;
         float textwidth;
         int len;
@@ -1673,7 +1695,7 @@ double timeline_widget(struct nk_context *ctx, const char *id, float rowheight, 
     if (nk_group_begin(ctx, valstr, 0)) {
       /* graphs */
       int row = 0;
-      for (chan = 0; chan < NUM_CHANNELS; chan++) {
+      for (int chan = 0; chan < NUM_CHANNELS; chan++) {
         int idx;
         if (!channels[chan].enabled)
           continue; /* only draw enabled channels */

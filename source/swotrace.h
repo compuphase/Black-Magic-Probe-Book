@@ -46,6 +46,11 @@ typedef struct tagTRACEFILTER {
   int enabled;
 } TRACEFILTER;
 
+#define ADDRESS_ALIGN   2 /* alignment of an address in bytes (16-bit Thumb) */
+#define Address2Index(address, base)  (((address) - (base)) / ADDRESS_ALIGN)
+#define Index2Address(index, base)    ((index) * ADDRESS_ALIGN + (base))
+
+
 void channel_set(int index, int enabled, const char *name, struct nk_color color);
 int  channel_getenabled(int index);
 void channel_setenabled(int index, int enabled);
@@ -71,10 +76,11 @@ int    tracestring_save(const char *filename);
 int    tracestring_find(const char *text, int curline);
 int    tracestring_findtimestamp(double timestamp);
 
-int    traceprofile_process(bool enabled, unsigned *overflow);
+int    traceprofile_process(bool enabled, unsigned *sample_map, uint32_t code_base, uint32_t code_top, unsigned *overflow);
 
 void   tracelog_statusmsg(int type, const char *msg, int code);
 void   tracelog_statusclear(void);
+const char *tracelog_getstatusmsg(int idx);
 float  tracelog_labelwidth(float rowheight);
 void   tracelog_widget(struct nk_context *ctx, const char *id, float rowheight, int markline,
                        const TRACEFILTER *filters, nk_flags widget_flags);
@@ -82,5 +88,7 @@ void   tracelog_widget(struct nk_context *ctx, const char *id, float rowheight, 
 void   timeline_getconfig(double *spacing, unsigned long *scale, unsigned long *delta);
 void   timeline_setconfig(double spacing, unsigned long scale, unsigned long delta);
 double timeline_widget(struct nk_context *ctx, const char *id, float rowheight, nk_flags widget_flags);
+
+double get_timestamp(void);
 
 #endif /* _SWOTRACE_H */

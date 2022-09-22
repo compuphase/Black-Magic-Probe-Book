@@ -60,7 +60,6 @@ else
     LFLAGS += -g
 endif
 
-
 # -------------------------------------------------------------
 #               Inference rules
 # -------------------------------------------------------------
@@ -78,23 +77,32 @@ OBJLIST_BMDEBUG = bmdebug.o armdisasm.o bmcommon.o bmp-scan.o bmp-script.o \
                   nuklear_mousepointer.o nuklear_splitter.o nuklear_style.o \
                   nuklear_tooltip.o rs232.o serialmon.o specialfolder.o svd-support.o \
                   swotrace.o tcpip.o xmltractor.o decodectf.o parsetsdl.o \
-                  nuklear.o nuklear_glfw_gl2.o noc_file_dialog.o \
-                  findfont.o lodepng.o
+                  findfont.o lodepng.o \
+                  nuklear.o nuklear_glfw_gl2.o noc_file_dialog.o
 
 OBJLIST_BMFLASH = bmflash.o bmcommon.o bmp-scan.o bmp-script.o bmp-support.o \
                   cksum.o crc32.o elf.o gdb-rsp.o guidriver.o ident.o minIni.o \
                   nuklear_mousepointer.o nuklear_style.o nuklear_tooltip.o \
                   picoro.o rs232.o specialfolder.o tcpip.o xmltractor.o \
-                  nuklear.o nuklear_glfw_gl2.o noc_file_dialog.o \
-                  findfont.o lodepng.o
+                  findfont.o lodepng.o \
+                  nuklear.o nuklear_glfw_gl2.o noc_file_dialog.o
+
+OBJLIST_BMPROFILE = bmprofile.o bmcommon.o bmp-scan.o bmp-script.o \
+                    bmp-support.o crc32.o decodectf.o demangle.o dwarf.o \
+                    elf.o gdb-rsp.o guidriver.o mcu-info.o minIni.o \
+                    parsetsdl.o picoro.o rs232.o specialfolder.o swotrace.o \
+                    tcpip.o xmltractor.o nuklear_mousepointer.o \
+                    nuklear_splitter.o nuklear_style.o nuklear_tooltip.o \
+                    findfont.o lodepng.o \
+                    nuklear.o nuklear_glfw_gl2.o noc_file_dialog.o
 
 OBJLIST_BMTRACE = bmtrace.o bmcommon.o bmp-scan.o bmp-script.o bmp-support.o \
                   crc32.o demangle.o dwarf.o elf.o gdb-rsp.o guidriver.o mcu-info.o \
-                  minIni.o nuklear_splitter.o nuklear_style.o nuklear_mousepointer.o \
+                  minIni.o nuklear_mousepointer.o nuklear_splitter.o nuklear_style.o \
                   nuklear_tooltip.o picoro.o rs232.o specialfolder.o swotrace.o \
                   tcpip.o xmltractor.o decodectf.o parsetsdl.o \
-                  nuklear.o nuklear_glfw_gl2.o noc_file_dialog.o \
-                  findfont.o lodepng.o
+                  findfont.o lodepng.o \
+                  nuklear.o nuklear_glfw_gl2.o noc_file_dialog.o
 
 OBJLIST_BMSCAN = bmscan.o bmp-scan.o tcpip.o
 
@@ -103,11 +111,12 @@ OBJLIST_POSTLINK = elf-postlink.o elf.o
 OBJLIST_TRACEGEN = tracegen.o parsetsdl.o
 
 
-project: bmdebug bmflash bmtrace bmscan elf-postlink tracegen
+project: bmdebug bmflash bmprofile bmtrace bmscan elf-postlink tracegen
 
 depend :
 	makedepend -b -fmakefile.dep $(OBJLIST_BMDEBUG:.o=.c) $(OBJLIST_BMFLASH:.o=.c) \
-                   $(OBJLIST_BMTRACE:.o=.c) $(OBJLIST_BMSCAN:.o=.c) $(OBJLIST_POSTLINK:.o=.c) \
+                   $(OBJLIST_BMPROFILE:.o=.c) $(OBJLIST_BMTRACE:.o=.c) \
+                   $(OBJLIST_BMSCAN:.o=.c) $(OBJLIST_POSTLINK:.o=.c) \
                    $(OBJLIST_TRACEGEN:.o=.c)
 
 
@@ -120,6 +129,8 @@ bmcommon.o : bmcommon.c
 bmdebug.o : bmdebug.c
 
 bmflash.o : bmflash.c
+
+bmprofile.o : bmprofile.c
 
 bmscan.o : bmscan.c
 
@@ -205,6 +216,9 @@ bmdebug : $(OBJLIST_BMDEBUG)
 
 bmflash : $(OBJLIST_BMFLASH)
 	$(LNK) $(LFLAGS) -o$@ $^ -lfontconfig -l$(GLFW_LIBNAME) -lGL -lm -lbsd -ldl -lpthread -lX11 -lxcb -lXau -lXdmcp `pkg-config --libs gtk+-3.0`
+
+bmprofile : $(OBJLIST_BMPROFILE)
+	$(LNK) $(LFLAGS) -o$@ $^ -lfontconfig -l$(GLFW_LIBNAME) -lGL -lm -lbsd -ldl -lpthread -lX11 -lxcb -lXau -lXdmcp `pkg-config --libs gtk+-3.0` -lusb-1.0
 
 bmtrace : $(OBJLIST_BMTRACE)
 	$(LNK) $(LFLAGS) -o$@ $^ -lfontconfig -l$(GLFW_LIBNAME) -lGL -lm -lbsd -ldl -lpthread -lX11 -lxcb -lXau -lXdmcp `pkg-config --libs gtk+-3.0` -lusb-1.0

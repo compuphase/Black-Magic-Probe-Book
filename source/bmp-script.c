@@ -222,7 +222,7 @@ static const SCRIPT_DEF script_defaults[] = {
 
   /* swo_profile (generic)
      $0 = mode: 1 = Manchester, 2 = Asynchronous
-     $1 = CPU clock divider, MCU clock / bitrate
+     $1 = CPU clock divider for SWO output, MCU clock / bitrate
      $2 = sampling interval divider (0=1K, 15=16K) */
   { "swo_profile", "*",
     "SCB_DEMCR = 0x1000000 \n"  /* TRCENA (1 << 24) */
@@ -233,7 +233,7 @@ static const SCRIPT_DEF script_defaults[] = {
     "ITM_LAR = 0xC5ACCE55 \n"   /* unlock access to ITM registers */
     "ITM_TCR = 0x10009 \n"      /* TraceBusID=1 (n << 16) | DWTENA (1 << 3) | ITMENA (1 << 0) */
     "ITM_TPR = 0 \n"            /* privileged access is off */
-    "DWT_CTRL = 0x121F \n"      /* PCSAMPLENA (1 << 12) | CYCTAP (1 << 9) | POSTPRESET=15 (n << 1) | CYCCNTENA (1 << 0) */
+    "DWT_CTRL = $2<<1 | 0x1201 \n"  /* PCSAMPLENA (1 << 12) | CYCTAP (1 << 9) | POSTPRESET=15 (n << 1) | CYCCNTENA (1 << 0) */
   },
 
   /* swo_close (generic) */
@@ -259,10 +259,10 @@ static SCRIPT script_root = { NULL, NULL, NULL, 0 };
 static REG_CACHE cache = { NULL, NULL, 0, 0 };
 
 
-static const char *skipleading(const char *str)
+static const char *skipleading(const char *str, bool skip_nl)
 {
   assert(str != NULL);
-  while (*str != '\0' && *str <= ' ')
+  while (*str != '\0' && *str <= ' ' && (skip_nl || *str != '\n'))
     str++;
   return str;
 }
@@ -312,7 +312,7 @@ static bool mcu_match(const char *mcufamily, const char *list)
     assert(namelen > 0 && mcufamily[namelen - 1] > ' ');
   }
 
-  head = skipleading(list);
+  head = skipleading(list, true);
   while (*head != '\0') {
     const char *tail;
     if ((separator = strchr(head, ',')) == NULL)
@@ -325,11 +325,11 @@ static bool mcu_match(const char *mcufamily, const char *list)
       if (architecture_match(matchname, mcufamily))
         return true;   /* exact match */
     }
-    head = (*separator != '\0') ? skipleading(separator + 1) : separator;
+    head = (*separator != '\0') ? skipleading(separator + 1, true) : separator;
   }
 
   /* no exact match found, try matching items on prefix */
-  head = skipleading(list);
+  head = skipleading(list, true);
   while (*head != '\0') {
     const char *tail, *wildcard;
     if ((separator = strchr(head, ',')) == NULL)
@@ -352,7 +352,7 @@ static bool mcu_match(const char *mcufamily, const char *list)
           return true; /* match on prefix */
       }
     }
-    head = (*separator != '\0') ? skipleading(separator + 1) : separator;
+    head = (*separator != '\0') ? skipleading(separator + 1, true) : separator;
   }
 
   return false;
@@ -380,12 +380,13 @@ static const char *parseline(const char *line, const REG_DEF *registers, size_t 
   assert(line != NULL);
 
   /* ignore any "set" command */
-  line = skipleading(line);
+  line = skipleading(line, false);
   if (strncmp(line, "set", 3) == 0 && line[3] <= ' ')
-    line = skipleading(line + 3);
+    line = skipleading(line + 3, false);
 
   /* lvalue (memory address or register) */
   assert(lvalue != NULL);
+  memset(lvalue, 0, sizeof(OPERAND));
   if (isdigit(*line)) {
     lvalue->data = strtoul(line, (char**)&line, 0);
     lvalue->size = 4;
@@ -400,6 +401,7 @@ static const char *parseline(const char *line, const REG_DEF *registers, size_t 
     size_t r;
     for (tail = line; isalnum(*tail) || *tail == '_'; tail++)
       {}
+    assert(tail != line);   /* should be an alphanumeric symbol */
     assert(registers != NULL);
     for (r = 0; r < reg_count && strncmp(line, registers[r].name, (tail - line))!= 0; r++)
       {}
@@ -413,7 +415,7 @@ static const char *parseline(const char *line, const REG_DEF *registers, size_t 
   }
 
   /* operation */
-  line = skipleading(line);
+  line = skipleading(line, false);
   assert(oper != NULL);
   switch (*line) {
   case '=':
@@ -431,7 +433,7 @@ static const char *parseline(const char *line, const REG_DEF *registers, size_t 
     line++;
     if (*line == '=')
       line++;       /* '=' should follow '&', but this isn't enforced yet */
-    line = skipleading(line);
+    line = skipleading(line, false);
     if (*line == '~')
       *oper = OP_AND_INV;
     break;
@@ -441,11 +443,12 @@ static const char *parseline(const char *line, const REG_DEF *registers, size_t 
 
   /* rvalue (literal, register or parameter) */
   assert(rvalue != NULL);
+  memset(rvalue, 0, sizeof(OPERAND));
   bool dereferenced = false;
-  line = skipleading(line);
+  line = skipleading(line, false);
   if (*line == '*') {
     dereferenced = true;
-    line = skipleading(line);
+    line = skipleading(line, false);
   }
   if (isdigit(*line)) {
     rvalue->data = strtoul(line, (char**)&line, 0);
@@ -461,7 +464,16 @@ static const char *parseline(const char *line, const REG_DEF *registers, size_t 
     rvalue->data = line[1] - '0';
     rvalue->size = 4;
     rvalue->type = OT_PARAM;  //??? limitation: cannot dereference a parameter
-    line += 2;
+    line = skipleading(line + 2, false);
+    if (*line == '<' && *(line + 1) == '<') {
+      line = skipleading(line + 2, false);
+      rvalue->pshift = (uint8_t)strtoul(line, (char**)&line, 0);
+      line = skipleading(line, false);
+    }
+    if (*line == '|') {
+      line = skipleading(line + 1, false);
+      rvalue->plit = strtoul(line, (char**)&line, 0);
+    }
   } else {
     const char *tail;
     size_t r;
@@ -479,14 +491,13 @@ static const char *parseline(const char *line, const REG_DEF *registers, size_t 
     line = tail;
   }
   #ifndef NDEBUG
-    while (*line != '\0' && *line != '\n' && *line <= ' ')
-      line++;
+    line = skipleading(line, false);
     assert(*line == '\n' || *line == '\0');
   #endif
   if (*line > ' ')
     return NULL;  /* after parsing the line, should land on whitespace or \0 */
 
-  return skipleading(line); /* only needed for hard-coded scripts */
+  return skipleading(line, true); /* only needed for hard-coded scripts */
 }
 
 /** bmscript_load() interprets any hardcoded script that matches the given MCU
@@ -629,7 +640,7 @@ int bmscript_load(const char *mcu, const char *arch)
         || (arch_name[0] != '\0' && mcu_match(arch_name, script_defaults[idx].mcu_list)))
     {
       line_count = 0;
-      const char *head = skipleading(script_defaults[idx].script);
+      const char *head = skipleading(script_defaults[idx].script, true);
       while (head != NULL && *head != '\0') {
         /* make space for a new entry in the line list */
         assert(line_count <= line_size);
@@ -677,7 +688,7 @@ int bmscript_load(const char *mcu, const char *arch)
       char *ptr;
       if ((ptr = strchr(line, '#')) != NULL)
         *ptr = '\0';  /* strip comments */
-      if (*skipleading(line) == '\0')
+      if (*skipleading(line, true) == '\0')
         continue;     /* ignore empty lines (after stripping comments) */
       /* check whether this matches a register definition line */
       if (sscanf(line, "define %s [%[^]]]", scriptname, mcu_list) == 2
@@ -882,6 +893,9 @@ bool bmscript_line_fmt(const char *name, char *line, const unsigned long *params
         rvalue.data = (uint32_t)params[rvalue.data];  /* replace parameters */
       else
         return false; /* invalid parameter */
+      if (rvalue.pshift > 0)
+        rvalue.data <<= rvalue.pshift;
+      rvalue.data |= rvalue.plit;
     }
     if (print_cmd) {
       switch (rvalue.size) {

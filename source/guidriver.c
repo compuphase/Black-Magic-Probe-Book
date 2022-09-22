@@ -315,7 +315,6 @@ struct nk_context* guidriver_init(const char *caption, int width, int height, in
   struct nk_font_config fontconfig;
   char path[256];
   GLFWimage icons[1];
-  unsigned error;
 
   /* GLFW */
   glfwSetErrorCallback(error_callback);
@@ -330,7 +329,7 @@ struct nk_context* guidriver_init(const char *caption, int width, int height, in
   /* add window icon */
   #if GLFW_VERSION_MAJOR >= 3 && GLFW_VERSION_MINOR >= 2
     memset(icons, 0, sizeof icons);
-    error = lodepng_decode32(&icons[0].pixels, (unsigned*)&icons[0].width, (unsigned*)&icons[0].height, appicon_data, appicon_datasize);
+    unsigned error = lodepng_decode32(&icons[0].pixels, (unsigned*)&icons[0].width, (unsigned*)&icons[0].height, appicon_data, appicon_datasize);
     if (!error)
       glfwSetWindowIcon(winApp, 1, icons);
     free(icons[0].pixels);

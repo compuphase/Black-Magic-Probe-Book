@@ -33,8 +33,10 @@ enum {
 };
 typedef struct tagOPERAND {
   uint32_t data;  /* register or memory address, literal value, or parameter index */
-  uint16_t type;  /* one of the OT_xxx values */
-  uint16_t size;  /* operand size in bytes */
+  uint8_t type;   /* one of the OT_xxx values */
+  uint8_t size;   /* operand size in bytes */
+  uint8_t pshift; /* for parameters: shift-left of parameter value */
+  uint32_t plit;  /* for parameters: literal value added to parameter value */
 } OPERAND;
 
 enum {

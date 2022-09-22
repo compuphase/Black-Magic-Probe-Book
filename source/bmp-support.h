@@ -51,9 +51,9 @@ unsigned long bmp_flashtotal(void);
 typedef int (*BMP_STATCALLBACK)(int code, const char *message);
 void bmp_setcallback(BMP_STATCALLBACK func);
 
-int bmp_connect(int probe, const char *ipaddress);
-int bmp_disconnect(void);
-int bmp_isopen(void);
+bool bmp_connect(int probe, const char *ipaddress);
+bool bmp_disconnect(void);
+bool bmp_isopen(void);
 HCOM *bmp_comport(void);
 
 int bmp_checkversionstring(void);

@@ -340,6 +340,8 @@ static const char *read_sectionnames(FILE *fp,uint32_t *size)
  *  \param fp           File handle to the ELF file.
  *  \param index        The index of the segment to return, starting at 0.
  *  \param type         The type of the segment. This parameter may be NULL.
+ *  \param flags        The read/write/execute flags of the segment. This
+ *                      parameter may be NULL.
  *  \param offset       The file offset to the segment data. This parameter may
  *                      be NULL.
  *  \param filesize     The size of the segment data in the size. This parameter
@@ -357,7 +359,7 @@ static const char *read_sectionnames(FILE *fp,uint32_t *size)
  *  \return An error code.
  */
 int elf_segment_by_index(FILE *fp,int index,
-                         int *type,
+                         int *type, int *flags,
                          unsigned long *offset,unsigned long *filesize,
                          unsigned long *vaddr,unsigned long *paddr,
                          unsigned long *memsize)
@@ -404,6 +406,8 @@ int elf_segment_by_index(FILE *fp,int index,
     fread(&segment,sizeof(segment),1,fp);
     if (type!=NULL)
       *type=(hdr.endian==2) ? SWAP32(segment.type) : segment.type;
+    if (flags!=NULL)
+      *flags=(hdr.endian==2) ? SWAP32(segment.flags) : segment.flags;
     if (offset!=NULL)
       *offset=(hdr.endian==2) ? SWAP32(segment.offset) : segment.offset;
     if (filesize!=NULL)
@@ -635,12 +639,13 @@ int elf_section_by_address(FILE *fp,unsigned long baseaddr,
  *
  *  \return An error value.
  */
-int elf_load_symbols(FILE *fp,ELF_SYMBOL *symbols,int *number)
+int elf_load_symbols(FILE *fp,ELF_SYMBOL *symbols,unsigned *number)
 {
   unsigned long offset,length;
   char *stringtable;
   ELF32SYMBOL sym;
-  int i,total,err,size;
+  int i,total,err;
+  unsigned size;
 
   assert(number!=NULL);
   size=(symbols!=NULL) ? *number : 0;
@@ -697,7 +702,7 @@ int elf_load_symbols(FILE *fp,ELF_SYMBOL *symbols,int *number)
   return ELFERR_NONE;
 }
 
-void elf_clear_symbols(ELF_SYMBOL *symbols,int number)
+void elf_clear_symbols(ELF_SYMBOL *symbols,unsigned number)
 {
   int i;
   assert(symbols!=NULL);

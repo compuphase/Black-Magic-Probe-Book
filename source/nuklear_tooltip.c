@@ -72,6 +72,14 @@ int tooltip(struct nk_context *ctx, struct nk_rect bounds, const char *text)
   return 1;
 }
 
+void label_tooltip(struct nk_context *ctx, const char *label, nk_flags align,
+                   const char *tiptext)
+{
+  struct nk_rect bounds = nk_widget_bounds(ctx);
+  nk_label(ctx, label, align);
+  tooltip(ctx, bounds, tiptext);
+}
+
 nk_bool button_tooltip(struct nk_context *ctx, const char *title,
                        enum nk_keys hotkey, nk_bool enabled,
                        const char *tiptext)
@@ -122,6 +130,15 @@ nk_bool checkbox_tooltip(struct nk_context *ctx, const char *label, nk_bool *act
 {
   struct nk_rect bounds = nk_widget_bounds(ctx);
   nk_bool result = nk_checkbox_label(ctx, label, active, align);
+  tooltip(ctx, bounds, tiptext);
+  return result;
+}
+
+nk_bool option_tooltip(struct nk_context *ctx, const char *label, nk_bool active, nk_flags align,
+                       const char *tiptext)
+{
+  struct nk_rect bounds = nk_widget_bounds(ctx);
+  nk_bool result =nk_option_text(ctx, label, nk_strlen(label), active, align);
   tooltip(ctx, bounds, tiptext);
   return result;
 }

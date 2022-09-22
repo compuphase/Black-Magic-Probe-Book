@@ -1489,7 +1489,7 @@ static bool thumb2_imm_br_misc(ARMSTATE *state, uint32_t instr)
       int32_t address = state->address + 4;
       if (opc == 4)
         address = ALIGN4(state->address + 4); /* BLX target is aligned to 32-bit address */
-      address += offset; 
+      address += offset;
       sprintf(tail(state->text), "%07x", address);
       append_comment_symbol(state, address);
       mark_address_type(state, address, POOL_CODE);
@@ -1575,7 +1575,7 @@ static bool thumb2_imm_br_misc(ARMSTATE *state, uint32_t instr)
           strcpy(state->text, "subs");
           add_it_cond(state, 0);
           padinstr(state->text);
-          sprintf(tail(state->text), "pc, lr, #%d", FIELD(instr, 0, 8));
+          sprintf(tail(state->text), "pc, lr, #%u", FIELD(instr, 0, 8));
         } else {
           strcpy(state->text, "bxj");
           add_it_cond(state, 0);

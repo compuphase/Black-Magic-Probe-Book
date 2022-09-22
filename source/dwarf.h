@@ -62,7 +62,7 @@ enum {
   DWARF_SORT_ADDRESS,
 };
 
-int dwarf_read(FILE *fp,DWARF_LINELOOKUP *linetable,DWARF_SYMBOLLIST *symboltable,DWARF_PATHLIST *filetable,int *address_size);
+bool dwarf_read(FILE *fp,DWARF_LINELOOKUP *linetable,DWARF_SYMBOLLIST *symboltable,DWARF_PATHLIST *filetable,int *address_size);
 void dwarf_cleanup(DWARF_LINELOOKUP *linetable,DWARF_SYMBOLLIST *symboltable,DWARF_PATHLIST *filetable);
 
 const DWARF_SYMBOLLIST* dwarf_sym_from_name(const DWARF_SYMBOLLIST *symboltable,const char *name,int fileindex,int lineindex);

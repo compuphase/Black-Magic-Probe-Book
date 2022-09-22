@@ -452,7 +452,7 @@ static int serialize_match(FILE *fp, const char *match, const char *prefix,
   matchbuf_len = serialize_parsepattern(matchbuf, sizearray(matchbuf), match, "match");
   assert(prefix != NULL);
   prefixbuf_len = serialize_parsepattern(prefixbuf, sizearray(prefixbuf), prefix, "prefix");
-  if (matchbuf_len == ~0 || prefixbuf_len == ~0)
+  if (matchbuf_len == (size_t)~0 || prefixbuf_len == (size_t)~0)
     return 0; /* error message already given */
   if (matchbuf_len == 0) {
     log_addstring("^1Serialization match text is empty\n");
@@ -803,6 +803,7 @@ typedef struct tagAPPSTATE {
   FILE *fpTgt;                  /**< target file */
   FILE *fpWork;                 /**< intermediate work file */
   coro coro_download;           /**< co-routine handle */
+  int coro_result;              /**< success/failure state of the download */
   clock_t tstamp_start;         /**< time-stamp of start of download procedure */
 } APPSTATE;
 
@@ -1260,27 +1261,27 @@ static int handle_stateaction(APPSTATE *state, enum nk_collapse_states tab_state
   case STATE_DOWNLOAD:
     /* download to target */
     if (!state->skip_download) {
-      if (state->architecture > 0)
+      if (state->architecture > 0 && state->coro_download == NULL)
         bmp_runscript("memremap", architectures[state->architecture], NULL, NULL, 0);
       /* create a coroutine for the function that does the download, so that
          this loop continues with updating the message log, while the download
          is in progress */
       if (state->coro_download == NULL) {
         state->coro_download = coroutine((coro_proc)bmp_download);
-        result = 0; /* preset for the case that the resumable() fails */
+        state->coro_result = 0; /* preset for the case that the resumable() fails */
       }
       if (state->coro_download != NULL && resumable(state->coro_download)) {
         pointer_setstyle(CURSOR_WAIT);
-        result = (intptr_t)resume(state->coro_download,
-                                  (state->fpWork != NULL) ? state->fpWork : state->fpTgt);
-        if (result == 0) {
+        state->coro_result = (intptr_t)resume(state->coro_download,
+                                              (state->fpWork != NULL) ? state->fpWork : state->fpTgt);
+        if (state->coro_result == 0) {
           state->coro_download = NULL;
           state->curstate = STATE_IDLE;
         }
       } else {
         pointer_setstyle(CURSOR_NORMAL);
         state->coro_download = NULL;
-        state->curstate = result ? STATE_VERIFY : STATE_IDLE;
+        state->curstate = state->coro_result ? STATE_VERIFY : STATE_IDLE;
       }
     } else {
       state->curstate = STATE_VERIFY;
@@ -1359,15 +1360,19 @@ static int handle_stateaction(APPSTATE *state, enum nk_collapse_states tab_state
     }
     /* optionally increment the serial number */
     if (state->serialize != SER_NONE && !state->skip_download) {
-      char field[200];
-      int incr = (int)strtol(state->SerialIncr, NULL, 100);
+      int incr = (int)strtol(state->SerialIncr, NULL, 10);
       if (incr < 1)
         incr = 1;
       serial_increment(state->Serial, incr);
       /* must update this in the cache file immediately (so that the cache is
          up-to-date when the user aborts/quits the utility) */
+      char field[200];
       sprintf(field, "%s:%s:%d:%s", state->Serial, state->SerialSize, state->SerialFmt, state->SerialIncr);
-      ini_puts("Serialize", "serial", field, state->ParamFile);
+      char serialfile[_MAX_PATH];
+      strlcpy(serialfile, state->ParamFile, sizearray(serialfile));
+      if (strlen(state->SerialFile) > 0)
+        getpath(serialfile, sizearray(serialfile), state->SerialFile, state->ParamFile);
+      ini_puts("Serialize", "serial", field, serialfile);
     }
     state->curstate = STATE_IDLE;
     waitidle = 0;

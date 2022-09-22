@@ -64,26 +64,35 @@ LFLAGS_C  = $(L_DEBUG) /NOLOGO /SUBSYSTEM:console
 # -------------------------------------------------------------
 
 OBJLIST_BMDEBUG = bmdebug.obj armdisasm.obj bmcommon.obj bmp-scan.obj bmp-script.obj \
-                  demangle.obj dirent.obj dwarf.obj elf.obj guidriver.obj mcu-info.obj \
-                  memdump.obj minIni.obj nuklear_mousepointer.obj nuklear_splitter.obj \
-                  nuklear_style.obj nuklear_tooltip.obj rs232.obj serialmon.obj \
-                  specialfolder.obj strlcpy.obj svd-support.obj swotrace.obj tcpip.obj \
-                  usb-support.obj xmltractor.obj decodectf.obj parsetsdl.obj \
+                  demangle.obj dirent.obj dwarf.obj elf.obj guidriver.obj mcu-info.obj memdump.obj \
+                  minIni.obj nuklear_mousepointer.obj nuklear_splitter.obj nuklear_style.obj \
+                  nuklear_tooltip.obj rs232.obj serialmon.obj specialfolder.obj svd-support.obj \
+                  swotrace.obj tcpip.obj xmltractor.obj decodectf.obj parsetsdl.obj \
+                  strlcpy.obj usb-support.obj \
                   nuklear.obj nuklear_gdip.obj noc_file_dialog.obj
 
 OBJLIST_BMFLASH = bmflash.obj bmcommon.obj bmp-scan.obj bmp-script.obj bmp-support.obj \
-                  cksum.obj crc32.obj elf.obj gdb-rsp.obj guidriver.obj ident.obj \
-                  minIni.obj nuklear_mousepointer.obj nuklear_style.obj nuklear_tooltip.obj \
-                  picoro.obj rs232.obj specialfolder.obj strlcpy.obj tcpip.obj \
-                  xmltractor.obj \
+                  cksum.obj crc32.obj elf.obj gdb-rsp.obj guidriver.obj ident.obj minIni.obj \
+                  nuklear_mousepointer.obj nuklear_style.obj nuklear_tooltip.obj \
+                  picoro.obj rs232.obj specialfolder.obj tcpip.obj xmltractor.obj \
+                  strlcpy.obj \
                   nuklear.obj nuklear_gdip.obj noc_file_dialog.obj
 
+OBJLIST_BMPROFILE = bmprofile.obj bmcommon.obj bmp-scan.obj bmp-script.obj \
+                    bmp-support.obj crc32.obj decodectf.obj demangle.obj dwarf.obj \
+                    elf.obj gdb-rsp.obj guidriver.obj mcu-info.obj minIni.obj \
+                    parsetsdl.obj picoro.obj rs232.obj specialfolder.obj swotrace.obj \
+                    tcpip.obj xmltractor.obj nuklear_mousepointer.obj \
+                    nuklear_splitter.obj nuklear_style.obj nuklear_tooltip.obj \
+                    strlcpy.obj usb-support.obj \
+                    nuklear.obj nuklear_gdip.obj noc_file_dialog.obj
+
 OBJLIST_BMTRACE = bmtrace.obj bmcommon.obj bmp-scan.obj bmp-script.obj bmp-support.obj \
-                  crc32.obj demangle.obj dwarf.obj elf.obj gdb-rsp.obj guidriver.obj \
-                  mcu-info.obj minIni.obj nuklear_mousepointer.obj nuklear_splitter.obj \
-                  nuklear_style.obj nuklear_tooltip.obj picoro.obj rs232.obj \
-                  specialfolder.obj swotrace.obj strlcpy.obj tcpip.obj usb-support.obj \
-                  xmltractor.obj decodectf.obj parsetsdl.obj \
+                  crc32.obj demangle.obj dwarf.obj elf.obj gdb-rsp.obj guidriver.obj mcu-info.obj \
+                  minIni.obj nuklear_mousepointer.obj nuklear_splitter.obj nuklear_style.obj \
+                  nuklear_tooltip.obj picoro.obj rs232.obj specialfolder.obj swotrace.obj \
+                  tcpip.obj xmltractor.obj decodectf.obj parsetsdl.obj \
+                  strlcpy.obj usb-support.obj \
                   nuklear.obj nuklear_gdip.obj noc_file_dialog.obj
 
 OBJLIST_BMSCAN = bmscan.obj bmp-scan.obj tcpip.obj
@@ -93,11 +102,12 @@ OBJLIST_POSTLINK = elf-postlink.obj elf.obj strlcpy.obj
 OBJLIST_TRACEGEN = tracegen.obj parsetsdl.obj strlcpy.obj
 
 
-project : bmdebug.exe bmflash.exe bmtrace.exe bmscan.exe elf-postlink.exe tracegen.exe
+project : bmdebug.exe bmflash.exe bmprofile.exe bmtrace.exe bmscan.exe elf-postlink.exe tracegen.exe
 
 depend :
 	makedepend -b -e -o.obj -fmakefile.dep $(OBJLIST_BMDEBUG:.obj=.c) $(OBJLIST_BMFLASH:.obj=.c) \
-                   $(OBJLIST_BMTRACE:.obj=.c) $(OBJLIST_BMSCAN:.obj=.c) $(OBJLIST_POSTLINK:.obj=.c) \
+                   $(OBJLIST_BMPROFILE:.obj=.c) $(OBJLIST_BMTRACE:.obj=.c) \
+                   $(OBJLIST_BMSCAN:.obj=.c) $(OBJLIST_POSTLINK:.obj=.c) \
                    $(OBJLIST_TRACEGEN:.obj=.c)
 
 
@@ -110,6 +120,8 @@ bmcommon.obj : bmcommon.c
 bmdebug.obj : bmdebug.c
 
 bmflash.obj : bmflash.c
+
+bmprofile.obj : bmprofile.c
 
 bmscan.obj : bmscan.c
 
@@ -202,6 +214,9 @@ bmdebug.exe : $(OBJLIST_BMDEBUG) bmdebug.res
 
 bmflash.exe : $(OBJLIST_BMFLASH) bmflash.res
 	$(LNK) $(LFLAGS_W) /ENTRY:mainCRTStartup /OUT:$@ $** advapi32.lib comdlg32.lib gdi32.lib gdiplus.lib user32.lib winmm.lib wsock32.lib shell32.lib shlwapi.lib
+
+bmprofile.exe : $(OBJLIST_BMPROFILE) bmtrace.res
+	$(LNK) $(LFLAGS_W) /ENTRY:mainCRTStartup /OUT:$@ $** advapi32.lib comdlg32.lib gdi32.lib gdiplus.lib user32.lib winmm.lib wsock32.lib shell32.lib shlwapi.lib setupapi.lib
 
 bmtrace.exe : $(OBJLIST_BMTRACE) bmtrace.res
 	$(LNK) $(LFLAGS_W) /ENTRY:mainCRTStartup /OUT:$@ $** advapi32.lib comdlg32.lib gdi32.lib gdiplus.lib user32.lib winmm.lib wsock32.lib shell32.lib shlwapi.lib setupapi.lib

@@ -35,7 +35,7 @@ enum {
 
 HCOM*  rs232_open(const char *port, unsigned baud, int databits, int stopbits, int parity);
 void   rs232_close(HCOM *hCom);
-int    rs232_isopen(HCOM *hCom);
+int    rs232_isopen(const HCOM *hCom);
 size_t rs232_xmit(HCOM *hCom, const unsigned char *buffer, size_t size);
 size_t rs232_recv(HCOM *hCom, unsigned char *buffer, size_t size);
 void   rs232_flush(HCOM *hCom);

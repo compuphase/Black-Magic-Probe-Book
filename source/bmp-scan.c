@@ -270,7 +270,7 @@ int find_bmp(int seqnr, int iface, TCHAR *name, size_t namelen)
   RegCloseKey(hkeyItem);
   RegCloseKey(hkeySection);
 
-  _tcsncpy(name, portname, namelen);
+  _tcsncpy(name, ptr, namelen);
   name[namelen - 1] = '\0';
   return _tcslen(name) > 0;
 }
