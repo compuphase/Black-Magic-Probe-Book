@@ -9,11 +9,11 @@ bmdebug.obj : armdisasm.h bmcommon.h bmp-scan.h bmp-script.h demangle.h \
 	memdump.h minIni.h minGlue.h noc_file_dialog.h nuklear_mousepointer.h \
 	nuklear_style.h nuklear_splitter.h nuklear_tooltip.h serialmon.h \
 	specialfolder.h svd-support.h tcpip.h parsetsdl.h decodectf.h \
-	swotrace.h
+	swotrace.h svnrev.h
 bmflash.obj : guidriver.h nuklear.h nuklear_config.h noc_file_dialog.h \
 	nuklear_mousepointer.h nuklear_style.h nuklear_tooltip.h bmcommon.h \
 	bmp-scan.h bmp-script.h bmp-support.h rs232.h cksum.h elf.h gdb-rsp.h \
-	ident.h minIni.h minGlue.h picoro.h tcpip.h specialfolder.h
+	ident.h minIni.h minGlue.h picoro.h tcpip.h specialfolder.h svnrev.h
 bmp-scan.obj : bmp-scan.h tcpip.h
 bmp-script.obj : bmp-script.h specialfolder.h
 bmp-support.obj : bmp-scan.h bmp-script.h bmp-support.h rs232.h crc32.h \
@@ -22,14 +22,15 @@ bmprofile.obj : bmcommon.h bmp-script.h bmp-scan.h bmp-support.h rs232.h \
 	dwarf.h elf.h gdb-rsp.h guidriver.h nuklear.h nuklear_config.h \
 	mcu-info.h minIni.h minGlue.h noc_file_dialog.h \
 	nuklear_mousepointer.h nuklear_splitter.h nuklear_style.h \
-	nuklear_tooltip.h swotrace.h tcpip.h
-bmscan.obj : bmp-scan.h tcpip.h
+	nuklear_tooltip.h swotrace.h tcpip.h svnrev.h
+bmscan.obj : bmp-scan.h tcpip.h svnrev.h
 bmtrace.obj : guidriver.h nuklear.h nuklear_config.h bmcommon.h \
 	bmp-script.h bmp-scan.h bmp-support.h rs232.h demangle.h dwarf.h \
 	elf.h gdb-rsp.h mcu-info.h minIni.h minGlue.h noc_file_dialog.h \
 	nuklear_mousepointer.h nuklear_splitter.h nuklear_style.h \
 	nuklear_tooltip.h specialfolder.h tcpip.h parsetsdl.h decodectf.h \
-	swotrace.h
+	swotrace.h svnrev.h
+calltree.obj : svnrev.h
 cksum.obj : cksum.h
 crc32.obj : crc32.h
 decodectf.obj : demangle.h parsetsdl.h decodectf.h dwarf.h
@@ -37,7 +38,7 @@ demangle.obj : demangle.h
 dirent.obj : dirent.h
 dwarf.obj : demangle.h elf.h dwarf.h
 elf.obj : elf.h
-elf-postlink.obj : elf.h
+elf-postlink.obj : elf.h svnrev.h
 gdb-rsp.obj : bmp-support.h rs232.h gdb-rsp.h tcpip.h
 guidriver.obj : guidriver.h nuklear.h nuklear_config.h \
 	nuklear_mousepointer.h nuklear_gdip.h
@@ -63,7 +64,7 @@ svd-support.obj : svd-support.h xmltractor.h
 swotrace.obj : usb-support.h bmp-scan.h guidriver.h nuklear.h \
 	nuklear_config.h parsetsdl.h decodectf.h dwarf.h swotrace.h
 tcpip.obj : bmp-scan.h tcpip.h
-tracegen.obj : parsetsdl.h
+tracegen.obj : parsetsdl.h svnrev.h
 usb-support.obj : usb-support.h
 xmltractor.obj : xmltractor.h
 
@@ -74,13 +75,13 @@ bmdebug.o : armdisasm.h bmcommon.h bmp-scan.h bmp-script.h demangle.h \
 	memdump.h minIni.h minGlue.h noc_file_dialog.h nuklear_mousepointer.h \
 	nuklear_style.h nuklear_splitter.h nuklear_tooltip.h serialmon.h \
 	specialfolder.h svd-support.h tcpip.h parsetsdl.h decodectf.h \
-	swotrace.h res/icon_debug_64.h
+	swotrace.h svnrev.h res/icon_debug_64.h
 bmflash.o : guidriver.h nuklear.h nuklear_config.h noc_file_dialog.h \
 	nuklear_mousepointer.h nuklear_style.h nuklear_tooltip.h bmcommon.h \
 	bmp-scan.h bmp-script.h bmp-support.h rs232.h cksum.h elf.h gdb-rsp.h \
-	ident.h minIni.h minGlue.h picoro.h tcpip.h specialfolder.h \
+	ident.h minIni.h minGlue.h picoro.h tcpip.h specialfolder.h svnrev.h \
 	res/icon_download_64.h
-bmp-scan.o : bmp-scan.h tcpip.h
+bmp-scan.o : bmp-scan.h tcpip.h svnrev.h
 bmp-script.o : bmp-script.h specialfolder.h
 bmp-support.o : bmp-scan.h bmp-script.h bmp-support.h rs232.h crc32.h \
 	elf.h gdb-rsp.h picoro.h tcpip.h xmltractor.h
@@ -88,21 +89,22 @@ bmprofile.o : bmcommon.h bmp-script.h bmp-scan.h bmp-support.h rs232.h \
 	dwarf.h elf.h gdb-rsp.h guidriver.h nuklear.h nuklear_config.h \
 	mcu-info.h minIni.h minGlue.h noc_file_dialog.h \
 	nuklear_mousepointer.h nuklear_splitter.h nuklear_style.h \
-	nuklear_tooltip.h swotrace.h tcpip.h res/icon_profile_64.h
-bmscan.o : bmp-scan.h tcpip.h
+	nuklear_tooltip.h swotrace.h tcpip.h svnrev.h res/icon_profile_64.h
+bmscan.o : bmp-scan.h tcpip.h svnrev.h
 bmtrace.o : guidriver.h nuklear.h nuklear_config.h bmcommon.h \
 	bmp-script.h bmp-scan.h bmp-support.h rs232.h demangle.h dwarf.h \
 	elf.h gdb-rsp.h mcu-info.h minIni.h minGlue.h noc_file_dialog.h \
 	nuklear_mousepointer.h nuklear_splitter.h nuklear_style.h \
 	nuklear_tooltip.h specialfolder.h tcpip.h parsetsdl.h decodectf.h \
-	swotrace.h res/icon_trace_64.h
+	swotrace.h svnrev.h res/icon_trace_64.h
+calltree.o : svnrev.h
 cksum.o : cksum.h
 crc32.o : crc32.h
 decodectf.o : demangle.h parsetsdl.h decodectf.h dwarf.h
 demangle.o : demangle.h
 dwarf.o : demangle.h dwarf.h elf.h
 elf.o : elf.h
-elf-postlink.o : elf.h
+elf-postlink.o : elf.h svnrev.h
 gdb-rsp.o : bmp-support.h rs232.h gdb-rsp.h tcpip.h
 guidriver.o : guidriver.h nuklear.h nuklear_config.h \
 	nuklear_mousepointer.h findfont.h lodepng.h \
@@ -131,7 +133,7 @@ svd-support.o : svd-support.h xmltractor.h
 swotrace.o : usb-support.h bmp-scan.h guidriver.h nuklear.h \
 	nuklear_config.h parsetsdl.h decodectf.h dwarf.h swotrace.h
 tcpip.o : bmp-scan.h tcpip.h
-tracegen.o : parsetsdl.h
+tracegen.o : parsetsdl.h svnrev.h
 usb-support.o : usb-support.h
 xmltractor.o : xmltractor.h
 

@@ -62,10 +62,11 @@ enum {
  * managed by the library.  The string is valid until the next call to
  * no_dialog_open.  If the user canceled, the return value is NULL.
  */
-const char *noc_file_dialog_open(int flags,
-                                 const char *filters,
-                                 const char *default_path,
-                                 const char *default_name,
-                                 const char *caption,
-                                 const void *parent);
+int noc_file_dialog_open(char *path, size_t pathsize,   /* output */
+                         int flags,
+                         const char *filters,
+                         const char *default_path,
+                         const char *default_name,
+                         const char *caption,
+                         const void *parent);
 

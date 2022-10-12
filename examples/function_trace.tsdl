@@ -1,0 +1,41 @@
+/* TSDL file suitable for tracing function entries and exits.
+ *
+ * The source code must be compiled with GCC option -finstrument-functions.
+ * The code must also supply a function trace_xmit(), as explained in the
+ * book. An * important note is that trace_xmit() must be declared with
+ * __attribute__((no_instrument_function))
+ */
+trace {
+    major = 1;
+    minor = 8;
+    packet.header := struct {
+        uint16_t magic;
+    };
+};
+
+stream function_profile {
+    id = 31;
+    event.header := struct {
+        uint16_t id;
+    };
+};
+
+typealias integer {
+    size = 32;
+    signed = false;
+    base = symaddress;
+} := code_address;
+
+event function_profile::enter {
+    attribute = "no_instrument_function";
+    fields := struct {
+        code_address symbol;
+    };
+};
+
+event function_profile::exit {
+    attribute = "no_instrument_function";
+    fields := struct {
+        code_address symbol;
+    };
+};

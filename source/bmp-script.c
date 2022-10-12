@@ -237,7 +237,7 @@ static const SCRIPT_DEF script_defaults[] = {
   },
 
   /* swo_close (generic) */
-  { "swo_channels", "*",
+  { "swo_close", "*",
     "SCB_DEMCR = 0 \n"
     "ITM_LAR = 0xC5ACCE55 \n"   /* unlock access to ITM registers */
     "ITM_TCR = 0 \n"

@@ -80,6 +80,7 @@ enum {
   TOK_UNSIGNED,
   TOK_VARIANT,
   TOK_VOID,
+  TOK_INCLUDE,
   /* multi-character operators */
   TOK_OP_TYPE_ASSIGN,
   TOK_OP_ARROW,
@@ -102,8 +103,14 @@ typedef struct tagTOKEN {
   int pushed;
 } TOKEN;
 
+typedef struct tagINCLUDEFILE {
+  FILE *file;
+  int linenr;
+} INCLUDEFILE;
+#define INCLUDE_NESTING 8
 
 static FILE *inputfile = NULL;
+static INCLUDEFILE includestack[INCLUDE_NESTING] = { NULL };
 static char *linebuffer = NULL;
 static int linebuffer_index = 0;
 static int linenumber = 0;
@@ -137,7 +144,7 @@ static int recent_error = -1;
 
   switch (code) {
   case CTFERR_FILEOPEN:
-    vsprintf(message, "File open error (file not found?)", args);
+    vsprintf(message, "File open error on %s (file not found?)", args);
     break;
   case CTFERR_MEMORY:
     vsprintf(message, "Memory allocation error", args);
@@ -203,6 +210,9 @@ static int recent_error = -1;
   case CTFERR_CLOCK_IS_INT:
     vsprintf(message, "Clock must be mapped to integer type", args);
     break;
+  case CTFERR_EXCEED_INCLUDES:
+    vsprintf(message, "#includes too deeply nested", args);
+    break;
   default:
     assert(code != CTFERR_NONE);
     sprintf(message, "Unknown error, code %d", code);
@@ -218,10 +228,14 @@ static int readline_init(const char *filename)
 {
   linenumber = 0;
   comment_block_start = 0;
+  for (int idx = 0; idx < INCLUDE_NESTING; idx++) {
+    includestack[idx].file = NULL;
+    includestack[idx].linenr = 0;
+  }
 
   inputfile = fopen(filename, "rt");
   if (inputfile == NULL)
-    return ctf_error(CTFERR_FILEOPEN);
+    return ctf_error(CTFERR_FILEOPEN, filename);
 
   linebuffer = (char*)malloc(MAX_LINE_LENGTH * sizeof(char));
   if (linebuffer == NULL) {
@@ -234,23 +248,42 @@ static int readline_init(const char *filename)
 
 static void readline_cleanup(void)
 {
-  if (inputfile != NULL)
+  if (inputfile != NULL) {
     fclose(inputfile);
-  if (linebuffer != NULL)
+    inputfile = NULL;
+  }
+  if (linebuffer != NULL) {
     free((void*)linebuffer);
+    linebuffer = NULL;
+  }
+  for (int idx = 0; idx < INCLUDE_NESTING; idx++)
+    if (includestack[idx].file != NULL) {
+      fclose(includestack[idx].file);
+      includestack[idx].file = NULL;
+    }
 }
 
 static int readline_next(void)
 {
   assert(inputfile != NULL);
   assert(linebuffer != NULL);
-  for (;; ) {
+  for ( ;; ) {
     char *ptr;
     char in_quotes;
-    if (fgets(linebuffer, MAX_LINE_LENGTH - 1, inputfile)== NULL) {
+    if (fgets(linebuffer, MAX_LINE_LENGTH - 1, inputfile) == NULL) {
       if (comment_block_start > 0)
         ctf_error(CTFERR_BLOCKCOMMENT, comment_block_start);
-      return 0; /* no more data in the file */
+      /* no more data in the file, try to pop a file from the include stack */
+      int top;
+      for (top = INCLUDE_NESTING - 1; top >= 0 && includestack[top].file == NULL; top--)
+        {}
+      if (top < 0)
+        return 0; /* no more files -> done */
+      fclose(inputfile);
+      inputfile = includestack[top].file;
+      linenumber = includestack[top].linenr;
+      includestack[top].file = NULL;
+      continue;
     }
 
     linenumber += 1;
@@ -461,7 +494,8 @@ static const char *token_keywords[] = {
   "align", "callsite", "char", "const", "clock", "double", "enum", "env",
   "event", "fields", "float", "floating_point", "header", "int", "integer",
   "long", "packet", "short", "signed", "stream", "string", "struct", "trace",
-  "typealias", "typedef", "unsigned", "variant", "void" };
+  "typealias", "typedef", "unsigned", "variant", "void",
+  "#include" };
 static const char *token_operators[] = {
   ":=", "->", "::", "..." };
 static const char *token_generic[] = {
@@ -950,15 +984,15 @@ static void parse_typealias_fields(CTF_TYPE *type)
           const char *p;
           token_need(TOK_IDENTIFIER);
           p = token_gettext();
-          if (strcmp(p, "decimal") || strcmp(p, "dec") || strcmp(p, "d") || strcmp(p, "i")) {
+          if (strcmp(p, "decimal") == 0 || strcmp(p, "dec") == 0 || strcmp(p, "d") == 0 || strcmp(p, "i") == 0) {
             type->base = 10;
-          } else if (strcmp(p, "hexadecimal") || strcmp(p, "hex") || stricmp(p, "x")) {
+          } else if (strcmp(p, "hexadecimal") == 0 || strcmp(p, "hex") == 0 || stricmp(p, "x") == 0) {
             type->base = 16;
-          } else if (strcmp(p, "octal") || strcmp(p, "oct") || stricmp(p, "o")) {
+          } else if (strcmp(p, "octal") == 0 || strcmp(p, "oct") == 0 || stricmp(p, "o") == 0) {
             type->base = 8;
-          } else if (strcmp(p, "binary") || stricmp(p, "b")) {
+          } else if (strcmp(p, "binary") == 0 || stricmp(p, "b") == 0) {
             type->base = 2;
-          } else if (strcmp(p, "symaddress") || stricmp(p, "symaddr")) {
+          } else if (strcmp(p, "symaddress") == 0 || strcmp(p, "symaddr") == 0) {
             type->base = CTF_BASE_ADDR;
             type->flags &= ~TYPEFLAG_SIGNED;
           }
@@ -1290,7 +1324,7 @@ static void parse_event_header(CTF_EVENT_HEADER *evthdr, CTF_TYPE **clock)
       CTF_TYPE *field;
       assert(knowntype->fields != NULL);
       for (field = knowntype->fields->next; field != NULL; field = field->next) {
-        if (strcmp(field->identifier, "event.id")== 0 || strcmp(field->identifier, "id")== 0) {
+        if (strcmp(field->identifier, "event.id") == 0 || strcmp(field->identifier, "id") == 0) {
           if (field->typeclass != CLASS_INTEGER || field->length != 0)
             ctf_error(CTFERR_WRONGTYPE);
           evthdr->header.id_size = (uint8_t)field->size;
@@ -1554,13 +1588,11 @@ static void parse_trace(void)
         token_need(TOK_IDENTIFIER);
         ctf_trace.byte_order = (strcmp(token_gettext(), "be") == 0) ? BYTEORDER_BE : BYTEORDER_LE;
       } else if (strcmp(identifier, "uuid") == 0) {
-        int idx;
-        const char *ptr;
         token_need(TOK_LSTRING);
         /* convert string to byte array */
         memset(ctf_trace.uuid, 0, sizearray(ctf_trace.uuid));
-        ptr = token_gettext();
-        for (idx = 0; idx < sizearray(ctf_trace.uuid); idx++) {
+        const char *ptr = token_gettext();
+        for (int idx = 0; idx < sizearray(ctf_trace.uuid); idx++) {
           if (*ptr == '-')
             ptr++;
           if (!isxdigit(ptr[0]) || !isxdigit(ptr[1]))
@@ -1879,6 +1911,29 @@ static void parse_event(void)
   ctf_trace.stream_mask |= (1 << event->stream_id);
 }
 
+static void do_include(void)
+{
+  int top;
+  for (top = INCLUDE_NESTING - 1; top >= 0 && includestack[top].file == NULL; top--)
+    {}
+  top += 1; /* undo overrun of the loop */
+  if (top >= INCLUDE_NESTING) {
+    ctf_error(CTFERR_EXCEED_INCLUDES);
+  } else {
+    if (token_need(TOK_LSTRING) > 0) {
+      const char *name = token_gettext();
+      FILE *fp = fopen(name, "rt");
+      if (fp != NULL) {
+        includestack[top].file = inputfile;
+        includestack[top].linenr = 0;
+        inputfile = fp;
+      } else {
+        ctf_error(CTFERR_FILEOPEN, name);
+      }
+    }
+  }
+}
+
 /** ctf_parse_init() initializes the TSDL parser and sets up default types.
  *  It retuns 1 on success and 0 on error; the error message has then already
  *  been issued via ctf_error_notify().
@@ -1957,6 +2012,9 @@ int ctf_parse_run(void)
       break;
     case TOK_CALLSITE:
       //??? error: feature not implemented
+      break;
+    case TOK_INCLUDE:
+      do_include();
       break;
     default:
       ctf_error(CTFERR_SYNTAX_MAIN);

@@ -23,6 +23,7 @@
 #include <string.h>
 #include "guidriver.h"
 #include "memdump.h"
+#include "nuklear_style.h"
 
 #if !defined sizearray
   #define sizearray(e)    (sizeof(e) / sizeof((e)[0]))
@@ -309,7 +310,7 @@ void memdump_widget(struct nk_context *ctx, MEMDUMP *memdump, int widgetheight, 
   font = ctx->style.font;
 
   nk_layout_row_dynamic(ctx, widgetheight, 1);
-  nk_style_push_color(ctx, &ctx->style.window.fixed_background.data.color, nk_rgba(20, 29, 38, 225));
+  nk_style_push_color(ctx, &ctx->style.window.fixed_background.data.color, COLOUR_BG0);
   if (nk_group_begin(ctx, "memory", 0)) {
     struct nk_rect rcwidget = nk_layout_widget_bounds(ctx);
     int col = 0;
@@ -363,7 +364,7 @@ void memdump_widget(struct nk_context *ctx, MEMDUMP *memdump, int widgetheight, 
       field[len] = '\0';
       nk_layout_row_push(ctx, memdump->item_width);
       if (modified)
-        nk_label_colored(ctx, field, NK_TEXT_LEFT, nk_rgb(255, 128, 150));
+        nk_label_colored(ctx, field, NK_TEXT_LEFT, COLOUR_FG_RED);
       else
         nk_label(ctx, field, NK_TEXT_LEFT);
       /* advance to next field */

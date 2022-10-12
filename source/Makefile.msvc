@@ -97,17 +97,20 @@ OBJLIST_BMTRACE = bmtrace.obj bmcommon.obj bmp-scan.obj bmp-script.obj bmp-suppo
 
 OBJLIST_BMSCAN = bmscan.obj bmp-scan.obj tcpip.obj
 
+OBJLIST_CALLTREE = calltree.obj
+
 OBJLIST_POSTLINK = elf-postlink.obj elf.obj strlcpy.obj
 
 OBJLIST_TRACEGEN = tracegen.obj parsetsdl.obj strlcpy.obj
 
 
-project : bmdebug.exe bmflash.exe bmprofile.exe bmtrace.exe bmscan.exe elf-postlink.exe tracegen.exe
+project : bmdebug.exe bmflash.exe bmprofile.exe bmtrace.exe bmscan.exe calltree.exe \
+          elf-postlink.exe tracegen.exe
 
 depend :
 	makedepend -b -e -o.obj -fmakefile.dep $(OBJLIST_BMDEBUG:.obj=.c) $(OBJLIST_BMFLASH:.obj=.c) \
-                   $(OBJLIST_BMPROFILE:.obj=.c) $(OBJLIST_BMTRACE:.obj=.c) \
-                   $(OBJLIST_BMSCAN:.obj=.c) $(OBJLIST_POSTLINK:.obj=.c) \
+                   $(OBJLIST_BMPROFILE:.obj=.c) $(OBJLIST_BMTRACE:.obj=.c) $(OBJLIST_BMSCAN:.obj=.c) \
+                   $(OBJLIST_CALLTREE:.obj=.c) $(OBJLIST_POSTLINK:.obj=.c) \
                    $(OBJLIST_TRACEGEN:.obj=.c)
 
 
@@ -132,6 +135,8 @@ bmp-scan.obj : bmp-scan.c
 bmp-script.obj : bmp-script.c
 
 bmp-support.obj : bmp-support.c
+
+calltree.obj : calltree.c
 
 cksum.obj : cksum.c
 
@@ -204,6 +209,8 @@ bmdebug.res : bmdebug.rc
 
 bmflash.res : bmflash.rc
 
+bmprofile.res : bmprofile.rc
+
 bmtrace.res : bmtrace.rc
 
 
@@ -223,6 +230,9 @@ bmtrace.exe : $(OBJLIST_BMTRACE) bmtrace.res
 
 bmscan.exe : $(OBJLIST_BMSCAN)
 	$(LNK) $(LFLAGS_C) /OUT:$@ $** advapi32.lib wsock32.lib
+
+calltree.exe : $(OBJLIST_CALLTREE)
+	$(LNK) $(LFLAGS_C) /OUT:$@ $**
 
 elf-postlink.exe : $(OBJLIST_POSTLINK)
 	$(LNK) $(LFLAGS_C) /OUT:$@ $**

@@ -84,6 +84,7 @@
 #include "specialfolder.h"
 #include "svd-support.h"
 #include "tcpip.h"
+#include "svnrev.h"
 
 #include "parsetsdl.h"
 #include "decodectf.h"
@@ -216,22 +217,6 @@ static void stringlist_clear(STRINGLIST *root)
   while (root->next != NULL) {
     STRINGLIST *item = root->next;
     root->next = item->next;
-    assert(item->text != NULL);
-    free((void*)item->text);
-    free((void*)item);
-  }
-}
-
-static void stringlist_delete(STRINGLIST *root, STRINGLIST *item)
-{
-  STRINGLIST *prev;
-  assert(root != NULL);
-  assert(item != NULL);
-  for (prev = root; prev->next != NULL && prev->next != item; prev = prev->next)
-    {}
-  assert(prev != NULL && prev->next == item);
-  if (prev->next == item) {
-    prev->next = item->next;
     assert(item->text != NULL);
     free((void*)item->text);
     free((void*)item);
@@ -1142,21 +1127,19 @@ static int console_autocomplete(char *text, size_t textsize, const DWARF_SYMBOLL
   return result;
 }
 
-static void console_history_add(STRINGLIST *root, const char *text, int tail)
+static void console_history_add(STRINGLIST *root, const char *text, bool tail)
 {
   STRINGLIST *item;
 
   assert(root != NULL);
   assert(text != NULL);
 
-  /* remove this text if it already appears somewhere in the list */
+  /* do not add this text if it already appears earlier in the list */
   for (item = root->next; item != NULL; item = item->next) {
     assert(item->text != NULL);
     if (strcmp(item->text, text) == 0)
-      break;  /* text already appears in the list, remove it from this spot */
+      return; /* text already appears in the list, no need to add it again */
   }
-  if (item != NULL)
-    stringlist_delete(root, item);
 
   if (tail)
     stringlist_append(root, text, 0);
@@ -3183,7 +3166,7 @@ static int textview_widget(struct nk_context *ctx, const char *id,
   int linecount = 0;
 
   /* dark background on group */
-  nk_style_push_color(ctx, &ctx->style.window.fixed_background.data.color, nk_rgba(20, 29, 38, 225));
+  nk_style_push_color(ctx, &ctx->style.window.fixed_background.data.color, COLOUR_BG0);
   nk_style_push_vec2(ctx, &ctx->style.window.group_padding, nk_vec2(6, 4));
   if (nk_group_begin(ctx, id, NK_WINDOW_BORDER)) {
     struct nk_user_font const *font = ctx->style.font;
@@ -3257,7 +3240,7 @@ static void console_widget(struct nk_context *ctx, const char *id, float rowheig
   struct nk_user_font const *font = ctx->style.font;
 
   /* black background on group */
-  nk_style_push_color(ctx, &ctx->style.window.fixed_background.data.color, nk_rgba(20, 29, 38, 225));
+  nk_style_push_color(ctx, &ctx->style.window.fixed_background.data.color, COLOUR_BG0);
   if (nk_group_begin(ctx, id, NK_WINDOW_BORDER)) {
     int lines = 0;
     float lineheight = 0;
@@ -3276,19 +3259,19 @@ static void console_widget(struct nk_context *ctx, const char *id, float rowheig
       textwidth = font->width(font->userdata, font->height, item->text, strlen(item->text)) + 10;
       nk_layout_row_push(ctx, textwidth);
       if (item->flags & (STRFLG_INPUT | STRFLG_MI_INPUT))
-        nk_label_colored(ctx, item->text, NK_TEXT_LEFT, nk_rgb(204, 199, 141));
+        nk_label_colored(ctx, item->text, NK_TEXT_LEFT, COLOUR_FG_YELLOW);
       else if (item->flags & STRFLG_ERROR)
-        nk_label_colored(ctx, item->text, NK_TEXT_LEFT, nk_rgb(255, 80, 100));
+        nk_label_colored(ctx, item->text, NK_TEXT_LEFT, COLOUR_FG_RED);
       else if (item->flags & STRFLG_RESULT)
-        nk_label_colored(ctx, item->text, NK_TEXT_LEFT, nk_rgb(64, 220, 255));
+        nk_label_colored(ctx, item->text, NK_TEXT_LEFT, COLOUR_FG_BLUE);
       else if (item->flags & STRFLG_NOTICE)
-        nk_label_colored(ctx, item->text, NK_TEXT_LEFT, nk_rgb(220, 220, 128));
+        nk_label_colored(ctx, item->text, NK_TEXT_LEFT, COLOUR_FG_PURPLE);
       else if (item->flags & STRFLG_STATUS)
-        nk_label_colored(ctx, item->text, NK_TEXT_LEFT, nk_rgb(255, 255, 128));
+        nk_label_colored(ctx, item->text, NK_TEXT_LEFT, COLOUR_FG_YELLOW);
       else if (item->flags & STRFLG_EXEC)
-        nk_label_colored(ctx, item->text, NK_TEXT_LEFT, nk_rgb(128, 222, 128));
+        nk_label_colored(ctx, item->text, NK_TEXT_LEFT, COLOUR_FG_GREEN);
       else if (item->flags & STRFLG_LOG)
-        nk_label_colored(ctx, item->text, NK_TEXT_LEFT, nk_rgb(128, 222, 222));
+        nk_label_colored(ctx, item->text, NK_TEXT_LEFT, COLOUR_FG_AQUA);
       else
         nk_label(ctx, item->text, NK_TEXT_LEFT);
       nk_layout_row_end(ctx);
@@ -3355,7 +3338,7 @@ static int line_phys2source(int fileindex, int phys_line)
   assert(fileindex >= 0);
   int line = 1;
   SOURCELINE *item;
-  for (item = source_firstline(fileindex); item != NULL && phys_line > 1; item = item->next) {
+  for (item = source_firstline(fileindex); item != NULL && phys_line > 0; item = item->next) {
     if (item->hidden)
       continue;
     if (item->linenumber > 0)
@@ -3408,7 +3391,7 @@ static void source_widget(struct nk_context *ctx, const char *id, float rowheigh
   font = ctx->style.font;
 
   /* black background on group */
-  nk_style_push_color(ctx, &ctx->style.window.fixed_background.data.color, nk_rgba(20, 29, 38, 225));
+  nk_style_push_color(ctx, &ctx->style.window.fixed_background.data.color, COLOUR_BG0);
   if (nk_group_begin(ctx, id, NK_WINDOW_BORDER)) {
     int lines = 0, maxlen = 0;
     float maxwidth = 0;
@@ -3432,20 +3415,20 @@ static void source_widget(struct nk_context *ctx, const char *id, float rowheigh
         assert(bkpt != NULL);
         stbtn.normal.data.color = stbtn.hover.data.color
           = stbtn.active.data.color = stbtn.text_background
-          = nk_rgba(20, 29, 38, 225);
+          = COLOUR_BG0;
         if (bkpt->enabled)
-          stbtn.text_normal = stbtn.text_active = stbtn.text_hover = nk_rgb(140, 25, 50);
+          stbtn.text_normal = stbtn.text_active = stbtn.text_hover = COLOUR_BG_RED;
         else
-          stbtn.text_normal = stbtn.text_active = stbtn.text_hover = nk_rgb(255, 50, 120);
+          stbtn.text_normal = stbtn.text_active = stbtn.text_hover = COLOUR_BG_RED;
         nk_button_symbol_styled(ctx, &stbtn, bkpt->enabled ? NK_SYMBOL_CIRCLE_SOLID : NK_SYMBOL_CIRCLE_OUTLINE);
       } else if (item->linenumber != 0) {
         nk_layout_row_push(ctx, 2 * rowheight);
         char str[20];
         sprintf(str, "%4d", item->linenumber);
         if (grayed)
-          nk_label_colored(ctx, str, NK_TEXT_LEFT, nk_rgb(128, 128, 128));
+          nk_label_colored(ctx, str, NK_TEXT_LEFT, COLOUR_FG_GRAY);
         else if (lines == source_cursorline)
-          nk_label_colored(ctx, str, NK_TEXT_LEFT, nk_rgb(250, 250, 128));
+          nk_label_colored(ctx, str, NK_TEXT_LEFT, COLOUR_FG_YELLOW);
         else
           nk_label(ctx, str, NK_TEXT_LEFT);
       } else {
@@ -3464,8 +3447,8 @@ static void source_widget(struct nk_context *ctx, const char *id, float rowheigh
       if (is_exec_point) {
         stbtn.normal.data.color = stbtn.hover.data.color
           = stbtn.active.data.color = stbtn.text_background
-          = nk_rgba(20, 29, 38, 225);
-        stbtn.text_normal = stbtn.text_active = stbtn.text_hover = nk_rgb(250, 250, 128);
+          = COLOUR_BG0;
+        stbtn.text_normal = stbtn.text_active = stbtn.text_hover = COLOUR_FG_YELLOW;
         nk_button_symbol_styled(ctx, &stbtn, NK_SYMBOL_TRIANGLE_RIGHT);
       } else {
         nk_spacing(ctx, 1);
@@ -3479,11 +3462,11 @@ static void source_widget(struct nk_context *ctx, const char *id, float rowheigh
       }
       nk_layout_row_push(ctx, textwidth + 10);
       if (grayed)
-        nk_label_colored(ctx, item->text, NK_TEXT_LEFT, nk_rgb(128, 128, 128));
+        nk_label_colored(ctx, item->text, NK_TEXT_LEFT, COLOUR_FG_GRAY);
       else if (lines == source_cursorline)
-        nk_label_colored(ctx, item->text, NK_TEXT_LEFT, nk_rgb(250, 250, 128));
+        nk_label_colored(ctx, item->text, NK_TEXT_LEFT, COLOUR_FG_YELLOW);
       else if (item->linenumber == 0)
-        nk_label_colored(ctx, item->text, NK_TEXT_LEFT, nk_rgb(192, 192, 224));
+        nk_label_colored(ctx, item->text, NK_TEXT_LEFT, COLOUR_FG_AQUA);
       else
         nk_label(ctx, item->text, NK_TEXT_LEFT);
       nk_layout_row_end(ctx);
@@ -3816,10 +3799,9 @@ static bool load_targetoptions(const char *filename, char *entrypoint, size_t en
   swo->init_status = 0;
   ini_gets("SWO trace", "ctf", "", swo->metadata, sizearray(swo->metadata), filename);
   for (idx = 0; idx < NUM_CHANNELS; idx++) {
-    #define SWO_TRACE_DEFAULT_COLOR 190
     char key[41], value[128];
     /* preset: port 0 is enabled by default, others disabled by default */
-    channel_set(idx, (idx == 0), NULL, nk_rgb(SWO_TRACE_DEFAULT_COLOR, SWO_TRACE_DEFAULT_COLOR, SWO_TRACE_DEFAULT_COLOR));
+    channel_set(idx, (idx == 0), NULL, SWO_TRACE_DEFAULT_COLOR);
     sprintf(key, "chan%d", idx);
     unsigned clr;
     int enabled;
@@ -4594,7 +4576,8 @@ static void trace_info_channel(int ch_start, int ch_end, STRINGLIST *textroot)
         strlcat(msg, "\"", sizearray(msg));
       }
       struct nk_color clr = channel_getcolor(chan);
-      if (clr.r != SWO_TRACE_DEFAULT_COLOR || clr.g != SWO_TRACE_DEFAULT_COLOR || clr.b != SWO_TRACE_DEFAULT_COLOR) {
+      struct nk_color defclr = SWO_TRACE_DEFAULT_COLOR;
+      if (clr.r != defclr.r || clr.g != defclr.g || clr.b != defclr.b) {
         char str[30];
         sprintf(str, " #%02x%02x%02x", clr.r, clr.g, clr.b);
         strlcat(msg, str, sizearray(msg));
@@ -4747,9 +4730,10 @@ static int handle_trace_cmd(const char *command, SWOSETTINGS *swo)
   if (*ptr == '\0' || TERM_EQU(ptr, "info", 4))
     return 3; /* if only "trace" is typed, interpret it as "trace info" */
 
-  if ((ptr = strstr(cmdcopy, "clear")) != NULL && TERM_END(ptr, 5)) {
+  char *opt_clear;
+  if ((opt_clear = strstr(cmdcopy, "clear")) != NULL && TERM_END(opt_clear, 5)) {
     tracestring_clear();
-    memset(ptr, ' ', 5);    /* erase the parameter from the string */
+    memset(opt_clear, ' ', 5);  /* erase the "clear" parameter from the string */
   }
 
   assert(swo != NULL);
@@ -5114,7 +5098,22 @@ static void usage(const char *invalid_option)
          "Options:\n"
          "-f=value  Font size to use (value must be 8 or larger).\n"
          "-g=path   Path to the GDB executable to use.\n"
-         "-h        This help.\n");
+         "-h        This help.\n"
+         "-v        Show version information.\n");
+}
+
+static void version(void)
+{
+  #if defined _WIN32  /* fix console output on Windows */
+    if (AttachConsole(ATTACH_PARENT_PROCESS)) {
+      freopen("CONOUT$", "wb", stdout);
+      freopen("CONOUT$", "wb", stderr);
+    }
+    printf("\n");
+  #endif
+
+  printf("BMDebug version 1.1.%d.\n", SVNREV_NUM);
+  printf("Copyright 2019-2022 CompuPhase\nLicensed under the Apache License version 2.0\n");
 }
 
 static void config_read_tabstate(const char *key, enum nk_collapse_states *state, SIZERBAR *sizer,
@@ -5200,6 +5199,7 @@ typedef struct tagAPPSTATE {
   unsigned long scriptparams[4];/**< parameters for running configuration scripts (for TRACESWO) */
   const char **sourcefiles;     /**< array of all source files */
   bool disassemble_mode;        /**< whether source code is mixed with disassembly */
+  bool dwarf_loaded;            /**< whether DWARF info is loaded */
   int prev_clicked_line;        /**< line in source view that was previously clicked on (to detect multiple clicks on the same line) */
   char statesymbol[128];        /**< name of the symbol hovered over (in source view) */
   char ttipvalue[256];          /**< text for variable value in tooltip (when hovering above symbol) */
@@ -5596,8 +5596,12 @@ static void console_view(struct nk_context *ctx, APPSTATE *state,
                 ctf_parse_cleanup();
                 ctf_decode_cleanup();
                 ctf_error_notify(CTFERR_NONE, 0, NULL);
-                if (!ctf_parse_init(state->swo.metadata) || !ctf_parse_run())
+                if (ctf_parse_init(state->swo.metadata) && ctf_parse_run()) {
+                  if (state->dwarf_loaded)
+                    ctf_set_symtable(&dwarf_symboltable);
+                } else {
                   ctf_parse_cleanup();
+                }
               }
               serial_info_mode(NULL);
               tab_states[TAB_SERMON] = NK_MAXIMIZED;  /* make sure the serial monitor view is open */
@@ -5660,8 +5664,10 @@ static void console_view(struct nk_context *ctx, APPSTATE *state,
             TERM_EQU(state->console_edit, "disable", 7) ||
             TERM_EQU(state->console_edit, "enable", 6))
           state->refreshflags |= REFRESH_BREAKPOINTS | IGNORE_DOUBLE_DONE;
-        /* save console_edit in a recent command list */
-        stringlist_insert(&state->consoleedit_root, state->console_edit, 0);
+        /* save console_edit in a recent command list (but skip this if the
+           command is already at the head of the list) */
+        if (state->consoleedit_root.next != NULL && strcmp(state->consoleedit_root.next->text, state->console_edit) != 0)
+          stringlist_insert(&state->consoleedit_root, state->console_edit, 0);
         state->consoleedit_next = NULL;
         state->console_edit[0] = '\0';
       }
@@ -5753,13 +5759,12 @@ static void panel_configuration(struct nk_context *ctx, APPSTATE *state,
                      basename, sizearray(basename), nk_filter_ascii, tooltip);
     nk_layout_row_push(ctx, BROWSEBTN_WIDTH);
     if (nk_button_symbol(ctx, NK_SYMBOL_TRIPLE_DOT)) {
-      const char *s = noc_file_dialog_open(NOC_FILE_DIALOG_OPEN,
-                                           "Executables\0*.elf;*.\0All files\0*.*\0",
-                                           NULL, state->GDBpath, "Select GDB program",
-                                           guidriver_apphandle());
-      if (s != NULL && strlen(s) < sizearray(state->GDBpath)) {
-        strlcpy(state->GDBpath, s, sizearray(state->GDBpath));
-        free((void*)s);
+      int res = noc_file_dialog_open(state->GDBpath, sizearray(state->GDBpath),
+                                     NOC_FILE_DIALOG_OPEN,
+                                     "Executables\0*.elf;*.\0All files\0*.*\0",
+                                     NULL, state->GDBpath, "Select GDB program",
+                                     guidriver_apphandle());
+      if (res) {
         task_close(&state->task);  /* terminate running instance of GDB */
         RESETSTATE(state, STATE_INIT);
       }
@@ -5779,14 +5784,13 @@ static void panel_configuration(struct nk_context *ctx, APPSTATE *state,
     nk_layout_row_push(ctx, BROWSEBTN_WIDTH);
     if (nk_button_symbol(ctx, NK_SYMBOL_TRIPLE_DOT)) {
       translate_path(state->ELFfile, 1);
-      const char *s = noc_file_dialog_open(NOC_FILE_DIALOG_OPEN,
-                                           "ELF Executables\0*.elf;*.bin;*.\0All files\0*.*\0",
-                                           NULL, state->ELFfile, "Select ELF Executable",
-                                           guidriver_apphandle());
-      if (s != NULL && strlen(s) < sizearray(state->ELFfile)) {
-        strcpy(state->ELFfile, s);
+      int res = noc_file_dialog_open(state->ELFfile, sizearray(state->ELFfile),
+                                     NOC_FILE_DIALOG_OPEN,
+                                     "ELF Executables\0*.elf;*.bin;*.\0All files\0*.*\0",
+                                     NULL, state->ELFfile, "Select ELF Executable",
+                                     guidriver_apphandle());
+      if (res) {
         translate_path(state->ELFfile, 0);
-        free((void*)s);
         if (state->curstate > STATE_FILE)
           RESETSTATE(state, STATE_FILE);
       }
@@ -5818,13 +5822,12 @@ static void panel_configuration(struct nk_context *ctx, APPSTATE *state,
     nk_layout_row_push(ctx, BROWSEBTN_WIDTH);
     if (nk_button_symbol(ctx, NK_SYMBOL_TRIPLE_DOT)) {
       translate_path(state->SVDfile, 1);
-      const char *s = noc_file_dialog_open(NOC_FILE_DIALOG_OPEN,
-                                           "CMSIS SVD files\0*.svd\0All files\0*.*\0",
-                                           NULL, state->SVDfile, "Select CMSIS SVD file",
-                                           guidriver_apphandle());
-      if (s != NULL && strlen(s) < sizearray(state->SVDfile)) {
-        strcpy(state->SVDfile, s);
-        free((void*)s);
+      int res = noc_file_dialog_open(state->SVDfile, sizearray(state->SVDfile),
+                                     NOC_FILE_DIALOG_OPEN,
+                                     "CMSIS SVD files\0*.svd\0All files\0*.*\0",
+                                     NULL, state->SVDfile, "Select CMSIS SVD file",
+                                     guidriver_apphandle());
+      if (res) {
         if (state->curstate > STATE_GET_SOURCES) {
           svd_clear();
           if (strlen(state->SVDfile) >0)
@@ -5900,7 +5903,7 @@ static void panel_breakpoints(struct nk_context *ctx, APPSTATE *state,
     }
 
     nk_layout_row_dynamic(ctx, state->sizerbar_breakpoints.size, 1);
-    nk_style_push_color(ctx, &ctx->style.window.fixed_background.data.color, nk_rgba(20, 29, 38, 225));
+    nk_style_push_color(ctx, &ctx->style.window.fixed_background.data.color, COLOUR_BG0);
     if (nk_group_begin(ctx, "breakpoints", 0)) {
       for (BREAKPOINT *bp = breakpoint_root.next; bp != NULL; bp = bp->next) {
         int en;
@@ -5948,7 +5951,7 @@ static int label_formatmenu(struct nk_context *ctx, const char *text, int change
 {
   struct nk_rect bounds = nk_layout_widget_bounds(ctx);
   if (changeflag)
-    nk_label_colored(ctx, text, NK_TEXT_LEFT, nk_rgb(255, 100, 128));
+    nk_label_colored(ctx, text, NK_TEXT_LEFT, COLOUR_FG_RED);
   else
     nk_label(ctx, text, NK_TEXT_LEFT);
 
@@ -6044,7 +6047,7 @@ static void panel_locals(struct nk_context *ctx, APPSTATE *state,
     }
 
     nk_layout_row_dynamic(ctx, state->sizerbar_locals.size, 1);
-    nk_style_push_color(ctx, &ctx->style.window.fixed_background.data.color, nk_rgba(20, 29, 38, 225));
+    nk_style_push_color(ctx, &ctx->style.window.fixed_background.data.color, COLOUR_BG0);
     if (nk_group_begin(ctx, "locals", 0)) {
       for (LOCALVAR *var = localvar_root.next; var != NULL; var = var->next) {
         nk_layout_row_begin(ctx, NK_STATIC, rowheight, 2);
@@ -6107,7 +6110,7 @@ static void panel_watches(struct nk_context *ctx, APPSTATE *state,
     }
 
     nk_layout_row_dynamic(ctx, state->sizerbar_watches.size, 1);
-    nk_style_push_color(ctx, &ctx->style.window.fixed_background.data.color, nk_rgba(20, 29, 38, 225));
+    nk_style_push_color(ctx, &ctx->style.window.fixed_background.data.color, COLOUR_BG0);
     if (nk_group_begin(ctx, "watches", 0)) {
       for (WATCH *watch = watch_root.next; watch != NULL; watch = watch->next) {
         nk_layout_row_begin(ctx, NK_STATIC, rowheight, 4);
@@ -6185,7 +6188,7 @@ static void panel_registers(struct nk_context *ctx, APPSTATE *state,
     float namewidth = 2 * ROW_HEIGHT;
     float valwidth = 4 * ROW_HEIGHT;
     nk_layout_row_dynamic(ctx, state->sizerbar_registers.size, 1);
-    nk_style_push_color(ctx, &ctx->style.window.fixed_background.data.color, nk_rgba(20, 29, 38, 225));
+    nk_style_push_color(ctx, &ctx->style.window.fixed_background.data.color, COLOUR_BG0);
     if (nk_group_begin(ctx, "registers", 0)) {
       for (int idx = 0; idx < sizearray(register_def); idx++) {
         nk_layout_row_begin(ctx, NK_STATIC, rowheight, 2);
@@ -6196,7 +6199,7 @@ static void panel_registers(struct nk_context *ctx, APPSTATE *state,
         char field[20];
         sprintf(field, "0x%08lx", register_def[idx].value);
         if (register_def[idx].flags & REGFLG_CHANGED)
-          nk_label_colored(ctx, field, NK_TEXT_LEFT, nk_rgb(255, 100, 128));
+          nk_label_colored(ctx, field, NK_TEXT_LEFT, COLOUR_FG_RED);
         else
           nk_label(ctx, field, NK_TEXT_LEFT);
         guidriver_setfont(ctx, fonttype);
@@ -6229,7 +6232,7 @@ static void panel_memory(struct nk_context *ctx, APPSTATE *state,
     } else {
       nk_layout_row_dynamic(ctx, ROW_HEIGHT, 1);
       if (state->memdump.message != NULL)
-        nk_label_colored(ctx, state->memdump.message, NK_TEXT_ALIGN_CENTERED | NK_TEXT_ALIGN_MIDDLE, nk_rgb(255, 100, 128));
+        nk_label_colored(ctx, state->memdump.message, NK_TEXT_ALIGN_CENTERED | NK_TEXT_ALIGN_MIDDLE, COLOUR_FG_RED);
       else
         nk_label(ctx, "Use \"x\" command to view memory", NK_TEXT_ALIGN_CENTERED | NK_TEXT_ALIGN_MIDDLE);
     }
@@ -6245,9 +6248,9 @@ static void panel_semihosting(struct nk_context *ctx, APPSTATE *state,
   assert(tab_state != NULL);
 
   /* highlight tab text if new content arrives and the tab is closed */
-  int highlight = !(*tab_state) && stringlist_count(&semihosting_root) != state->semihosting_lines;
+  bool highlight = !(*tab_state) && stringlist_count(&semihosting_root) != state->semihosting_lines;
   if (highlight)
-    nk_style_push_color(ctx,&ctx->style.tab.text, nk_rgb(255, 255, 160));
+    nk_style_push_color(ctx,&ctx->style.tab.text, COLOUR_FG_YELLOW);
   int result = nk_tree_state_push(ctx, NK_TREE_TAB, "Semihosting output", tab_state);
   if (highlight)
     nk_style_pop_color(ctx);
@@ -6255,7 +6258,7 @@ static void panel_semihosting(struct nk_context *ctx, APPSTATE *state,
   nk_sizer_refresh(&state->sizerbar_semihosting);
   if (result) {
     nk_layout_row_dynamic(ctx, state->sizerbar_semihosting.size, 1);
-    nk_style_push_color(ctx, &ctx->style.window.fixed_background.data.color, nk_rgba(20, 29, 38, 225));
+    nk_style_push_color(ctx, &ctx->style.window.fixed_background.data.color, COLOUR_BG0);
     if (nk_group_begin(ctx, "semihosting", 0)) {
       STRINGLIST *item;
       state->semihosting_lines = 0;
@@ -6280,9 +6283,9 @@ static void panel_serialmonitor(struct nk_context *ctx, APPSTATE *state,
   assert(tab_state != NULL);
 
   /* highlight tab text if new content arrives and the tab is closed */
-  int highlight = !(*tab_state) && sermon_countlines() != state->sermon_lines;
+  bool highlight = !(*tab_state) && sermon_countlines() != state->sermon_lines;
   if (highlight)
-    nk_style_push_color(ctx,&ctx->style.tab.text, nk_rgb(255, 255, 160));
+    nk_style_push_color(ctx,&ctx->style.tab.text, COLOUR_FG_YELLOW);
   int result = nk_tree_state_push(ctx, NK_TREE_TAB, "Serial console", tab_state);
   if (highlight)
     nk_style_pop_color(ctx);
@@ -6291,7 +6294,7 @@ static void panel_serialmonitor(struct nk_context *ctx, APPSTATE *state,
   if (result) {
     nk_layout_row_dynamic(ctx, state->sizerbar_serialmon.size, 1);
     struct nk_rect bounds = nk_layout_widget_bounds(ctx);
-    nk_style_push_color(ctx, &ctx->style.window.fixed_background.data.color, nk_rgba(20, 29, 38, 225));
+    nk_style_push_color(ctx, &ctx->style.window.fixed_background.data.color, COLOUR_BG0);
     if (nk_group_begin(ctx, "serial", 0)) {
       struct nk_user_font const *font = ctx->style.font;
       int linecount = 0;
@@ -6314,7 +6317,7 @@ static void panel_serialmonitor(struct nk_context *ctx, APPSTATE *state,
         linecount += 1;
       }
       if (!sermon_isopen()) {
-        struct nk_color clr = nk_rgb(255, 80, 100);
+        struct nk_color clr = COLOUR_FG_RED;
         nk_layout_row_dynamic(ctx, opt_fontsize, 1);
         nk_label_colored(ctx, "No port opened", NK_TEXT_LEFT, clr);
         linecount += 1;
@@ -6344,9 +6347,9 @@ static void panel_traceswo(struct nk_context *ctx, APPSTATE *state,
   assert(tab_state != NULL);
 
   /* highlight tab text if new content arrives and the tab is closed */
-  int highlight = !(*tab_state) && tracestring_count() != state->swo_lines;
+  bool highlight = !(*tab_state) && tracestring_count() != state->swo_lines;
   if (highlight)
-    nk_style_push_color(ctx,&ctx->style.tab.text, nk_rgb(255, 255, 160));
+    nk_style_push_color(ctx,&ctx->style.tab.text, COLOUR_FG_YELLOW);
   int result = nk_tree_state_push(ctx, NK_TREE_TAB, "SWO tracing", tab_state);
   if (highlight)
     nk_style_pop_color(ctx);
@@ -6441,16 +6444,12 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
         #else
           const char *filter = "Executables\0*\0All files\0*\0";
         #endif
-        const char *s = noc_file_dialog_open(NOC_FILE_DIALOG_OPEN, filter,
-                                             NULL, state->GDBpath, "Select GDB Executable",
-                                             guidriver_apphandle());
-        if (s != NULL && strlen(s) < sizearray(state->GDBpath)) {
-          strcpy(state->GDBpath, s);
-          free((void*)s);
-          assert(state->curstate == STATE_GDB_TASK); /* drop back into this case after */
-        } else {
+        int res = noc_file_dialog_open(state->GDBpath, sizearray(state->GDBpath),
+                                       NOC_FILE_DIALOG_OPEN, filter,
+                                       NULL, state->GDBpath, "Select GDB Executable",
+                                       guidriver_apphandle());
+        if (!res)
           RESETSTATE(state, STATE_QUIT);  /* selection dialog was canceled, quit the front-end */
-        }
       }
       break;
     case STATE_SCAN_BMP:
@@ -6534,7 +6533,8 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
                       &state->tpwr, &state->connect_srst, &state->autodownload,
                       state->SVDfile, sizearray(state->SVDfile), &state->swo);
         /* load target filename in GDB */
-        snprintf(state->cmdline, CMD_BUFSIZE, "-file-exec-and-symbols %s\n", enquote(temp, state->ELFfile, sizeof(temp)));
+        snprintf(state->cmdline, CMD_BUFSIZE, "-file-exec-and-symbols %s\n",
+                 enquote(temp, state->ELFfile, sizeof(temp)));
         if (task_stdin(&state->task, state->cmdline))
           console_input(state->cmdline);
         state->atprompt = nk_false;
@@ -6545,7 +6545,9 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
           FILE *fp = fopen(state->ELFfile, "rb");
           if (fp != NULL) {
             int address_size;
-            if (!dwarf_read(fp, &dwarf_linetable, &dwarf_symboltable, &dwarf_filetable, &address_size))
+            state->dwarf_loaded = dwarf_read(fp, &dwarf_linetable, &dwarf_symboltable,
+                                             &dwarf_filetable, &address_size);
+            if (!state->dwarf_loaded)
               console_add("No DWARF debug information\n", STRFLG_ERROR);
             fclose(fp);
           }
@@ -6557,8 +6559,12 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
             ctf_parse_cleanup();
             ctf_decode_cleanup();
             ctf_error_notify(CTFERR_NONE, 0, NULL);
-            if (!ctf_parse_init(state->swo.metadata) || !ctf_parse_run())
+            if (ctf_parse_init(state->swo.metadata) && ctf_parse_run()) {
+              if (state->dwarf_loaded)
+                ctf_set_symtable(&dwarf_symboltable);
+            } else {
               ctf_parse_cleanup();
+            }
           }
           source_cursorfile = source_cursorline = 0;
           source_execfile = source_execline = 0;
@@ -7283,8 +7289,10 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
             && ctf_findmetadata(state->ELFfile, state->swo.metadata, sizearray(state->swo.metadata))
             && ctf_parse_init(state->swo.metadata) && ctf_parse_run())
         {
-          const CTF_STREAM *stream;
+          if (state->dwarf_loaded)
+            ctf_set_symtable(&dwarf_symboltable);
           /* stream names overrule configured channel names */
+          const CTF_STREAM *stream;
           for (int idx = 0; (stream = stream_by_seqnr(idx)) != NULL; idx++)
             if (stream->name != NULL && strlen(stream->name) > 0)
               channel_setname(idx, stream->name);
@@ -7510,7 +7518,7 @@ int main(int argc, char *argv[])
   appstate.popup_active = POPUP_NONE;
   appstate.cmdline = malloc(CMD_BUFSIZE * sizeof(char));
   if (appstate.cmdline == NULL)
-    return 1;
+    return EXIT_FAILURE;
   /* locate the configuration file for settings */
   char txtConfigFile[_MAX_PATH];
   get_configfile(txtConfigFile, sizearray(txtConfigFile), "bmdebug.ini");
@@ -7565,7 +7573,7 @@ int main(int argc, char *argv[])
     ini_gets("Commands", key, "", appstate.console_edit, sizearray(appstate.console_edit), txtConfigFile);
     if (strlen(appstate.console_edit) == 0)
       break;
-    console_history_add(&appstate.consoleedit_root, appstate.console_edit, 1);
+    console_history_add(&appstate.consoleedit_root, appstate.console_edit, true);
   }
 
   strcpy(appstate.EntryPoint, "main");
@@ -7577,7 +7585,7 @@ int main(int argc, char *argv[])
       case '?':
       case 'h':
         usage(NULL);
-        return 0;
+        return EXIT_SUCCESS;
       case 'f':
         ptr = &argv[idx][2];
         if (*ptr == '=' || *ptr == ':')
@@ -7602,6 +7610,9 @@ int main(int argc, char *argv[])
           ptr++;
         strlcpy(appstate.GDBpath, ptr, sizearray(appstate.GDBpath));
         break;
+      case 'v':
+        version();
+        return EXIT_SUCCESS;
       default:
         usage(argv[idx]);
         return EXIT_FAILURE;
@@ -7772,14 +7783,16 @@ int main(int argc, char *argv[])
         pointer_setstyle(CURSOR_UPDOWN);
       else if (splitter_hor.hover)
         pointer_setstyle(CURSOR_LEFTRIGHT);
+#if defined __linux__
       else
         pointer_setstyle(CURSOR_NORMAL);
+#endif
     } /* window */
 
     nk_end(ctx);
 
     /* Draw */
-    guidriver_render(nk_rgb(30,30,30));
+    guidriver_render(COLOUR_BG0_S);
   }
   exitcode = task_close(&appstate.task);
 

@@ -2,7 +2,7 @@
  * Shared code for SWO Trace for the bmtrace and bmdebug utilities. It uses
  * WinUSB or libusbK on Microsoft Windows, and libusb 1.0 on Linux.
  *
- * Copyright 2019-2020 CompuPhase
+ * Copyright 2019-2022 CompuPhase
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -56,6 +56,7 @@
 
 #include "bmp-scan.h"
 #include "guidriver.h"
+#include "nuklear_style.h"
 #include "parsetsdl.h"
 #include "decodectf.h"
 #include "swotrace.h"
@@ -75,13 +76,13 @@
 
 #define CHANNEL_NAMELENGTH  30
 typedef struct tagCHANNELINFO {
-  int enabled;
+  bool enabled;
   struct nk_color color;
   char name[CHANNEL_NAMELENGTH];
 } CHANNELINFO;
 static CHANNELINFO channels[NUM_CHANNELS];
 
-void channel_set(int index, int enabled, const char *name, struct nk_color color)
+void channel_set(int index, bool enabled, const char *name, struct nk_color color)
 {
   assert(index >= 0 && index < NUM_CHANNELS);
   channels[index].enabled = enabled;
@@ -92,13 +93,13 @@ void channel_set(int index, int enabled, const char *name, struct nk_color color
     strlcpy(channels[index].name, name, sizearray(channels[index].name));
 }
 
-int channel_getenabled(int index)
+bool channel_getenabled(int index)
 {
   assert(index >= 0 && index < NUM_CHANNELS);
   return channels[index].enabled;
 }
 
-void channel_setenabled(int index, int enabled)
+void channel_setenabled(int index, bool enabled)
 {
   assert(index >= 0 && index < NUM_CHANNELS);
   channels[index].enabled = enabled;
@@ -146,7 +147,7 @@ void channel_setcolor(int index, struct nk_color color)
 
 
 #define PACKET_SIZE 64
-#define PACKET_NUM  32
+#define PACKET_NUM  128
 typedef struct tagPACKET {
   unsigned char data[PACKET_SIZE];
   size_t length;
@@ -154,7 +155,7 @@ typedef struct tagPACKET {
 } PACKET;
 static PACKET trace_queue[PACKET_NUM];
 static int tracequeue_head = 0, tracequeue_tail = 0;
-
+static int tracequeue_overflow = 0;
 
 typedef struct tagTRACESTRING {
   struct tagTRACESTRING *next;
@@ -186,7 +187,7 @@ static unsigned itm_packet_errors = 0;
 #define ITM_CHANNEL(b)    (unsigned)(((b) >> 3) & 0x1f) /* get channel number from ITM packet header */
 #define ITM_LENGTH(b)     (unsigned)(((b) & 0x07) == 3 ? 4 : (b) & 0x07)
 
-void tracestring_add(unsigned channel, const unsigned char *buffer, size_t length, double timestamp)
+static void tracestring_add(unsigned channel, const unsigned char *buffer, size_t length, double timestamp)
 {
   assert(channel < NUM_CHANNELS);
   assert(buffer != NULL);
@@ -388,8 +389,12 @@ int tracestring_process(bool enabled)
       }
 
       while (pktlen > 0) {
-        if (!ITM_VALIDHDR(*pktdata)) {
-          //??? this may be valid profile data
+        if (*pktdata == 0x17) {
+          /* profile packet (PC address) */
+          pktdata += 5;
+          pktlen = (pktlen > 5) ? pktlen - 5 : 0;
+          continue;
+        } else if (!ITM_VALIDHDR(*pktdata)) {
           ctf_decode_reset();
           itm_packet_errors += 1;
           goto skip_packet;     /* not a valid ITM packet, ignore it */
@@ -432,6 +437,8 @@ int tracestring_process(bool enabled)
     tracequeue_head = (tracequeue_head + 1) % PACKET_NUM;
   }
 
+  if (!enabled)
+    tracequeue_overflow = 0;  /* ignore overflow events if not running/decoding */
   return count;
 }
 
@@ -550,11 +557,21 @@ short trace_getdatasize(void)
   return itm_datasize;
 }
 
-int trace_getpacketerrors(void)
+int trace_getpacketerrors(bool reset)
 {
-  return itm_packet_errors;
+  int result = itm_packet_errors;
+  if (reset)
+    itm_packet_errors = 0;
+  return result;
 }
 
+int trace_overflowerrors(bool reset)
+{
+  int result = tracequeue_overflow;
+  if (reset)
+    tracequeue_overflow = 0;
+  return result;
+}
 
 static void addsample(uint32_t pc, unsigned *sample_map, uint32_t code_base, uint32_t code_top)
 {
@@ -900,13 +917,17 @@ static DWORD __stdcall trace_read(LPVOID arg)
   if (TraceSocket != INVALID_SOCKET) {
     for ( ;; ) {
       int result = recv(TraceSocket, (char*)buffer, sizearray(buffer), 0);
-      int next = (tracequeue_tail + 1) % PACKET_NUM;
-      if (result > 0 && next != tracequeue_head) {
-        memcpy(trace_queue[tracequeue_tail].data, buffer, result);
-        trace_queue[tracequeue_tail].length = result;
-        trace_queue[tracequeue_tail].timestamp = get_timestamp();
-        tracequeue_tail = next;
-        PostMessage((HWND)guidriver_apphandle(), WM_USER, 0, 0L); /* just a flag to wake up the GUI */
+      if (result > 0) {
+        int next = (tracequeue_tail + 1) % PACKET_NUM;
+        if (next != tracequeue_head) {
+          memcpy(trace_queue[tracequeue_tail].data, buffer, result);
+          trace_queue[tracequeue_tail].length = result;
+          trace_queue[tracequeue_tail].timestamp = get_timestamp();
+          tracequeue_tail = next;
+          PostMessage((HWND)guidriver_apphandle(), WM_USER, 0, 0L); /* just a flag to wake up the GUI */
+        } else {
+          tracequeue_overflow += 1; /* notify packet queue overflow */
+        }
       } else if (result < 0) {
         break;
       }
@@ -916,13 +937,17 @@ static DWORD __stdcall trace_read(LPVOID arg)
       uint32_t numread = 0;
       if (_WinUsb_ReadPipe(hUSBiface, usbTraceEP, buffer, sizearray(buffer), &numread, NULL)) {
         /* add the packet to the queue */
-        int next = (tracequeue_tail + 1) % PACKET_NUM;
-        if (numread > 0 && next != tracequeue_head) {
-          memcpy(trace_queue[tracequeue_tail].data, buffer, numread);
-          trace_queue[tracequeue_tail].length = numread;
-          trace_queue[tracequeue_tail].timestamp = get_timestamp();
-          tracequeue_tail = next;
-          PostMessage((HWND)guidriver_apphandle(), WM_USER, 0, 0L); /* just a flag to wake up the GUI */
+        if (numread > 0) {
+          int next = (tracequeue_tail + 1) % PACKET_NUM;
+          if (next != tracequeue_head) {
+            memcpy(trace_queue[tracequeue_tail].data, buffer, numread);
+            trace_queue[tracequeue_tail].length = numread;
+            trace_queue[tracequeue_tail].timestamp = get_timestamp();
+            tracequeue_tail = next;
+            PostMessage((HWND)guidriver_apphandle(), WM_USER, 0, 0L); /* just a flag to wake up the GUI */
+          } else {
+            tracequeue_overflow += 1; /* notify packet queue overflow */
+          }
         }
       } else {
         Sleep(50);
@@ -933,13 +958,17 @@ static DWORD __stdcall trace_read(LPVOID arg)
       uint32_t numread = 0;
       if (_UsbK_ReadPipe(hUSBiface, usbTraceEP, buffer, sizearray(buffer), &numread, NULL)) {
         /* add the packet to the queue */
-        int next = (tracequeue_tail + 1) % PACKET_NUM;
-        if (numread > 0 && next != tracequeue_head) {
-          memcpy(trace_queue[tracequeue_tail].data, buffer, numread);
-          trace_queue[tracequeue_tail].length = numread;
-          trace_queue[tracequeue_tail].timestamp = get_timestamp();
-          tracequeue_tail = next;
-          PostMessage((HWND)guidriver_apphandle(), WM_USER, 0, 0L); /* just a flag to wake up the GUI */
+        if (numread > 0) {
+          int next = (tracequeue_tail + 1) % PACKET_NUM;
+          if (next != tracequeue_head) {
+            memcpy(trace_queue[tracequeue_tail].data, buffer, numread);
+            trace_queue[tracequeue_tail].length = numread;
+            trace_queue[tracequeue_tail].timestamp = get_timestamp();
+            tracequeue_tail = next;
+            PostMessage((HWND)guidriver_apphandle(), WM_USER, 0, 0L); /* just a flag to wake up the GUI */
+          } else {
+            tracequeue_overflow += 1; /* notify packet queue overflow */
+          }
         }
       } else {
         Sleep(50);
@@ -958,6 +987,7 @@ int trace_init(unsigned short endpoint, const char *ipaddress)
 {
   loc_errno = 0;
   win_errno = 0;
+  tracequeue_overflow = 0;
   if (hThread != NULL && hUSBiface != INVALID_HANDLE_VALUE)
     return TRACESTAT_OK;            /* double initialization */
 
@@ -999,7 +1029,7 @@ int trace_init(unsigned short endpoint, const char *ipaddress)
     win_errno = GetLastError();
     return TRACESTAT_NO_THREAD;
   }
-  SetThreadPriority(hThread, THREAD_PRIORITY_ABOVE_NORMAL);
+  SetThreadPriority(hThread, THREAD_PRIORITY_HIGHEST);
 
   return TRACESTAT_OK;
 }
@@ -1059,7 +1089,7 @@ double get_timestamp(void)
 {
   struct timeval tv;
   gettimeofday(&tv,NULL);
-  return 1000000.0 * tv.tv_sec + tv.tv_usec;
+  return tv.tv_sec + tv.tv_usec / 1000000.0;
 }
 
 static void *trace_read(void *arg)
@@ -1071,12 +1101,16 @@ static void *trace_read(void *arg)
   while (!force_exit && hThread != 0 && hUSBiface != NULL) {
     if (libusb_bulk_transfer(hUSBiface, usbTraceEP, buffer, sizeof(buffer), &numread, 0) == 0) {
       /* add the packet to the queue */
-      int next = (tracequeue_tail + 1) % PACKET_NUM;
-      if (numread > 0 && next != tracequeue_head) {
-        memcpy(trace_queue[tracequeue_tail].data, buffer, numread);
-        trace_queue[tracequeue_tail].length = numread;
-        trace_queue[tracequeue_tail].timestamp = get_timestamp();
-        tracequeue_tail = next;
+      if (numread > 0) {
+        int next = (tracequeue_tail + 1) % PACKET_NUM;
+        if (next != tracequeue_head) {
+          memcpy(trace_queue[tracequeue_tail].data, buffer, numread);
+          trace_queue[tracequeue_tail].length = numread;
+          trace_queue[tracequeue_tail].timestamp = get_timestamp();
+          tracequeue_tail = next;
+        } else {
+          tracequeue_overflow += 1; /* notify packet queue overflow */
+        }
       }
     }
   }
@@ -1138,6 +1172,7 @@ int trace_init(unsigned short endpoint, const char *ipaddress)
 {
   int result;
 
+  tracequeue_overflow = 0;
   usbTraceEP = endpoint;
 
   if (hThread != 0 && hUSBiface != NULL)
@@ -1258,7 +1293,7 @@ float tracelog_labelwidth(float rowheight)
   float labelwidth = 0;
   for (idx = 0; idx < NUM_CHANNELS; idx++) {
     int len = strlen(channels[idx].name);
-    if (channels[idx].enabled && labelwidth < len)
+    if (labelwidth < len)
       labelwidth = len;
   }
   return labelwidth * (rowheight / 2);
@@ -1290,7 +1325,7 @@ void tracelog_widget(struct nk_context *ctx, const char *id, float rowheight, in
   tstampwidth = (int)((tstampwidth * rowheight) / 2) + 10;
 
   /* (near) black background on group */
-  nk_style_push_color(ctx, &stwin->fixed_background.data.color, nk_rgba(20, 29, 38, 225));
+  nk_style_push_color(ctx, &stwin->fixed_background.data.color, COLOUR_BG0);
   if (nk_group_begin(ctx, id, widget_flags)) {
     static int recent_markline = -1;
     static int scrollpos = 0;
@@ -1337,8 +1372,8 @@ void tracelog_widget(struct nk_context *ctx, const char *id, float rowheight, in
       if (lines == markline) {
         stbtn.normal.data.color = stbtn.hover.data.color
           = stbtn.active.data.color = stbtn.text_background
-          = nk_rgb(0, 0, 0);
-        stbtn.text_normal = stbtn.text_active = stbtn.text_hover = nk_rgb(255, 255, 128);
+          = COLOUR_BG0;
+        stbtn.text_normal = stbtn.text_active = stbtn.text_hover = COLOUR_FG_YELLOW;
         nk_button_symbol_styled(ctx, &stbtn, NK_SYMBOL_TRIANGLE_RIGHT);
       } else {
         nk_spacing(ctx, 1);
@@ -1350,21 +1385,21 @@ void tracelog_widget(struct nk_context *ctx, const char *id, float rowheight, in
         = channels[item->channel].color;
       struct nk_color clrtxt;
       if (channels[item->channel].color.r + 2 * channels[item->channel].color.g + channels[item->channel].color.b < 700)
-        clrtxt = nk_rgb(255,255,255);
+        clrtxt = COLOUR_HIGHLIGHT;
       else
-        clrtxt = nk_rgb(20,29,38);
+        clrtxt = COLOUR_BG0;
       stbtn.text_normal = stbtn.text_active = stbtn.text_hover = clrtxt;
       nk_layout_row_push(ctx, labelwidth);
       nk_button_label_styled(ctx, &stbtn, channels[item->channel].name);
       /* timestamp (relative time since previous trace) */
       nk_layout_row_push(ctx, tstampwidth);
-      nk_label_colored(ctx, item->timefmt, NK_TEXT_RIGHT, nk_rgb(255, 255, 128));
+      nk_label_colored(ctx, item->timefmt, NK_TEXT_RIGHT, COLOUR_FG_YELLOW);
       /* calculate size of the text */
       assert(font != NULL && font->width != NULL);
       int textwidth = (int)font->width(font->userdata, font->height, item->text, item->length) + 10;
       nk_layout_row_push(ctx, textwidth);
       if (lines == markline)
-        nk_text_colored(ctx, item->text, item->length, NK_TEXT_LEFT, nk_rgb(255, 255, 128));
+        nk_text_colored(ctx, item->text, item->length, NK_TEXT_LEFT, COLOUR_FG_YELLOW);
       else
         nk_text(ctx, item->text, item->length, NK_TEXT_LEFT);
       nk_layout_row_end(ctx);
@@ -1374,11 +1409,11 @@ void tracelog_widget(struct nk_context *ctx, const char *id, float rowheight, in
       for (item = statusmessage_root.next; item != NULL; item = item->next) {
         struct nk_color clr;
         if (item->flags < 0)
-          clr = nk_rgb(255, 80, 100);
+          clr = COLOUR_FG_RED;
         else if (item->channel == TRACESTATMSG_CTF)
-          clr = nk_rgb(128, 224, 128);
+          clr = COLOUR_FG_AQUA;
         else
-          clr = nk_rgb(100, 255, 100);
+          clr = COLOUR_FG_YELLOW;
         nk_layout_row_dynamic(ctx, rowheight, 1);
         nk_label_colored(ctx, item->text, NK_TEXT_LEFT, clr);
         lines++;
@@ -1550,8 +1585,6 @@ double timeline_widget(struct nk_context *ctx, const char *id, float rowheight, 
 
   /* preset common parts of the new button style */
   stbtn = ctx->style.button;
-  // stbtn.border = 0;
-  // stbtn.rounding = 0;
   stbtn.padding.x = stbtn.padding.y = 0;
 
   /* check the length of the longest channel name */
@@ -1560,7 +1593,7 @@ double timeline_widget(struct nk_context *ctx, const char *id, float rowheight, 
 
   /* no spacing & black background on group */
   nk_style_push_vec2(ctx, &ctx->style.window.spacing, nk_vec2(0, 0));
-  nk_style_push_color(ctx, &ctx->style.window.fixed_background.data.color, nk_rgba(20, 29, 38, 225));
+  nk_style_push_color(ctx, &ctx->style.window.fixed_background.data.color, COLOUR_BG0);
   if (nk_group_begin(ctx, id, widget_flags | NK_WINDOW_NO_SCROLLBAR)) {
     static float timeline_maxpos_prev = 0.0f;
     struct nk_window *win = ctx->current;
@@ -1594,7 +1627,7 @@ double timeline_widget(struct nk_context *ctx, const char *id, float rowheight, 
     nk_layout_row_begin(ctx, NK_STATIC, rowheight + VERPADDING, 3);
     nk_layout_row_push(ctx, rcwidget.w - 2 * (1.5f * rowheight));
     struct nk_rect rc = nk_layout_widget_bounds(ctx);
-    nk_fill_rect(&win->buffer, rc, 0.0f, nk_rgb(35, 52, 71));
+    nk_fill_rect(&win->buffer, rc, 0.0f, COLOUR_BG0_S);
     x2 = rc.x + rc.w;
     int submark_iter = 0;
     long mark_stamp = 0;
@@ -1604,27 +1637,27 @@ double timeline_widget(struct nk_context *ctx, const char *id, float rowheight, 
         struct nk_color clr;
         if (mark_stamp % mark_inv_scale == 0) {
           sprintf(valstr, "%ld s", mark_stamp / mark_inv_scale);
-          clr = nk_rgb(255, 255, 220);
+          clr = COLOUR_FG_YELLOW;
         } else {
           sprintf(valstr, "+%ld %s", mark_stamp, unit);
-          clr = nk_rgb(144, 144, 128);
+          clr = COLOUR_TEXT;
         }
         nk_stroke_line(&win->buffer, x1, rc.y, x1, rc.y + rowheight - 2, 1, clr);
         rc.x = x1 + 2;
         rc.w = x2 - rc.x;
-        nk_draw_text(&win->buffer, rc, valstr, strlen(valstr), font, nk_rgb(35, 52, 71), clr);
+        nk_draw_text(&win->buffer, rc, valstr, strlen(valstr), font, COLOUR_BG0, clr);
         mark_stamp += mark_deltatime;
       } else {
-        nk_stroke_line(&win->buffer, x1, rc.y, x1, rc.y + rowheight / 2 - 2, 1, nk_rgb(144, 144, 128));
+        nk_stroke_line(&win->buffer, x1, rc.y, x1, rc.y + rowheight / 2 - 2, 1, COLOUR_TEXT);
       }
       if (++submark_iter == submark_count)
         submark_iter = 0;
     }
     rc = nk_layout_widget_bounds(ctx);
-    nk_stroke_line(&win->buffer, rc.x, rc.y + rc.h, rc.x + rc.w - labelwidth - HORPADDING, rc.y + rc.h, 1, nk_rgb(80, 80, 80));
+    nk_stroke_line(&win->buffer, rc.x, rc.y + rc.h, rc.x + rc.w - HORPADDING, rc.y + rc.h, 1, COLOUR_FG_GRAY);
     rc.w = labelwidth;
     rc.h -= 1;
-    nk_fill_rect(&win->buffer, rc, 0.0f, nk_rgb(20, 29, 38));
+    nk_fill_rect(&win->buffer, rc, 0.0f, COLOUR_BG0);
     nk_spacing(ctx, 1);
     nk_layout_row_push(ctx, 1.5f * rowheight);
     if (nk_button_symbol_styled(ctx, &stbtn, NK_SYMBOL_PLUS)) {
@@ -1670,7 +1703,7 @@ double timeline_widget(struct nk_context *ctx, const char *id, float rowheight, 
         float textwidth;
         int len;
         if (!channels[chan].enabled)
-          continue; /* only draw enable channels */
+          continue; /* only draw enabled channels */
         nk_layout_row_dynamic(ctx, rowheight + VERPADDING, 1);
         rc = nk_layout_widget_bounds(ctx);
         rc.x += HORPADDING;
@@ -1679,9 +1712,9 @@ double timeline_widget(struct nk_context *ctx, const char *id, float rowheight, 
         rc.h -= 1;
         nk_fill_rect(&win->buffer, rc, 0.0f, channels[chan].color);
         if (channels[chan].color.r + 2 * channels[chan].color.g + channels[chan].color.b < 700)
-          clrtxt = nk_rgb(255,255,255);
+          clrtxt = COLOUR_HIGHLIGHT;
         else
-          clrtxt = nk_rgb(20,29,38);
+          clrtxt = COLOUR_BG0;
         /* center the text in the rect */
         len = strlen(channels[chan].name);
         textwidth = font->width(font->userdata, font->height, channels[chan].name, len);
@@ -1704,13 +1737,13 @@ double timeline_widget(struct nk_context *ctx, const char *id, float rowheight, 
         rc = nk_layout_widget_bounds(ctx);
         rc.y -= yscroll;
         if (row & 1)
-          nk_fill_rect(&win->buffer, rc, 0.0f, nk_rgb(30, 40, 50));
+          nk_fill_rect(&win->buffer, rc, 0.0f, COLOUR_BG0_S);
         row++;
         /* draw marks for each active channel */
         for (idx = 0; idx < (int)timeline[chan].length; idx++) {
           float x = timeline[chan].marks[idx].pos + labelwidth + 2 * HORPADDING - xscroll;
           float y = 0.75f * rowheight * (1 - (float)timeline[chan].marks[idx].count / (float)timeline_maxcount);
-          nk_stroke_line(&win->buffer, x, rc.y + y, x, rc.y + rowheight, 1, nk_rgb(144, 144, 128));
+          nk_stroke_line(&win->buffer, x, rc.y + y, x, rc.y + rowheight, 1, COLOUR_TEXT);
         }
         nk_spacing(ctx, 1);
         nk_layout_row_end(ctx);

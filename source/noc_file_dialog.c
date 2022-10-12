@@ -21,22 +21,22 @@
  * IN THE SOFTWARE.
  */
 
+#include <assert.h>
 #include <stdlib.h>
 #include <string.h>
 #include "noc_file_dialog.h"
-
-static char *g_noc_file_dialog_ret = NULL;
 
 #ifdef NOC_FILE_DIALOG_GTK
 
 #include <gtk/gtk.h>
 
-const char *noc_file_dialog_open(int flags,
-                                 const char *filters,
-                                 const char *default_path,
-                                 const char *default_name,
-                                 const char *caption,
-                                 const void *parent)
+int noc_file_dialog_open(char *path, size_t pathsize,   /* output */
+                         int flags,
+                         const char *filters,
+                         const char *default_path,
+                         const char *default_name,
+                         const char *caption,
+                         const void *parent)
 {
     GtkWidget *dialog;
     GtkFileFilter *filter;
@@ -80,14 +80,21 @@ const char *noc_file_dialog_open(int flags,
 
     res = gtk_dialog_run(GTK_DIALOG(dialog));
 
-    free(g_noc_file_dialog_ret);
-    g_noc_file_dialog_ret = NULL;
-
-    if (res == GTK_RESPONSE_ACCEPT)
-        g_noc_file_dialog_ret = gtk_file_chooser_get_filename(chooser);
+    assert(path != NULL && pathsize > 0);
+    if (res == GTK_RESPONSE_ACCEPT) {
+        gchar *ptr = gtk_file_chooser_get_filename(chooser);
+        if (ptr != NULL) {
+            strncpy(path, ptr, pathsize);
+            path[pathsize - 1] = '\0';
+            g_free(ptr);
+        } else {
+            res = GTK_RESPONSE_CANCEL;
+        }
+    }
     gtk_widget_destroy(dialog);
-    while (gtk_events_pending()) gtk_main_iteration();
-    return g_noc_file_dialog_ret;
+    while (gtk_events_pending())
+        gtk_main_iteration();
+    return (res == GTK_RESPONSE_ACCEPT);
 }
 
 #endif
@@ -101,12 +108,13 @@ const char *noc_file_dialog_open(int flags,
     #define strdup(s)       _strdup(s)
 #endif
 
-const char *noc_file_dialog_open(int flags,
-                                 const char *filters,
-                                 const char *default_path,
-                                 const char *default_name,
-                                 const char *caption,
-                                 const void *parent)
+int noc_file_dialog_open(char *path, size_t pathsize,   /* output */
+                         int flags,
+                         const char *filters,
+                         const char *default_path,
+                         const char *default_name,
+                         const char *caption,
+                         const void *parent)
 {
     OPENFILENAME ofn;       // common dialog box structure
     char szFile[260] = "";  // buffer for file name
@@ -134,9 +142,13 @@ const char *noc_file_dialog_open(int flags,
     else
         ret = GetOpenFileName(&ofn);
 
-    free(g_noc_file_dialog_ret);
-    g_noc_file_dialog_ret = ret ? strdup(szFile) : NULL;
-    return g_noc_file_dialog_ret;
+    assert(path != NULL && pathsize > 0);
+    if (ret) {
+        strncpy(path, szFile, pathsize);
+        path[pathsize - 1] = '\0';
+    }
+
+    return ret;
 }
 
 #endif
@@ -145,12 +157,13 @@ const char *noc_file_dialog_open(int flags,
 
 #include <AppKit/AppKit.h>
 
-const char *noc_file_dialog_open(int flags,
-                                 const char *filters,
-                                 const char *default_path,
-                                 const char *default_name,
-                                 const char *caption,
-                                 const void *parent)
+int noc_file_dialog_open(char *path, size_t pathsize,   /* output */
+                         int flags,
+                         const char *filters,
+                         const char *default_path,
+                         const char *default_name,
+                         const char *caption,
+                         const void *parent)
 {
     NSURL *url;
     const char *utf8_path;
@@ -158,6 +171,7 @@ const char *noc_file_dialog_open(int flags,
     NSOpenPanel *open_panel;
     NSMutableArray *types_array;
     NSURL *default_url;
+    int result = 0;
     // XXX: I don't know about memory management with cococa, need to check
     // if I leak memory here.
     NSAutoreleasePool *pool = [[NSAutoreleasePool alloc] init];
@@ -192,16 +206,18 @@ const char *noc_file_dialog_open(int flags,
         [panel setAllowedFileTypes:types_array];
     }
 
-    free(g_noc_file_dialog_ret);
-    g_noc_file_dialog_ret = NULL;
+    assert(path != NULL && pathsize > 0);
+    path[0] = '\0';
     if ( [panel runModal] == NSModalResponseOK ) {
         url = [panel URL];
         utf8_path = [[url path] UTF8String];
-        g_noc_file_dialog_ret = strdup(utf8_path);
+        strncpy(path, utf8_path, pathsize);
+        path[pathsize - 1] = '\0';
+        result = 1;
     }
 
     [pool release];
-    return g_noc_file_dialog_ret;
+    return result;
 }
 #endif
 

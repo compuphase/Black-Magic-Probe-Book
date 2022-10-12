@@ -24,6 +24,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "elf.h"
+#include "svnrev.h"
 
 
 #define FLAG_HEADER   0x01
@@ -37,7 +38,8 @@ static void usage(int flags)
            "Usage: elf-postlink [mcu] [elf-file]\n\n");
   if (flags & FLAG_MCU_LIST)
     printf("MCU types:\n"
-           "\tlpc8xx  - NXP LPC800, LPC810, LPC820, LPC830 and LPC840 Cortex-M0/M0+ series\n"
+           "\tlpc8xx  - NXP LPC800, LPC810, LPC820, LPC830 and LPC840 Cortex-M0/M0+\n"
+           "\t          series\n"
            "\tlpc11xx - NXP LPC1100, LPC11C00 and LPC11U00 Cortex-M0+ series\n"
            "\tlpc15xx - NXP LPC1500 Cortex-M3 series\n"
            "\tlpc17xx - NXP LPC1700 Cortex-M3 series\n"
@@ -48,15 +50,25 @@ static void usage(int flags)
            "\tlpc43xx - NXP LPC4300 Cortex-M4/M0 series\n");
 }
 
+static void version(void)
+{
+  printf("elf-postlink version 1.1.%d.\n", SVNREV_NUM);
+  printf("Copyright 2019-2022 CompuPhase\nLicensed under the Apache License version 2.0\n");
+}
+
 int main(int argc, char *argv[])
 {
   uint32_t chksum;
   int result, idx_file, idx_type;
   FILE *fp;
 
+  if (argc == 2 && strcmp(argv[1], "-v") == 0) {
+    version();
+    return EXIT_SUCCESS;
+  }
   if (argc != 3) {
     usage(FLAG_ALLINFO);
-    return 1;
+    return EXIT_SUCCESS;
   }
 
   idx_type = 1; /* assume correct order of command-line options */
@@ -95,6 +107,6 @@ int main(int argc, char *argv[])
     break;
   }
 
-  return 0;
+  return EXIT_SUCCESS;
 }
 

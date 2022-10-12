@@ -19,6 +19,7 @@
 
 #include <windows.h>
 #include <winver.h>
+#include "svnrev.h"
 
 AppIcon ICON "res/icon_debug.ico"
 
@@ -28,9 +29,9 @@ AppIcon ICON "res/icon_debug.ico"
  *  for details on version information and the VERSIONINFO structure.
  */
 #define VERSION              1
-#define REVISION             0
-#define BUILD                0
-#define VERSIONSTR           "1.0.0\0"
+#define REVISION             1
+#define BUILD                SVNREV_NUM
+#define VERSIONSTR           "1.1.*\0"
 #define VERSIONNAME          "bmdebug.exe\0"
 #define VERSIONDESCRIPTION   "GDB front-end\0"
 #define VERSIONCOMPANYNAME   "CompuPhase\0"

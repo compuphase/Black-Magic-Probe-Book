@@ -280,7 +280,7 @@ static int lookup_symbol(uint32_t address, char *symname, size_t maxlength)
 {
   if (symboltable == NULL)
     return 0;
-  const DWARF_SYMBOLLIST *sym = dwarf_sym_from_address(symboltable, address, 1);
+  const DWARF_SYMBOLLIST *sym = dwarf_sym_from_address(symboltable, address & ~1, 1);
   if (sym == NULL)
     return 0;
   assert(sym->name != NULL);
@@ -381,7 +381,7 @@ static void format_field(const char *fieldname, const CTF_TYPE *type, const unsi
   case CLASS_INTEGER: {
     char txt[128];
     uint8_t base = type->base;
-    if (base < 2 || base > 16)
+    if ((base < 2 || base > 16) && base != CTF_BASE_ADDR)
       base = 10;
     if (type->size > 32) {
       uint64_t v = 0;
@@ -746,7 +746,8 @@ restart:
       msgbuffer_append(", ", 2);  /* next field */
     format_field(field->name, &field->type, cache);
     cache_reset();
-    /* move to the next field */
+    /* move to the next field (stay in the current state unless this was the
+       last parameter) */
     field = field->next;
     if (field == NULL) {
       msgbuffer_append("", 1);  /* force zero-terminate msgbuffer */

@@ -27,6 +27,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "svnrev.h"
 
 #if defined __linux__
   #include <bsd/string.h>
@@ -480,8 +481,8 @@ void generate_funcstubs(FILE *fp, unsigned flags, const char *trace_func,
 
 static void usage(int status)
 {
-  printf("tragegen - generate C source & header files from TSDL specifications,"
-         "           for tracing in the Common Trace Format.\n\n"
+  printf("\ntragegen - generate C source & header files from TSDL specifications, for"
+         "           tracing in the Common Trace Format.\n\n"
          "Usage: tracegen [options] inputfile\n\n"
          "Options:\n"
          "-c99      Generate C99-compatible code (default is C90).\n"
@@ -493,7 +494,8 @@ static void usage(int status)
          "-no-instr Add a \"no_instrument_function\" attribute to all generated functions.\n"
          "-o=name   Base output filename; a .c and .h suffix is added to this name.\n"
          "-s        SWO tracing: use channels for stream ids.\n"
-         "-t        Force basic C types on arguments, if available.\n");
+         "-t        Force basic C types on arguments, if available.\n"
+         "-v        Show version information.\n");
   exit(status);
 }
 
@@ -503,6 +505,13 @@ static void unknown_option(const char *option)
   exit(EXIT_FAILURE);
 }
 
+static void version(int status)
+{
+  printf("tracegen version 1.1.%d.\n", SVNREV_NUM);
+  printf("Copyright 2019-2022 CompuPhase\nLicensed under the Apache License version 2.0\n");
+  exit(status);
+}
+
 int main(int argc, char *argv[])
 {
   PATHLIST includepaths = { NULL, NULL }, *path;
@@ -510,7 +519,6 @@ int main(int argc, char *argv[])
   char trace_func[64], timestamp_func[64];
   char *ptr;
   unsigned opt_flags;
-  int idx;
 
   if (argc <= 1)
     usage(EXIT_FAILURE);
@@ -521,7 +529,7 @@ int main(int argc, char *argv[])
   strcpy(trace_func, "trace_xmit");
   strcpy(timestamp_func, "trace_timestamp");
   opt_flags = 0;
-  for (idx = 1; idx < argc; idx++) {
+  for (int idx = 1; idx < argc; idx++) {
     if (IS_OPTION(argv[idx])) {
       switch (argv[idx][1]) {
       case '?':
@@ -589,6 +597,9 @@ int main(int argc, char *argv[])
         break;
       case 't':
         opt_flags |= FLAG_BASICTYPES;
+        break;
+      case 'v':
+        version(EXIT_SUCCESS);
         break;
       default:
         unknown_option(argv[idx]);

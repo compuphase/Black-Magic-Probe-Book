@@ -49,6 +49,7 @@
 #include "bmp-script.h"
 #include "bmp-scan.h"
 #include "bmp-support.h"
+#include "demangle.h"
 #include "dwarf.h"
 #include "elf.h"
 #include "gdb-rsp.h"
@@ -62,6 +63,7 @@
 #include "nuklear_tooltip.h"
 #include "swotrace.h"
 #include "tcpip.h"
+#include "svnrev.h"
 
 #if defined __linux__ || defined __unix__
   #include "res/icon_profile_64.h"
@@ -131,7 +133,22 @@ static void usage(const char *invalid_option)
          "Options:\n"
          "-f=value  Font size to use (value must be 8 or larger).\n"
          "-h        This help.\n\n"
-         "filename  Path to the ELF file to profile (must contain debug info).\n");
+         "filename  Path to the ELF file to profile (must contain debug info).\n"
+         "-v        Show version information.\n");
+}
+
+static void version(void)
+{
+  #if defined _WIN32  /* fix console output on Windows */
+    if (AttachConsole(ATTACH_PARENT_PROCESS)) {
+      freopen("CONOUT$", "wb", stdout);
+      freopen("CONOUT$", "wb", stderr);
+    }
+    printf("\n");
+  #endif
+
+  printf("BMProfile version 1.1.%d.\n", SVNREV_NUM);
+  printf("Copyright 2022 CompuPhase\nLicensed under the Apache License version 2.0\n");
 }
 
 enum {
@@ -193,6 +210,7 @@ typedef struct tagAPPSTATE {
   bool connected;               /**< connected to BMP? */
   bool attached;                /**< attached to target? */
   bool dwarf_loaded;            /**< whether DWARF information is valid */
+  bool init_done;               /**< whether target & BMP have been initialized (assuming init_target is set) */
   bool firstrun;                /**< is this the first run after a connect? */
   int view;                     /**< histogram or function list */
   char refreshrate_str[16];     /**< edit buffer for refresh intreval */
@@ -239,11 +257,12 @@ static bool save_settings(const char *filename, const APPSTATE *state,
                           const enum nk_collapse_states tab_states[],
                           const SPLITTERBAR *splitter_hor)
 {
+  assert(filename != NULL);
   assert(state != NULL);
   assert(tab_states != NULL);
   assert(splitter_hor != NULL);
 
-  if (filename == NULL || strlen(filename) == 0)
+  if (strlen(filename) == 0)
     return false;
 
   ini_putl("Settings", "init-target", state->init_target, filename);
@@ -266,12 +285,10 @@ static bool load_settings(const char *filename, APPSTATE *state,
                           enum nk_collapse_states tab_states[],
                           SPLITTERBAR *splitter_hor)
 {
+  assert(filename != NULL);
   assert(state != NULL);
   assert(tab_states != NULL);
   assert(splitter_hor != NULL);
-
-  if (filename == NULL || strlen(filename) == 0 || access(filename, 0) != 0)
-    return false;
 
   state->init_target = (int)ini_getl("Settings", "init-target", 1, filename);
   state->init_bmp = (int)ini_getl("Settings", "init-bmp", 1, filename);
@@ -355,12 +372,12 @@ static void profile_graph(struct nk_context *ctx, const char *id, APPSTATE *stat
   struct nk_user_font const *font = ctx->style.font;
 
   struct nk_style_window *stwin = &ctx->style.window;
-  nk_style_push_color(ctx, &stwin->fixed_background.data.color, nk_rgba(20, 29, 38, 225));
+  nk_style_push_color(ctx, &stwin->fixed_background.data.color, COLOUR_BG0);
   if (nk_group_begin(ctx, id, widget_flags)) {
     if (tracelog_getstatusmsg(0) != NULL) {
       const char *text;
       for (int idx = 0; (text = tracelog_getstatusmsg(idx)) != NULL; idx++) {
-        struct nk_color clr = nk_rgb(255, 255, 128);
+        struct nk_color clr = COLOUR_FG_YELLOW;
         nk_layout_row_dynamic(ctx, rowheight, 1);
         nk_label_colored(ctx, text, NK_TEXT_LEFT, clr);
       }
@@ -378,7 +395,7 @@ static void profile_graph(struct nk_context *ctx, const char *id, APPSTATE *stat
         struct nk_rect rc = nk_widget_bounds(ctx);
         assert(state->functionlist[fidx].ratio >= 0.0 && state->functionlist[fidx].ratio <= 1.0);
         rc.w *= state->functionlist[fidx].ratio;
-        nk_fill_rect(&win->buffer, rc, 0.0f, nk_rgb(127, 23, 45));
+        nk_fill_rect(&win->buffer, rc, 0.0f, COLOUR_BG_YELLOW);
         nk_label(ctx, state->functionlist[fidx].percentage, NK_TEXT_RIGHT);
         /* print function name (get the width for the text first) */
         const char *name = state->functionlist[fidx].name;
@@ -402,7 +419,7 @@ static void profile_graph(struct nk_context *ctx, const char *id, APPSTATE *stat
         nk_layout_row_push(ctx, graphwidth);
         struct nk_rect rc = nk_widget_bounds(ctx);
         rc.w *= state->sourcelines[idx].ratio;
-        nk_fill_rect(&win->buffer, rc, 0.0f, nk_rgb(127, 23, 45));
+        nk_fill_rect(&win->buffer, rc, 0.0f, COLOUR_BG_YELLOW);
         nk_label(ctx, state->sourcelines[idx].percentage, NK_TEXT_RIGHT);
         /* print source line (get the width for the text first) */
         const char *text = state->sourcelines[idx].text;
@@ -857,7 +874,10 @@ static bool collect_functions(APPSTATE *state)
           unsigned count = state->numfunctions - (pos + 1);
           memmove(&state->functionlist[pos + 1], &state->functionlist[pos], count * sizeof(FUNCTIONINFO));
         }
-        state->functionlist[pos].name = strdup(elf_list[elf_idx].name);
+        char plain[256];
+        if (!demangle(plain, sizearray(plain), elf_list[elf_idx].name))
+          strlcpy(plain, elf_list[elf_idx].name, sizearray(plain));
+        state->functionlist[pos].name = strdup(plain);
         state->functionlist[pos].addr_low = elf_list[elf_idx].address;
         state->functionlist[pos].addr_high = elf_list[elf_idx].address + elf_list[elf_idx].size;
         state->functionlist[pos].line_low = 0;
@@ -1000,7 +1020,7 @@ static void panel_options(struct nk_context *ctx, APPSTATE *state,
     nk_label(ctx, "ELF file", NK_TEXT_ALIGN_LEFT | NK_TEXT_ALIGN_MIDDLE);
     nk_layout_row_push(ctx, VALUE_WIDTH - BROWSEBTN_WIDTH - 5);
     if (!state->dwarf_loaded)
-      nk_style_push_color(ctx,&ctx->style.edit.text_normal, nk_rgb(255, 80, 100));
+      nk_style_push_color(ctx,&ctx->style.edit.text_normal, COLOUR_FG_RED);
     result = editctrl_tooltip(ctx, NK_EDIT_FIELD|NK_EDIT_SIG_ENTER|NK_EDIT_CLIPBOARD,
                               state->ELFfile, sizearray(state->ELFfile), nk_filter_ascii,
                               "ELF file for symbol lookup");
@@ -1012,15 +1032,14 @@ static void panel_options(struct nk_context *ctx, APPSTATE *state,
     }
     nk_layout_row_push(ctx, BROWSEBTN_WIDTH);
     if (nk_button_symbol(ctx, NK_SYMBOL_TRIPLE_DOT)) {
-      const char *s = noc_file_dialog_open(NOC_FILE_DIALOG_OPEN,
-                                           "ELF Executables\0*.elf;*.bin;*.\0All files\0*.*\0",
-                                           NULL, state->ELFfile, "Select ELF Executable",
-                                           guidriver_apphandle());
-      if (s != NULL && strlen(s) < sizearray(state->ELFfile)) {
-        strcpy(state->ELFfile, s);
+      int res = noc_file_dialog_open(state->ELFfile, sizearray(state->ELFfile),
+                                     NOC_FILE_DIALOG_OPEN,
+                                     "ELF Executables\0*.elf;*.bin;*.\0All files\0*.*\0",
+                                     NULL, state->ELFfile, "Select ELF Executable",
+                                     guidriver_apphandle());
+      if (res) {
         state->dwarf_loaded = false;
         state->curstate = STATE_LOAD_DWARF;
-        free((void*)s);
       }
     }
     nk_layout_row_end(ctx);
@@ -1145,12 +1164,15 @@ static void button_bar(struct nk_context *ctx, APPSTATE *state)
   }
   nk_spacing(ctx, 1);
   if (nk_button_label(ctx, "Save") || nk_input_is_key_pressed(&ctx->input, NK_KEY_SAVE)) {
-    const char *s = noc_file_dialog_open(NOC_FILE_DIALOG_SAVE,
-                                         "CSV files\0*.csv\0All files\0*.*\0",
-                                         NULL, NULL, NULL, guidriver_apphandle());
-    if (s != NULL) {
-      profile_save(s, state);
-      free((void*)s);
+    char path[_MAX_PATH];
+    int res = noc_file_dialog_open(path, sizearray(path), NOC_FILE_DIALOG_SAVE,
+                                   "CSV files\0*.csv\0All files\0*.*\0",
+                                   NULL, NULL, NULL, guidriver_apphandle());
+    if (res) {
+      const char *ext;
+      if ((ext = strrchr(path, '.')) == NULL || strchr(ext, DIRSEP_CHAR) != NULL)
+        strlcat(path, ".csv", sizearray(path)); /* default extension .csv */
+      profile_save(path, state);
     }
   }
 }
@@ -1226,11 +1248,10 @@ static void handle_stateaction(APPSTATE *state)
         /* allocate memory for sample map */
         unsigned count = (state->code_top - state->code_base) / ADDRESS_ALIGN + 1;  /* +1 for out-of-range samples */
         state->sample_map = (unsigned*)malloc(count * sizeof(unsigned));
-        if (state->sample_map != NULL) {
+        if (state->sample_map != NULL)
           memset(state->sample_map, 0, count * sizeof(unsigned));
-        } else {
+        else
           tracelog_statusmsg(TRACESTATMSG_BMP, "Memory allocation error.", BMPSTAT_NOTICE);
-        }
         /* load dwarf */
         int address_size;
         if (dwarf_read(fp, &dwarf_linetable, &dwarf_symboltable, &dwarf_filetable, &address_size))
@@ -1251,6 +1272,27 @@ static void handle_stateaction(APPSTATE *state)
       state->bitrate = strtoul(state->bitrate_str, NULL, 10);
       state->samplingfreq = strtoul(state->samplingfreq_str, NULL, 10);
       state->refreshrate = strtod(state->refreshrate_str, NULL);
+      int errcount = 0;
+      if (state->mcuclock < 1000) {
+        tracelog_statusmsg(TRACESTATMSG_BMP, "CPU clock frequency not set (or invalid).", BMPSTAT_NOTICE);
+        errcount += 1;
+      }
+      if (state->bitrate < 100) {
+        tracelog_statusmsg(TRACESTATMSG_BMP, "Bit rate (SWO) not set (or invalid).", BMPSTAT_NOTICE);
+        errcount += 1;
+      }
+      if (state->samplingfreq < 10) {
+        tracelog_statusmsg(TRACESTATMSG_BMP, "Sampling rate not set (or invalid).", BMPSTAT_NOTICE);
+        errcount += 1;
+      }
+      if (state->refreshrate < 0.001) {
+        tracelog_statusmsg(TRACESTATMSG_BMP, "Refresh interval not set (or invalid).", BMPSTAT_NOTICE);
+        errcount += 1;
+      }
+      if (errcount > 0) {
+        state->curstate = STATE_IDLE;
+        break;
+      }
       unsigned long params[4];
       /* check to get more specific information on the MCU (specifically to
          update the mcu_family name, so that the appropriate scripts can be
@@ -1279,12 +1321,17 @@ static void handle_stateaction(APPSTATE *state)
       params[1] = state->mcuclock / swvclock - 1;
       params[2] = divider - 1;
       bmp_runscript("swo_profile", state->mcu_family, state->mcu_architecture, params, 3);
+      state->init_done = true;
     }
     tracelog_statusmsg(TRACESTATMSG_BMP, "Starting profiling run...", BMPSTAT_SUCCESS);
     state->curstate = STATE_RUN;
     break;
   case STATE_RUN:
     tracelog_statusclear();
+    if (state->init_target && !state->init_done) {
+      state->curstate = STATE_INIT_TARGET;
+      break;
+    }
     profile_reset(state, true);
     state->trace_status = trace_init(state->trace_endpoint, (state->probe == state->netprobe) ? state->IPaddr : NULL);
     state->curstate = (state->trace_status == TRACESTAT_OK) ? STATE_RUNNING : STATE_IDLE;
@@ -1354,7 +1401,7 @@ int main(int argc, char *argv[])
       case '?':
       case 'h':
         usage(NULL);
-        return 0;
+        return EXIT_SUCCESS;
       case 'f':
         ptr = &argv[idx][2];
         if (*ptr == '=' || *ptr == ':')
@@ -1373,6 +1420,9 @@ int main(int argc, char *argv[])
             strlcpy(opt_fontmono, mono, sizearray(opt_fontmono));
         }
         break;
+      case 'v':
+        version();
+        return EXIT_SUCCESS;
       default:
         usage(argv[idx]);
         return EXIT_FAILURE;
@@ -1477,14 +1527,16 @@ int main(int argc, char *argv[])
         pointer_setstyle(CURSOR_NORMAL);
       else if (splitter_hor.hover)
         pointer_setstyle(CURSOR_LEFTRIGHT);
+#if defined __linux__
       else
         pointer_setstyle(CURSOR_NORMAL);
+#endif
     }
 
     nk_end(ctx);
 
     /* Draw */
-    guidriver_render(nk_rgb(30,30,30));
+    guidriver_render(COLOUR_BG0_S);
   }
 
   save_settings(txtConfigFile, &appstate, tab_states, &splitter_hor);

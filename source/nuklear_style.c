@@ -1,7 +1,7 @@
 /*
  * Common styling & layout functions for the Nuklear GUI.
  *
- * Copyright 2021 CompuPhase
+ * Copyright 2021-2022 CompuPhase
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -27,37 +27,38 @@ void nuklear_style(struct nk_context *ctx)
 
   assert(ctx != NULL);
 
-  table[NK_COLOR_TEXT] = nk_rgba(205, 201, 171, 255);
-  table[NK_COLOR_TEXT_GRAY]= nk_rgba(128, 128, 128, 255);
-  table[NK_COLOR_WINDOW] = nk_rgba(35, 52, 71, 255);
-  table[NK_COLOR_HEADER] = nk_rgba(58, 86, 117, 255);
-  table[NK_COLOR_BORDER] = nk_rgba(128, 128, 128, 255);
-  table[NK_COLOR_BUTTON] = nk_rgba(58, 86, 117, 255);
-  table[NK_COLOR_BUTTON_HOVER] = nk_rgba(127, 23, 45, 255);
-  table[NK_COLOR_BUTTON_ACTIVE] = nk_rgba(127, 23, 45, 255);
-  table[NK_COLOR_TOGGLE] = nk_rgba(20, 29, 38, 255);
-  table[NK_COLOR_TOGGLE_HOVER] = nk_rgba(58, 86, 117, 255);
-  table[NK_COLOR_TOGGLE_CURSOR] = nk_rgba(179, 175, 132, 255);
-  table[NK_COLOR_SELECT] = nk_rgba(20, 29, 38, 255);
-  table[NK_COLOR_SELECT_ACTIVE] = nk_rgba(204, 199, 141, 255);
-  table[NK_COLOR_SLIDER] = nk_rgba(20, 29, 38, 255);
-  table[NK_COLOR_SLIDER_CURSOR] = nk_rgba(179, 175, 132, 255);
-  table[NK_COLOR_SLIDER_CURSOR_HOVER] = nk_rgba(127, 23, 45, 255);
-  table[NK_COLOR_SLIDER_CURSOR_ACTIVE] = nk_rgba(127, 23, 45, 255);
-  table[NK_COLOR_PROPERTY] = nk_rgba(20, 29, 38, 255);
-  table[NK_COLOR_EDIT] = nk_rgba(20, 29, 38, 225);
-  table[NK_COLOR_EDIT_CURSOR] = nk_rgba(205, 201, 171, 255);
-  table[NK_COLOR_COMBO] = nk_rgba(20, 29, 38, 255);
-  table[NK_COLOR_CHART] = nk_rgba(20, 29, 38, 255);
-  table[NK_COLOR_CHART_COLOR] = nk_rgba(170, 40, 60, 255);
-  table[NK_COLOR_CHART_COLOR_HIGHLIGHT] = nk_rgba(255, 0, 0, 255);
-  table[NK_COLOR_SCROLLBAR] = nk_rgba(30, 40, 60, 255);
-  table[NK_COLOR_SCROLLBAR_CURSOR] = nk_rgba(179, 175, 132, 255);
-  table[NK_COLOR_SCROLLBAR_CURSOR_HOVER] = nk_rgba(204, 199, 141, 255);
-  table[NK_COLOR_SCROLLBAR_CURSOR_ACTIVE] = nk_rgba(204, 199, 141, 255);
-  table[NK_COLOR_TAB_HEADER] = nk_rgba(58, 86, 117, 255);
-  table[NK_COLOR_TOOLTIP] = nk_rgba(204, 199, 141, 255);
-  table[NK_COLOR_TOOLTIP_TEXT] = nk_rgba(35, 52, 71, 255);
+  /* adapted from gruvbox palette */
+  table[NK_COLOR_TEXT] = nk_rgb_hex("#ebdbb2");                   /* fg */
+  table[NK_COLOR_TEXT_GRAY]= nk_rgb_hex("#928374");               /* gray-f */
+  table[NK_COLOR_WINDOW] = nk_rgb_hex("#32302f");                 /* bg0_s */
+  table[NK_COLOR_HEADER] = nk_rgb_hex("#076678");                 /* blue-b */
+  table[NK_COLOR_BORDER] = nk_rgb_hex("#a89984");                 /* gray-b */
+  table[NK_COLOR_BUTTON] = nk_rgb_hex("#104b5b");
+  table[NK_COLOR_BUTTON_HOVER] = nk_rgb_hex("#076678");           /* blue-f in light mode */
+  table[NK_COLOR_BUTTON_ACTIVE] = nk_rgb_hex("#076678");          /* blue-f in light mode */
+  table[NK_COLOR_TOGGLE] = nk_rgb_hex("#1d2021");                 /* bg0_h */
+  table[NK_COLOR_TOGGLE_HOVER] = nk_rgb_hex("#928374");           /* gray-f */
+  table[NK_COLOR_TOGGLE_CURSOR] = nk_rgb_hex("#458588");          /* blue-b */
+  table[NK_COLOR_SELECT] = nk_rgb_hex("#1d2021");                 /* bg0_h */
+  table[NK_COLOR_SELECT_ACTIVE] = nk_rgb_hex("#fabd2f");          /* yellow-f */
+  table[NK_COLOR_SLIDER] = nk_rgb_hex("#1d2021");                 /* bg0_h */
+  table[NK_COLOR_SLIDER_CURSOR] = nk_rgb_hex("#d79921");          /* yellow-b */
+  table[NK_COLOR_SLIDER_CURSOR_HOVER] = nk_rgb_hex("#fabd2f");    /* yellow-f */
+  table[NK_COLOR_SLIDER_CURSOR_ACTIVE] = nk_rgb_hex("#fabd2f");   /* yellow-f */
+  table[NK_COLOR_PROPERTY] = nk_rgb_hex("#1d2021");               /* bg0_h */
+  table[NK_COLOR_EDIT] = nk_rgb_hex("#1d2021");                   /* bg0_h */
+  table[NK_COLOR_EDIT_CURSOR] = nk_rgb_hex("#fbf1c7");            /* fg0 (bg0 in light mode) */
+  table[NK_COLOR_COMBO] = nk_rgb_hex("#1d2021");                  /* bg0_h */
+  table[NK_COLOR_CHART] = nk_rgb_hex("#1d2021");                  /* bg0_h */
+  table[NK_COLOR_CHART_COLOR] = nk_rgb_hex("#cc241d");            /* red-b */
+  table[NK_COLOR_CHART_COLOR_HIGHLIGHT] = nk_rgb_hex("#fb4934");  /* red-f */
+  table[NK_COLOR_SCROLLBAR] = nk_rgb_hex("#1d2021");              /* bg0_h */
+  table[NK_COLOR_SCROLLBAR_CURSOR] = nk_rgb_hex("#928374");       /* gray-f */
+  table[NK_COLOR_SCROLLBAR_CURSOR_HOVER] = nk_rgb_hex("#a899a4"); /* gray-b */
+  table[NK_COLOR_SCROLLBAR_CURSOR_ACTIVE] = nk_rgb_hex("#a899a4");/* gray-b */
+  table[NK_COLOR_TAB_HEADER] = nk_rgb_hex("#104b5b");
+  table[NK_COLOR_TOOLTIP] = nk_rgb_hex("#fbf1c7");                /* bg0 in light mode, also fg0 */
+  table[NK_COLOR_TOOLTIP_TEXT] = nk_rgb_hex("#3c3836");           /* fg in light mode, also bg1 */
 
   nk_style_from_table(ctx, table);
 

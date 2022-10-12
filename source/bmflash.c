@@ -73,6 +73,7 @@
 #include "rs232.h"
 #include "tcpip.h"
 #include "specialfolder.h"
+#include "svnrev.h"
 
 #if defined __linux__ || defined __unix__
   #include "res/icon_download_64.h"
@@ -152,7 +153,7 @@ static int log_widget(struct nk_context *ctx, const char *id, const char *conten
 
   /* black background on group */
   bkgnd = stwin->fixed_background;
-  stwin->fixed_background = nk_style_item_color(nk_rgb(20, 29, 38));
+  stwin->fixed_background = nk_style_item_color(COLOUR_BG0);
   if (nk_group_begin(ctx, id, NK_WINDOW_BORDER)) {
     float lineheight = 0;
     const char *head = content;
@@ -167,19 +168,19 @@ static int log_widget(struct nk_context *ctx, const char *id, const char *conten
         lineheight = rcline.h;
       }
       if (*head == '^' && isdigit(*(head + 1))) {
-        struct nk_color clr = nk_rgb(205, 201, 171);
+        struct nk_color clr = COLOUR_TEXT;
         switch (*(head + 1)) {
         case '1': /* error (red) */
-          clr = nk_rgb(255, 80, 100);
+          clr = COLOUR_FG_RED;
           break;
         case '2': /* ok (green) */
-          clr = nk_rgb(100, 255, 100);
+          clr = COLOUR_FG_GREEN;
           break;
         case '3': /* warning (yellow) */
-          clr = nk_rgb(255, 240, 80);
+          clr = COLOUR_FG_YELLOW;
           break;
-        case '4': /* notice (white) */
-          clr = nk_rgb(255, 255, 255);
+        case '4': /* notice (highlighted) */
+          clr = COLOUR_HIGHLIGHT;
           break;
         }
         nk_text_colored(ctx, head + 2, (int)(tail - head - 2), NK_TEXT_LEFT, clr);
@@ -630,7 +631,22 @@ static void usage(const char *invalid_option)
   printf("Usage: bmflash [options] elf-file\n\n"
          "Options:\n"
          "-f=value  Font size to use (value must be 8 or larger).\n"
-         "-h        This help.\n");
+         "-h        This help."
+         "-v        Show version information.\n");
+}
+
+static void version(void)
+{
+  #if defined _WIN32  /* fix console output on Windows */
+    if (AttachConsole(ATTACH_PARENT_PROCESS)) {
+      freopen("CONOUT$", "wb", stdout);
+      freopen("CONOUT$", "wb", stderr);
+    }
+    printf("\n");
+  #endif
+
+  printf("BMFlash version 1.1.%d.\n", SVNREV_NUM);
+  printf("Copyright 2019-2022 CompuPhase\nLicensed under the Apache License version 2.0\n");
 }
 
 static int help_popup(struct nk_context *ctx)
@@ -1026,13 +1042,10 @@ static void panel_options(struct nk_context *ctx, APPSTATE *state,
       #else
         const char *filter = "Executables\0*\0All files\0*\0";
       #endif
-      const char *s = noc_file_dialog_open(NOC_FILE_DIALOG_OPEN, filter,
-                                           NULL, state->PostProcess,
-                                           "Select Executable", guidriver_apphandle());
-      if (s != NULL && strlen(s) < sizearray(state->PostProcess)) {
-        strcpy(state->PostProcess, s);
-        free((void*)s);
-      }
+      noc_file_dialog_open(state->PostProcess, sizearray(state->PostProcess),
+                           NOC_FILE_DIALOG_OPEN, filter,
+                           NULL, state->PostProcess,
+                           "Select Executable", guidriver_apphandle());
     }
 
     nk_layout_row_dynamic(ctx, ROW_HEIGHT, 1);
@@ -1463,7 +1476,7 @@ int main(int argc, char *argv[])
       case '?':
       case 'h':
         usage(NULL);
-        return 0;
+        return EXIT_SUCCESS;
       case 'f':
         ptr = &argv[idx][2];
         if (*ptr == '=' || *ptr == ':')
@@ -1482,6 +1495,9 @@ int main(int argc, char *argv[])
             strlcpy(opt_fontmono, mono, sizearray(opt_fontmono));
         }
         break;
+      case 'v':
+        version();
+        return EXIT_SUCCESS;
       default:
         usage(argv[idx]);
         return EXIT_FAILURE;
@@ -1538,15 +1554,13 @@ int main(int argc, char *argv[])
         load_options = 2;
       nk_layout_row_push(ctx, BROWSEBTN_WIDTH);
       if (nk_button_symbol(ctx, NK_SYMBOL_TRIPLE_DOT) || nk_input_is_key_pressed(&ctx->input, NK_KEY_OPEN)) {
-        const char *s = noc_file_dialog_open(NOC_FILE_DIALOG_OPEN,
-                                             "ELF Executables\0*.elf;*.bin;*.\0All files\0*.*\0",
-                                             NULL, NULL, "Select ELF Executable",
-                                             guidriver_apphandle());
-        if (s != NULL && strlen(s) < sizearray(appstate.ELFfile)) {
-          strcpy(appstate.ELFfile, s);
+        int res = noc_file_dialog_open(appstate.ELFfile, sizearray(appstate.ELFfile),
+                                       NOC_FILE_DIALOG_OPEN,
+                                       "ELF Executables\0*.elf;*.bin;*.\0All files\0*.*\0",
+                                       NULL, NULL, "Select ELF Executable",
+                                       guidriver_apphandle());
+        if (res)
           load_options = 2;
-          free((void*)s);
-        }
       }
       nk_layout_row_end(ctx);
 
@@ -1649,7 +1663,7 @@ int main(int argc, char *argv[])
     nk_end(ctx);
 
     /* Draw */
-    guidriver_render(nk_rgb(30,30,30));
+    guidriver_render(COLOUR_BG0_S);
   }
 
   if (strlen(appstate.ParamFile) > 0 && access(appstate.ParamFile, 0) == 0)

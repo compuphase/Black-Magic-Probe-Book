@@ -4,10 +4,7 @@
  * it scans the registry for the Black Magic Probe device, under Linux, it
  * browses through sysfs.
  *
- * Build this file with the macro STANDALONE defined on the command line to
- * create a self-contained executable.
- *
- * Copyright 2019-2021 CompuPhase
+ * Copyright 2019-2022 CompuPhase
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -32,6 +29,7 @@
 #endif
 #include "bmp-scan.h"
 #include "tcpip.h"
+#include "svnrev.h"
 
 
 #if defined _MSC_VER
@@ -103,8 +101,9 @@ int main(int argc, char *argv[])
   int print_all = 1;
 
   if (argc >= 2 && (argv[1][0] == '-' || argv[1][0] == '/' || argv[1][0] == '?')) {
-    printf("bmscan detects the ports used by Black Magic Probe devices that are connected.\n\n"
-           "There are two options:\n"
+    printf("BMScan detects which ports a Black Magic Probe is connected to. If multiple\n"
+           "probes are connected, it can list them all.\n\n"
+           "There are two options on the command line:\n"
            "* The sequence number of the Black Magic Probe (if multiple are connected).\n"
            "  Alternatively, you may specify the serial number of the Black Magic Probe, in\n"
            "  hexadecimal.\n"
@@ -118,8 +117,11 @@ int main(int argc, char *argv[])
            "          bmscan gdbserver   - list the COM-port / tty device for GDB-server of\n"
            "                               the first device.\n"
            "          bmscan 2 swo       - list the GUID / device for the SWO trace output\n"
-           "                               for the second device\n");
-    return 0;
+           "                               for the second device\n"
+           "          bmscan ip          - list all IP addresses on which a ctxLink probe\n"
+           "                               is detected.\n\n"
+           "Version 1.1.%d, Copyright 2019-2022 CompuPhase.\nLicensed under the Apache License version 2.0.\n", SVNREV_NUM);
+    return EXIT_SUCCESS;
   }
 
   /* check command line arguments */
@@ -148,13 +150,13 @@ int main(int argc, char *argv[])
         seqnr = idx;
     if (seqnr == -1) {
       printf("\nBlack Magic Probe with serial number %s is not found.\n", serial);
-      return 1;
+      return EXIT_FAILURE;
     }
   }
 
   if (seqnr < 0) {
     printf("\nInvalid sequence number %ld, sequence numbers start at 1.\n", seqnr + 1);
-    return 1;
+    return EXIT_FAILURE;
   }
 
   if (iface != NULL) {
@@ -182,7 +184,7 @@ int main(int argc, char *argv[])
       int result = tcpip_init();
       if (result != 0) {
           printf("network initialization failure (error code %d)\n", result);
-          return 1;
+          return EXIT_FAILURE;
       }
       count = scan_network(addresses, sizearray(addresses));
       if (seqnr == 0) {
@@ -228,7 +230,7 @@ int main(int argc, char *argv[])
         default:
           printf("\nNo %ldth Black Magic Probe could be found on this system.\n", seqnr + 1);
         }
-        return 1;
+        return EXIT_FAILURE;
       }
 
       if (find_bmp(seqnr, BMP_IF_UART, port_term, sizearray(port_term))) {
@@ -250,6 +252,6 @@ int main(int argc, char *argv[])
     } while (print_all);
   }
 
-  return 0;
+  return EXIT_SUCCESS;
 }
 

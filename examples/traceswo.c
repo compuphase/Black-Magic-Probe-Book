@@ -1,7 +1,7 @@
 /* Implementation of functions to transmit data or strings over the TRACESWO
  * wire of the ARM Cortex micro-controllers.
  *
- * These routines pack the bytes to * transmit into 32-bit words, in order to
+ * These routines pack the bytes to transmit into 32-bit words, in order to
  * minimize overhead (each item that is transmitted over the TRACESWO pin is
  * prefixed with a 1-byte header, so that when tranmitting single bytes, each
  * byte has that 1-byte header overhead).

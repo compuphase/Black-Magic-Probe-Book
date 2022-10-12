@@ -87,7 +87,7 @@ struct nk_context* guidriver_init(const char *caption, int width, int height, in
 
   SetRect(&rect, 0, 0, width, height);
   if (flags & GUIDRV_RESIZEABLE) {
-    style = WS_OVERLAPPEDWINDOW;
+    style = WS_OVERLAPPEDWINDOW | WS_SIZEBOX;
     exstyle = 0;
   } else {
     style = WS_POPUPWINDOW | WS_CAPTION;

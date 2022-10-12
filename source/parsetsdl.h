@@ -36,7 +36,7 @@ enum {
 
 enum {
   CTFERR_NONE,
-  CTFERR_FILEOPEN,      /* file open error (file not found?) */
+  CTFERR_FILEOPEN,      /* file open error (file ... not found?) */
   CTFERR_MEMORY,        /* memory allocation error */
   CTFERR_LONGLINE,      /* line too long */
   CTFERR_BLOCKCOMMENT,  /* comment not closed */
@@ -59,6 +59,7 @@ enum {
   CTFERR_DUPLICATE_NAME,/* duplicate name ... */
   CTFERR_CLOCK_IS_INT,  /* clock must be mapped to integer type */
   CTFERR_DUPLICATE_SETTING,
+  CTFERR_EXCEED_INCLUDES,/* #include nesting too deep */
 };
 
 enum {
