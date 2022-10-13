@@ -43,7 +43,7 @@ All GUI utilities have a `-f` command line option to set the font size in pixels
 
 In Linux, you may need to experiment a little for the font size that gives the sharpest text. Due to the font handling in Nuklear, some fractional pixel sizes give better visual results than others. For example, on my system, the text is sharp at a size of 14.4 (but on your system, a different value may be optimal).
 
-As an aside: the utilities have more command line options that just `-f`. The `-f` option is common to all GUI utilities. Use the `-h` or `-?` options to get a summary of the command line options for each utility.
+As an aside: the utilities have more command line options than just `-f`. The `-f` option is common to all GUI utilities. Use the `-h` or `-?` options to get a summary of the command line options for each utility.
 ### Linux
 Prerequisites are
 * libbsd-dev
