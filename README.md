@@ -30,6 +30,12 @@ A summary of the utilities:
 </tr>
 </table>
 
+### Screen captures of the GUI utilities
+<a target="_blank" href="https://www.compuphase.com/electronics/blackmagicprobe-bmdebug.png"><img src="https://www.compuphase.com/electronics/blackmagicprobe-bmdebug.png" width="23%" title="Black Magid Debugger"></img></a>
+<a target="_blank" href="https://www.compuphase.com/electronics/blackmagicprobe-bmflash.png"><img src="https://www.compuphase.com/electronics/blackmagicprobe-bmflash.png" width="23%" title="Black Magid Flash Programmer"></img></a>
+<a target="_blank" href="https://www.compuphase.com/electronics/blackmagicprobe-bmtrace.png"><img src="https://www.compuphase.com/electronics/blackmagicprobe-bmtrace.png" width="23%" title="Black Magid SWO Trace Viewer"></img></a>
+<a target="_blank" href="https://www.compuphase.com/electronics/blackmagicprobe-bmprofile.png"><img src="https://www.compuphase.com/electronics/blackmagicprobe-bmprofile.png" width="23%" title="Black Magid Profiler"></img></a>
+
 ## Building the software
 Several makefiles are provided for various compilers. Use the one that is appropriate for your system. It is most convenient if you rename the correct makefile (for your system) to `Makefile`, so that you don't have to specify it on the command line each time you run `make`.
 
