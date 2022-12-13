@@ -1,7 +1,7 @@
 /*
- * Common functions for bmdebug, bmflash and bmtrace.
+ * Common functions for bmdebug, bmflash, bmprofile and bmtrace.
  *
- * Copyright 2021 CompuPhase
+ * Copyright 2021-2022 CompuPhase
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -21,6 +21,6 @@
 const char **get_probelist(int *probe, int *netprobe);
 void clear_probelist(const char **probelist, int netprobe);
 
-int get_configfile(char *filename, size_t maxsize, const char *basename);
+bool get_configfile(char *filename, size_t maxsize, const char *basename);
 
 #endif /* _BMCOMMON_H */

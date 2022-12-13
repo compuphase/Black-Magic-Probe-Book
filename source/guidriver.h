@@ -28,6 +28,22 @@
 enum {
   FONT_STD = 0,
   FONT_MONO,
+  FONT_HEADING1,
+  FONT_HEADING2,
+  FONT_SMALL,
+};
+enum {
+  NK_FONTREGULAR    = 0,
+  NK_FONTBOLD       = 1,
+  NK_FONTITALIC     = 2,
+  NK_FONTBOLDITALIC = 3,
+  NK_FONTUNDERLINE  = 4,
+  NK_FONTSTRIKEOUT  = 8
+};
+
+enum {
+  DEVICE_INSERT = 1,
+  DEVICE_REMOVE,
 };
 
 struct nk_context* guidriver_init(const char *caption, int width, int height, int flags,
@@ -37,8 +53,10 @@ int   guidriver_appsize(int *width, int *height);
 void  guidriver_render(struct nk_color clear);
 int   guidriver_poll(int waitidle);
 void *guidriver_apphandle(void);
-int   guidriver_setfont(struct nk_context *ctx, int type);
 
+int   guidriver_setfont(struct nk_context *ctx, int type);
 struct nk_image guidriver_image_from_memory(const unsigned char *data, unsigned size);
+
+int   guidriver_monitor_usb(unsigned short vid, unsigned short pid);
 
 #endif /* _GUIDRIVER_H */

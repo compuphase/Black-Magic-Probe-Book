@@ -29,10 +29,10 @@ void nuklear_style(struct nk_context *ctx)
 
   /* adapted from gruvbox palette */
   table[NK_COLOR_TEXT] = nk_rgb_hex("#ebdbb2");                   /* fg */
-  table[NK_COLOR_TEXT_GRAY]= nk_rgb_hex("#928374");               /* gray-f */
+  table[NK_COLOR_TEXT_GRAY]= nk_rgb_hex("#a89984");               /* gray-b */
   table[NK_COLOR_WINDOW] = nk_rgb_hex("#32302f");                 /* bg0_s */
   table[NK_COLOR_HEADER] = nk_rgb_hex("#076678");                 /* blue-b */
-  table[NK_COLOR_BORDER] = nk_rgb_hex("#a89984");                 /* gray-b */
+  table[NK_COLOR_BORDER] = nk_rgb_hex("#928374");                 /* gray-f */
   table[NK_COLOR_BUTTON] = nk_rgb_hex("#104b5b");
   table[NK_COLOR_BUTTON_HOVER] = nk_rgb_hex("#076678");           /* blue-f in light mode */
   table[NK_COLOR_BUTTON_ACTIVE] = nk_rgb_hex("#076678");          /* blue-f in light mode */

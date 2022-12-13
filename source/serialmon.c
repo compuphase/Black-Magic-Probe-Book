@@ -237,7 +237,7 @@ int sermon_open(const char *port, int baud)
   if (baud <= 0)
     baud = 115200;
 
-  hCom = rs232_open(port, baud, 8, 1, 0);
+  hCom = rs232_open(port, baud, 8, 1, PAR_NONE, FLOWCTRL_NONE);
   if (hCom == NULL)
     return 0;
 

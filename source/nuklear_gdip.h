@@ -23,9 +23,9 @@
 
 /* font */
 typedef struct GdipFont GdipFont;
-NK_API GdipFont* nk_gdipfont_create(const char *name, float size);
-NK_API GdipFont* nk_gdipfont_create_from_file(const WCHAR* filename, float size);
-NK_API GdipFont* nk_gdipfont_create_from_memory(const void* membuf, int membufSize, float size);
+NK_API GdipFont* nk_gdipfont_create(const char *name, float size, int style);
+NK_API GdipFont* nk_gdipfont_create_from_file(const WCHAR* filename, float size, int style);
+NK_API GdipFont* nk_gdipfont_create_from_memory(const void* membuf, int membufSize, float size, int style);
 NK_API void nk_gdipfont_set_voffset(GdipFont *font, int voffset);
 NK_API void nk_gdipfont_del(GdipFont *font);
 

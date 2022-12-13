@@ -1,7 +1,7 @@
 /*
- * Common functions for bmdebug, bmflash and bmtrace.
+ * Common functions for bmdebug, bmflash, bmprofile and bmtrace.
  *
- * Copyright 2021 CompuPhase
+ * Copyright 2021-2022 CompuPhase
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,6 +16,7 @@
  * limitations under the License.
  */
 #include <assert.h>
+#include <stdbool.h>
 #include <stdlib.h>
 #include <string.h>
 #if defined WIN32 || defined _WIN32
@@ -76,13 +77,13 @@ void clear_probelist(const char **probelist, int netprobe)
   }
 }
 
-int get_configfile(char *filename, size_t maxsize, const char *basename)
+bool get_configfile(char *filename, size_t maxsize, const char *basename)
 {
   assert(filename != NULL);
   assert(maxsize > 0);
   *filename = '\0';
   if (!folder_AppConfig(filename, maxsize))
-    return 0;
+    return false;
 
   strlcat(filename, DIR_SEPARATOR "BlackMagic", maxsize);
   #if defined _WIN32
@@ -92,6 +93,6 @@ int get_configfile(char *filename, size_t maxsize, const char *basename)
   #endif
   strlcat(filename, DIR_SEPARATOR, maxsize);
   strlcat(filename, basename, maxsize);
-  return 1;
+  return true;
 }
 

@@ -532,8 +532,12 @@ enum nk_symbol_type {
     NK_SYMBOL_TRIANGLE_RIGHT,
     NK_SYMBOL_PLUS,
     NK_SYMBOL_MINUS,
-    NK_SYMBOL_TRIANGLE_DOWN_SMALL,
     NK_SYMBOL_TRIPLE_DOT,
+    NK_SYMBOL_TRIANGLE_DOWN_SMALL,
+    NK_SYMBOL_CIRCLE_SOLID_SMALL,
+    NK_SYMBOL_CIRCLE_OUTLINE_SMALL,
+    NK_SYMBOL_LINK,
+    NK_SYMBOL_LINK_ALT,
     NK_SYMBOL_MAX
 };
 /* =============================================================================
@@ -2366,7 +2370,7 @@ NK_API void nk_layout_set_min_row_height(struct nk_context*, float height);
 */
 NK_API void nk_layout_reset_min_row_height(struct nk_context*);
 /*/// #### nk_layout_widget_bounds
-/// Returns the width of the next row allocate by one of the layouting functions
+/// Returns the width of the next row allocated by one of the layouting functions
 /// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~c
 /// struct nk_rect nk_layout_widget_bounds(struct nk_context*);
 /// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -3182,7 +3186,8 @@ enum nk_text_align {
     NK_TEXT_ALIGN_RIGHT       = 0x04,
     NK_TEXT_ALIGN_TOP         = 0x08,
     NK_TEXT_ALIGN_MIDDLE      = 0x10,
-    NK_TEXT_ALIGN_BOTTOM      = 0x20
+    NK_TEXT_ALIGN_BOTTOM      = 0x20,
+    NK_TEXT_ALIGN_EXPANDX     = 0x40    /* currently only for symbols */
 };
 enum nk_text_alignment {
     NK_TEXT_LEFT        = NK_TEXT_ALIGN_MIDDLE|NK_TEXT_ALIGN_LEFT,
@@ -3220,6 +3225,14 @@ NK_API void nk_value_color_hex(struct nk_context*, const char *prefix, struct nk
 #define NK_SYMBOL_REPEAT(c)   ((c) << 24)   /* in high word of the alignment byte */
 NK_API void nk_symbol_colored(struct nk_context *ctx, enum nk_symbol_type, nk_flags alignment, struct nk_color color);
 NK_API void nk_symbol(struct nk_context *ctx, enum nk_symbol_type, nk_flags alignment);
+/** nk_rule_horizontal
+ * Line for visual seperation. Draws a line with thickness determined by the
+ * current row height.
+ * \param ctx       Must point to an previously initialized `nk_context`.
+ * \param color     Color of the * horizontal line.
+ * \param rounding  Whether or not to make the line round.
+ */
+NK_API void nk_rule_horizontal(struct nk_context *ctx, struct nk_color color, nk_bool rounding);
 /* =============================================================================
  *
  *                                  BUTTON

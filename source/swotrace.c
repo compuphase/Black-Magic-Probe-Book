@@ -1301,8 +1301,8 @@ float tracelog_labelwidth(float rowheight)
 
 /* tracelog_widget() draws the text in the log window and scrolls to the last line
    if new text was added */
-void tracelog_widget(struct nk_context *ctx, const char *id, float rowheight, int markline,
-                     const TRACEFILTER *filters, nk_flags widget_flags)
+void tracelog_widget(struct nk_context *ctx, const char *id, float rowheight, int limitlines,
+                     int markline, const TRACEFILTER *filters, nk_flags widget_flags)
 {
   TRACESTRING *item;
   int labelwidth, tstampwidth;
@@ -1330,10 +1330,18 @@ void tracelog_widget(struct nk_context *ctx, const char *id, float rowheight, in
     static int recent_markline = -1;
     static int scrollpos = 0;
     static int linecount = 0;
-    int lines = 0, widgetlines = 0, ypos;
+    static int skiplines = 0;
+    if (limitlines < 0)
+      skiplines = 0;
+    int skip = skiplines;
+    int lines = 0;
     float lineheight = 0;
     for (item = tracestring_root.next; item != NULL; item = item->next) {
       assert(item->text != NULL);
+      if (skip > 0) {
+        skip -= 1;
+        continue;
+      }
       if (filters != NULL && filters[0].expr != NULL && filters[0].enabled) {
         /* check filters (first count how many there are) */
         int idx, match, count_enabled;
@@ -1405,6 +1413,8 @@ void tracelog_widget(struct nk_context *ctx, const char *id, float rowheight, in
       nk_layout_row_end(ctx);
       lines++;
     }
+    if (limitlines > 0)
+      skiplines = (lines > limitlines) ? lines - limitlines : 0;
     if (lines == 0 && statusmessage_root.next != NULL) {
       for (item = statusmessage_root.next; item != NULL; item = item->next) {
         struct nk_color clr;
@@ -1427,8 +1437,10 @@ void tracelog_widget(struct nk_context *ctx, const char *id, float rowheight, in
        1) if number of lines change, scroll to the last line
        2) if line to mark is different than last time (and valid) make that
           line visible */
-    ypos = scrollpos;
-    widgetlines = (int)((rcwidget.h - 2 * stwin->padding.y) / lineheight);
+    if (lineheight < 0.1)
+      lineheight = 1; /* only to avoid a division by zero (for the special case of 0 text lines */
+    int ypos = scrollpos;
+    int widgetlines = (int)((rcwidget.h - 2 * stwin->padding.y) / lineheight);
     if (lines != linecount) {
       linecount = lines;
       ypos = (int)((lines - widgetlines + 1) * lineheight);
@@ -1492,36 +1504,44 @@ void timeline_setconfig(double spacing, unsigned long scale, unsigned long delta
   }
 }
 
-void timeline_rebuild(void)
+void timeline_rebuild(int limitlines)
 {
+  static int skiplines = 0;
+  if (limitlines < 0)
+    skiplines = 0;
+
   timeline_maxpos = 0.0;  /* this variable is recalculated */
   timeoffset = 0.0;
   timeline_maxcount = 1;
 
   /* marks only get added, until the list is cleared completely */
   if (tracestring_root.next == NULL) {
-    int chan;
-    for (chan = 0; chan < NUM_CHANNELS; chan++) {
+    for (int chan = 0; chan < NUM_CHANNELS; chan++) {
       if (timeline[chan].marks != NULL) {
         free((void*)timeline[chan].marks);
         timeline[chan].marks = NULL;
         timeline[chan].length = timeline[chan].size = 0;
       }
     }
+    skiplines = 0;
   } else {
-    TRACESTRING *item;
-    int chan;
     assert(tracestring_root.next != NULL);
     timeoffset = tracestring_root.next->timestamp;
+    int chan;
     for (chan = 0; chan < NUM_CHANNELS; chan++)
       timeline[chan].length = 0;
-    for (item = tracestring_root.next; item != NULL; item = item->next) {
+    int skip = skiplines;
+    for (TRACESTRING *item = tracestring_root.next; item != NULL; item = item->next) {
       int idx;
       float pos;
       chan = item->channel;
       assert(chan >= 0 && chan < NUM_CHANNELS);
       if (!channels[chan].enabled)
         continue;
+      if (skip > 0) {
+        skip--;
+        continue;
+      }
       /* make sure array is big enough for another mark */
       assert(timeline[chan].length <= timeline[chan].size);
       if (timeline[chan].length == timeline[chan].size) {
@@ -1562,10 +1582,18 @@ void timeline_rebuild(void)
       if (pos > timeline_maxpos)
         timeline_maxpos = pos;
     }
+    if (limitlines > 0) {
+      /* count all marks, increase the number of traces to skip, if needed */
+      size_t total = 0;
+      for (int chan = 0; chan < NUM_CHANNELS; chan++)
+        total += timeline[chan].length;
+      skiplines = (total > limitlines) ? total - limitlines : 0;
+    }
   }
 }
 
-double timeline_widget(struct nk_context *ctx, const char *id, float rowheight, nk_flags widget_flags)
+double timeline_widget(struct nk_context *ctx, const char *id, float rowheight,
+                       int limitlines, nk_flags widget_flags)
 {
   int labelwidth;
   double click_time = -1.0;
@@ -1579,7 +1607,7 @@ double timeline_widget(struct nk_context *ctx, const char *id, float rowheight, 
     return click_time;
 
   if (tracestring_tail != tracestring_tail_prev) {
-    timeline_rebuild();         /* rebuild the "trace marks" data */
+    timeline_rebuild(limitlines); /* rebuild the "trace marks" data */
     tracestring_tail_prev = tracestring_tail;
   }
 
@@ -1670,7 +1698,7 @@ double timeline_widget(struct nk_context *ctx, const char *id, float rowheight, 
           mark_deltatime = 100;
         }
       }
-      timeline_rebuild();
+      timeline_rebuild(limitlines);
     }
     nk_layout_row_push(ctx, 1.5f * rowheight);
     if (nk_button_symbol_styled(ctx, &stbtn, NK_SYMBOL_MINUS)) {
@@ -1684,7 +1712,7 @@ double timeline_widget(struct nk_context *ctx, const char *id, float rowheight, 
           mark_deltatime /= 1000;
         }
       }
-      timeline_rebuild();
+      timeline_rebuild(limitlines);
     }
     nk_layout_row_end(ctx);
 

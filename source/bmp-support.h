@@ -54,6 +54,7 @@ void bmp_setcallback(BMP_STATCALLBACK func);
 bool bmp_connect(int probe, const char *ipaddress);
 bool bmp_disconnect(void);
 bool bmp_isopen(void);
+void bmp_sethandle(HCOM *hcom);
 HCOM *bmp_comport(void);
 
 int bmp_checkversionstring(void);

@@ -57,6 +57,7 @@
 #include "mcu-info.h"
 #include "minIni.h"
 #include "noc_file_dialog.h"
+#include "nuklear_guide.h"
 #include "nuklear_mousepointer.h"
 #include "nuklear_splitter.h"
 #include "nuklear_style.h"
@@ -147,7 +148,7 @@ static void version(void)
     printf("\n");
   #endif
 
-  printf("BMProfile version 1.1.%d.\n", SVNREV_NUM);
+  printf("BMProfile version %s.\n", SVNREV_STR);
   printf("Copyright 2022 CompuPhase\nLicensed under the Apache License version 2.0\n");
 }
 
@@ -237,6 +238,7 @@ typedef struct tagAPPSTATE {
   uint32_t source_addr_low;     /**< source view: lowest code address of interest */
   uint32_t source_addr_high;    /**< source view: highest code address of interest */
   unsigned *addr2line;          /**< source view: address-to-linenumber map */
+  bool help_popup;              /**< whether "help" popup is active */
 } APPSTATE;
 
 enum {
@@ -356,7 +358,7 @@ static bool load_targetoptions(const char *filename, APPSTATE *state)
   sprintf(state->mcuclock_str, "%lu", state->mcuclock);
   sprintf(state->bitrate_str, "%lu", state->bitrate);
   sprintf(state->samplingfreq_str, "%lu", state->samplingfreq);
-  sprintf(state->refreshrate_str, "%f", state->refreshrate);
+  sprintf(state->refreshrate_str, "%.1f", state->refreshrate);
   return true;
 }
 
@@ -908,6 +910,24 @@ static bool collect_functions(APPSTATE *state)
   return state->functionlist != NULL && state->functionorder != NULL;
 }
 
+static void help_popup(struct nk_context *ctx, APPSTATE *state, float canvas_width, float canvas_height)
+{
+  #include "bmprofile_help.h"
+  (void)bmprofile_helpsize;
+
+  if (state->help_popup) {
+    #define MARGIN  10
+    float w = opt_fontsize * 40;
+    if (w > canvas_width - 2*MARGIN)  /* clip "ideal" help window size of canvas size */
+      w = canvas_width - 2*MARGIN;
+    float h = canvas_height * 0.75;
+    struct nk_rect rc = nk_rect((canvas_width - w) / 2, (canvas_height - h) / 2, w, h);
+    #undef MARGIN
+
+    state->help_popup = nk_guide(ctx, &rc, opt_fontsize, (const char*)bmprofile_help, NULL);
+  }
+}
+
 static void panel_options(struct nk_context *ctx, APPSTATE *state,
                           enum nk_collapse_states tab_states[TAB_COUNT],
                           float panel_width)
@@ -938,7 +958,7 @@ static void panel_options(struct nk_context *ctx, APPSTATE *state,
       if ((result & NK_EDIT_COMMITED) != 0 && bmp_is_ip_address(state->IPaddr))
         reconnect = 1;
       nk_layout_row_push(ctx, BROWSEBTN_WIDTH);
-      if (button_symbol_tooltip(ctx, NK_SYMBOL_TRIPLE_DOT, NK_KEY_NONE, "Scan network for ctxLink probes.")) {
+      if (button_symbol_tooltip(ctx, NK_SYMBOL_TRIPLE_DOT, NK_KEY_NONE, nk_true, "Scan network for ctxLink probes.")) {
         #if defined WIN32 || defined _WIN32
           HCURSOR hcur = SetCursor(LoadCursor(NULL, IDC_WAIT));
         #endif
@@ -1032,9 +1052,13 @@ static void panel_options(struct nk_context *ctx, APPSTATE *state,
     }
     nk_layout_row_push(ctx, BROWSEBTN_WIDTH);
     if (nk_button_symbol(ctx, NK_SYMBOL_TRIPLE_DOT)) {
+      #if defined _WIN32
+        const char *filter = "ELF Executables\0*.elf;*.\0All files\0*.*\0";
+      #else
+        const char *filter = "ELF Executables\0*.elf\0All files\0*\0";
+      #endif
       int res = noc_file_dialog_open(state->ELFfile, sizearray(state->ELFfile),
-                                     NOC_FILE_DIALOG_OPEN,
-                                     "ELF Executables\0*.elf;*.bin;*.\0All files\0*.*\0",
+                                     NOC_FILE_DIALOG_OPEN, filter,
                                      NULL, state->ELFfile, "Select ELF Executable",
                                      guidriver_apphandle());
       if (res) {
@@ -1142,8 +1166,8 @@ static void panel_status(struct nk_context *ctx, APPSTATE *state,
 
 static void button_bar(struct nk_context *ctx, APPSTATE *state)
 {
-  nk_layout_row(ctx, NK_DYNAMIC, ROW_HEIGHT, 7, nk_ratio(7, 0.05, 0.23, 0.1, 0.23, 0.1, 0.23, 0.05));
-  nk_spacing(ctx, 1);
+  nk_layout_row(ctx, NK_DYNAMIC, ROW_HEIGHT, 4, nk_ratio(4, 0.25, 0.25, 0.25, 0.25));
+
   const char *ptr = (state->curstate == STATE_RUNNING) ? "Stop" : "Start";
   if (nk_button_label(ctx, ptr) || nk_input_is_key_pressed(&ctx->input, NK_KEY_F5)) {
     if (state->curstate == STATE_RUNNING)
@@ -1157,12 +1181,12 @@ static void button_bar(struct nk_context *ctx, APPSTATE *state)
     else
       state->curstate = STATE_RUN;
   }
-  nk_spacing(ctx, 1);
+
   if (nk_button_label(ctx, "Clear")) {
     profile_reset(state, true);
     state->capture_tstamp = get_timestamp();
   }
-  nk_spacing(ctx, 1);
+
   if (nk_button_label(ctx, "Save") || nk_input_is_key_pressed(&ctx->input, NK_KEY_SAVE)) {
     char path[_MAX_PATH];
     int res = noc_file_dialog_open(path, sizearray(path), NOC_FILE_DIALOG_SAVE,
@@ -1175,6 +1199,9 @@ static void button_bar(struct nk_context *ctx, APPSTATE *state)
       profile_save(path, state);
     }
   }
+
+  if (nk_button_label(ctx, "Help") || nk_input_is_key_pressed(&ctx->input, NK_KEY_F1))
+    state->help_popup = true;
 }
 
 static void handle_stateaction(APPSTATE *state)
@@ -1216,6 +1243,10 @@ static void handle_stateaction(APPSTATE *state)
     }
     break;
   case STATE_LOAD_DWARF:
+    if (!state->attached) {
+      state->curstate = STATE_IDLE;
+      break;
+    }
     if (strlen(state->ELFfile) == 0) {
       tracelog_statusmsg(TRACESTATMSG_BMP, "No ELF file given.", BMPSTAT_NOTICE);
     } else if (access(state->ELFfile, 0) != 0) {
@@ -1469,6 +1500,14 @@ int main(int argc, char *argv[])
       break;
     nk_input_end(ctx);
 
+    /* other events */
+    int dev_event = guidriver_monitor_usb(0x1d50, 0x6018);
+    if (dev_event != 0) {
+      if (dev_event == DEVICE_REMOVE)
+        bmp_disconnect();
+      appstate.curstate = STATE_CONNECT; /* BMP was inserted or removed */
+    }
+
     /* GUI */
     guidriver_appsize(&canvas_width, &canvas_height);
     if (nk_begin(ctx, "MainPanel", nk_rect(0, 0, canvas_width, canvas_height), NK_WINDOW_NO_SCROLLBAR)) {
@@ -1481,6 +1520,9 @@ int main(int argc, char *argv[])
 
       /* left column */
       if (nk_group_begin(ctx, "left", NK_WINDOW_NO_SCROLLBAR)) {
+        /* buttons */
+        button_bar(ctx, &appstate);
+
         /* profile graph */
         int events = traceprofile_process(appstate.curstate == STATE_RUNNING, appstate.sample_map,
                                           appstate.code_base, appstate.code_top,
@@ -1505,9 +1547,6 @@ int main(int argc, char *argv[])
         nk_layout_row_dynamic(ctx, canvas_height - ROW_HEIGHT - 3 * SPACING, 1);
         profile_graph(ctx, "graph", &appstate, opt_fontsize, NK_WINDOW_BORDER);
 
-        /* buttons */
-        button_bar(ctx, &appstate);
-
         nk_group_end(ctx);
       }
 
@@ -1521,6 +1560,9 @@ int main(int argc, char *argv[])
         panel_status(ctx, &appstate, tab_states, nk_hsplitter_colwidth(&splitter_hor, 1));
         nk_group_end(ctx);
       }
+
+      /* popup dialogs */
+      help_popup(ctx, &appstate, canvas_width, canvas_height);
 
       /* mouse cursor shape */
       if (nk_is_popup_open(ctx))

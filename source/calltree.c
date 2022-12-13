@@ -274,7 +274,7 @@ static void usage(int status)
 
 static void version(int status)
 {
-  printf("calltree version 1.1.%d.\n", SVNREV_NUM);
+  printf("calltree version %s.\n", SVNREV_STR);
   printf("Copyright 2022 CompuPhase\nLicensed under the Apache License version 2.0\n");
   exit(status);
 }

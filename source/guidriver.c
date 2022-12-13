@@ -2,7 +2,7 @@
  * Helper functions for the back-end driver for the Nuklear GUI. Currently, GDI+
  * (for Windows) and GLFW with OpenGL (for Linux) are supported.
  *
- * Copyright 2019-2020 CompuPhase
+ * Copyright 2019-2022 CompuPhase
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -18,9 +18,13 @@
  */
 #if defined _WIN32
   #define WIN32_LEAN_AND_MEAN
+  #define WINVER       0x0500 /* to enable RegisterDeviceNotification() */
+  #define _WIN32_WINNT 0x0501 /* for DEVICE_NOTIFY_ALL_INTERFACE_CLASSES */
   #include <windows.h>
+  #include <dbt.h>
 #elif defined __linux__
   #include <unistd.h>
+  #include <libusb-1.0/libusb.h>
 #endif
 
 #include <assert.h>
@@ -42,7 +46,12 @@
 static int fontType = 0;
 static GdipFont *fontStd = NULL;
 static GdipFont *fontMono = NULL;
+static GdipFont *fontHeading1 = NULL;
+static GdipFont *fontHeading2 = NULL;
+static GdipFont *fontSmall = NULL;
 static HWND hwndApp = NULL;
+static int UsbEvent = 0;
+static unsigned short UsbVid = 0, UsbPid = 0;
 
 static LRESULT CALLBACK WindowProc(HWND wnd, UINT msg, WPARAM wparam, LPARAM lparam)
 {
@@ -50,6 +59,26 @@ static LRESULT CALLBACK WindowProc(HWND wnd, UINT msg, WPARAM wparam, LPARAM lpa
   case WM_DESTROY:
     PostQuitMessage(0);
     return 0;
+  case WM_DEVICECHANGE:
+    if (wparam == DBT_DEVICEARRIVAL || wparam == DBT_DEVICEREMOVECOMPLETE) {
+      DEV_BROADCAST_DEVICEINTERFACE *hdr = (DEV_BROADCAST_DEVICEINTERFACE*)lparam;
+      if (hdr != NULL && hdr->dbcc_size >= sizeof(DEV_BROADCAST_DEVICEINTERFACE)) {
+        char name[256];
+        int i;
+        for (i = 0; i < sizeof(name) - 1 && ((short*)(hdr->dbcc_name))[i] != 0; i++)
+          name[i] = ((short*)(hdr->dbcc_name))[i];
+        name[i] = '\0';
+        const char *vid_p=strstr(name,"VID_");
+        const char *pid_p = strstr(name, "PID_");
+        if (vid_p != NULL && pid_p != NULL) {
+          int vid = (int)strtol(vid_p + 4, NULL, 16);
+          int pid = (int)strtol(pid_p + 4, NULL, 16);
+          if (vid == UsbVid && pid == UsbPid)
+            UsbEvent = (wparam == DBT_DEVICEARRIVAL) ? DEVICE_INSERT : DEVICE_REMOVE;
+        }
+      }
+    }
+    break;
   }
   if (nk_gdip_handle_event(wnd, msg, wparam, lparam))
     return 0;
@@ -75,7 +104,7 @@ static LRESULT CALLBACK WindowProc(HWND wnd, UINT msg, WPARAM wparam, LPARAM lpa
  *        size variable must be appicon_datasize.
  */
 struct nk_context* guidriver_init(const char *caption, int width, int height, int flags,
-                                  const char *fontstd, const char *fontmono, float fontsize)
+                                  const char *fontsystem, const char *fontmono, float fontsize)
 {
   struct nk_context *ctx;
   WNDCLASSW wc;
@@ -171,27 +200,38 @@ struct nk_context* guidriver_init(const char *caption, int width, int height, in
 
   ctx = nk_gdip_init(hwndApp, width, height);
 
-  fontStd = NULL;
-  if (fontstd != NULL && strlen(fontstd) > 0)
-    fontStd = nk_gdipfont_create(fontstd, fontsize);
-  if (fontStd == NULL)
-    fontStd = nk_gdipfont_create("Segoe UI", fontsize);
-  if (fontStd == NULL)
-    fontStd = nk_gdipfont_create("Tahoma", fontsize);
-  if (fontStd == NULL)
-    fontStd = nk_gdipfont_create("Arial", fontsize);
+  fontStd = fontHeading1 = fontHeading2 = fontSmall = NULL;
+  if (fontsystem != NULL && strlen(fontsystem) > 0)
+    fontStd = nk_gdipfont_create(fontsystem, fontsize, NK_FONTREGULAR);
+  if (fontStd == NULL) {
+    fontsystem = "Segoe UI";
+    fontStd = nk_gdipfont_create(fontsystem, fontsize, NK_FONTREGULAR);
+  }
+  if (fontStd == NULL) {
+    fontsystem = "Tahoma";
+    fontStd = nk_gdipfont_create(fontsystem, fontsize, NK_FONTREGULAR);
+  }
+  if (fontStd == NULL) {
+    fontsystem = "Microsoft Sans Serif";
+    fontStd = nk_gdipfont_create(fontsystem, fontsize, NK_FONTREGULAR);
+  }
+  if (fontStd != NULL) {
+    fontHeading1 = nk_gdipfont_create(fontsystem, 1.4*fontsize, NK_FONTBOLD);
+    fontHeading2 = nk_gdipfont_create(fontsystem, 1.2*fontsize, NK_FONTBOLDITALIC);
+    fontSmall = nk_gdipfont_create(fontsystem, 0.75*fontsize, NK_FONTREGULAR);
+  }
 
   fontMono = NULL;
   if (fontmono != NULL && strlen(fontmono) > 0)
-    fontMono = nk_gdipfont_create(fontmono, fontsize);
+    fontMono = nk_gdipfont_create(fontmono, fontsize, NK_FONTREGULAR);
   if (fontMono == NULL)
-    fontMono = nk_gdipfont_create("Hack", fontsize);
+    fontMono = nk_gdipfont_create("Hack", fontsize, NK_FONTREGULAR);
   if (fontMono == NULL)
-    fontMono = nk_gdipfont_create("DejaVu Sans Mono", fontsize);
+    fontMono = nk_gdipfont_create("DejaVu Sans Mono", fontsize, NK_FONTREGULAR);
   if (fontMono == NULL)
-    fontMono = nk_gdipfont_create("Consolas", fontsize);
+    fontMono = nk_gdipfont_create("Consolas", fontsize, NK_FONTREGULAR);
   if (fontMono == NULL)
-    fontMono = nk_gdipfont_create("Courier New", fontsize);
+    fontMono = nk_gdipfont_create("Courier New", fontsize, NK_FONTREGULAR);
 
   assert(fontStd != NULL);
   nk_gdipfont_set_voffset(fontStd, (-fontsize*0.2-0.5));
@@ -205,8 +245,16 @@ struct nk_context* guidriver_init(const char *caption, int width, int height, in
 void guidriver_close(void)
 {
   pointer_cleanup();
-  nk_gdipfont_del(fontStd);
-  nk_gdipfont_del(fontMono);
+  if (fontStd != NULL)
+    nk_gdipfont_del(fontStd);
+  if (fontMono != NULL)
+    nk_gdipfont_del(fontMono);
+  if (fontHeading1 != NULL)
+    nk_gdipfont_del(fontHeading1);
+  if (fontHeading2 != NULL)
+    nk_gdipfont_del(fontHeading2);
+  if (fontSmall != NULL)
+    nk_gdipfont_del(fontSmall);
   nk_gdip_shutdown();
   // UnregisterClassW(wc.lpszClassName, wc.hInstance);
 }
@@ -214,7 +262,7 @@ void guidriver_close(void)
 /** guidriver_setfont() switches font between standard (proportional) and
  *  monospaced.
  *  \param ctx    The Nuklear context.
- *  \param type   Either FONT_STD ot FONT_MONO.
+ *  \param type   Either FONT_STD, FONT_MONO or FONT_HEADINGx.
  *  \return The previous type.
  */
 int guidriver_setfont(struct nk_context *ctx, int type)
@@ -233,6 +281,27 @@ int guidriver_setfont(struct nk_context *ctx, int type)
     if (fontMono != NULL) {
       nk_gdipfont_set_voffset(fontMono, 0);
       nk_gdip_set_font(fontMono);
+      fontType = type;
+    }
+    break;
+  case FONT_HEADING1:
+    if (fontHeading1 != NULL) {
+      nk_gdipfont_set_voffset(fontHeading1, 0);
+      nk_gdip_set_font(fontHeading1);
+      fontType = type;
+    }
+    break;
+  case FONT_HEADING2:
+    if (fontHeading2 != NULL) {
+      nk_gdipfont_set_voffset(fontHeading2, 0);
+      nk_gdip_set_font(fontHeading2);
+      fontType = type;
+    }
+    break;
+  case FONT_SMALL:
+    if (fontSmall != NULL) {
+      nk_gdipfont_set_voffset(fontSmall, -2);
+      nk_gdip_set_font(fontSmall);
       fontType = type;
     }
     break;
@@ -284,6 +353,26 @@ int guidriver_poll(int waitidle)
   return 1;
 }
 
+int guidriver_monitor_usb(unsigned short vid, unsigned short pid)
+{
+  if (UsbVid != vid || UsbPid != pid) {
+    /* one-time initialization: register this window for insertion/removal messages */
+    DEV_BROADCAST_DEVICEINTERFACE filter;
+    memset(&filter, 0, sizeof filter);
+    filter.dbcc_size = sizeof(filter);
+    filter.dbcc_devicetype = DBT_DEVTYP_DEVICEINTERFACE;
+    RegisterDeviceNotification(hwndApp, &filter, DEVICE_NOTIFY_WINDOW_HANDLE | DEVICE_NOTIFY_ALL_INTERFACE_CLASSES);
+    UsbVid = vid;
+    UsbPid = pid;
+    UsbEvent = 0;
+  }
+
+  /* return & clear the flag */
+  int ret = UsbEvent;
+  UsbEvent = 0;
+  return ret;
+}
+
 void *guidriver_apphandle(void)
 {
   return &hwndApp;
@@ -300,6 +389,11 @@ static GLFWwindow *winApp;
 static int fontType = 0;
 static struct nk_font *fontStd = NULL;
 static struct nk_font *fontMono = NULL;
+static struct nk_font *fontHeading1 = NULL;
+static struct nk_font *fontHeading2 = NULL;
+static struct nk_font *fontSmall = NULL;
+static int UsbEvent = 0;
+static unsigned short UsbVid = 0, UsbPid = 0;
 
 static void error_callback(int e, const char *d)
 {
@@ -307,13 +401,14 @@ static void error_callback(int e, const char *d)
 }
 
 struct nk_context* guidriver_init(const char *caption, int width, int height, int flags,
-                                  const char *fontstd, const char *fontmono, float fontsize)
+                                  const char *fontsystem, const char *fontmono, float fontsize)
 {
   extern const unsigned char appicon_data[];
   extern const unsigned int appicon_datasize;
   struct nk_context *ctx;
   struct nk_font_config fontconfig;
   char path[256];
+  const char *fontname;
   GLFWimage icons[1];
 
   /* GLFW */
@@ -340,25 +435,51 @@ struct nk_context* guidriver_init(const char *caption, int width, int height, in
   fontconfig.pixel_snap = 1;    /* align characters to pixel boundary, to increase sharpness */
   fontconfig.oversample_h = 1;  /* disable horizontal oversampling, as recommended for pixel_snap */
 
-  if ((fontstd != NULL && strlen(fontstd) > 0 && font_locate(path, sizeof path, fontstd, ""))
-      || font_locate(path, sizeof path, "DejaVu Sans", "")
-      || font_locate(path, sizeof path, "Ubuntu", "")
-      || font_locate(path, sizeof path, "FreeSans", "")
-      || font_locate(path, sizeof path, "Liberation Sans", ""))
-  {
+  fontname = NULL;
+  if (fontsystem != NULL && strlen(fontsystem) > 0 && font_locate(path, sizeof path, fontsystem, ""))
+    fontname = fontsystem;
+  else if (font_locate(path, sizeof path, "DejaVu Sans", ""))
+    fontname = "DejaVu Sans";
+  else if (font_locate(path, sizeof path, "Ubuntu", ""))
+    fontname = "Ubuntu";
+  else if (font_locate(path, sizeof path, "FreeSans", ""))
+    fontname = "FreeSans";
+  else if (font_locate(path, sizeof path, "Liberation Sans", ""))
+    fontname = "Liberation Sans";
+
+  if (fontname != NULL) {
     struct nk_font_atlas *atlas;
+
+    font_locate(path, sizeof path, fontname, "");
     nk_glfw3_font_stash_begin(&atlas);
     fontStd = nk_font_atlas_add_from_file(atlas, path, fontsize, &fontconfig);
     nk_glfw3_font_stash_end();
-    /* Load Cursor: if you uncomment cursor loading please hide the cursor */
-    /*nk_style_load_all_cursors(ctx, atlas->cursors);*/
+
+    nk_glfw3_font_stash_begin(&atlas);
+    fontSmall = nk_font_atlas_add_from_file(atlas, path, 0.75*fontsize, &fontconfig);
+    nk_glfw3_font_stash_end();
+
+    font_locate(path, sizeof path, fontname, "Bold");
+    nk_glfw3_font_stash_begin(&atlas);
+    fontHeading1 = nk_font_atlas_add_from_file(atlas, path, 1.4*fontsize, &fontconfig);
+    nk_glfw3_font_stash_end();
+
+    font_locate(path, sizeof path, fontname, "Bold Italic");
+    nk_glfw3_font_stash_begin(&atlas);
+    fontHeading2 = nk_font_atlas_add_from_file(atlas, path, 1.2*fontsize, &fontconfig);
+    nk_glfw3_font_stash_end();
+
     if (fontStd != NULL)
       nk_style_set_font(ctx, &fontStd->handle);
+
+    /* Load Cursor: if you uncomment cursor loading please hide the cursor */
+    /*nk_style_load_all_cursors(ctx, atlas->cursors);*/
   }
+
   if ((fontmono != NULL && strlen(fontmono) > 0 && font_locate(path, sizeof path, fontmono, ""))
       || font_locate(path, sizeof path, "Hack", "")
       || font_locate(path, sizeof path, "Andale Mono", "")
-	  || font_locate(path, sizeof path, "FreeMono", "")
+      || font_locate(path, sizeof path, "FreeMono", "")
       || font_locate(path, sizeof path, "Liberation Mono", ""))
   {
     struct nk_font_atlas *atlas;
@@ -381,7 +502,7 @@ void guidriver_close(void)
 
 /** guidriver_setfont() switches font between standard (proportional) and
  *  monospaced.
- *  \param type   Either FONT_STD ot FONT_MONO.
+ *  \param type   Either FONT_STD, FONT_MONO or FONT_HEADINGx.
  *  \return The previous type.
  */
 int guidriver_setfont(struct nk_context *ctx, int type)
@@ -397,6 +518,24 @@ int guidriver_setfont(struct nk_context *ctx, int type)
   case FONT_MONO:
     if (fontMono != NULL) {
       nk_style_set_font(ctx, &fontMono->handle);
+      fontType = type;
+    }
+    break;
+  case FONT_HEADING1:
+    if (fontHeading1 != NULL) {
+      nk_style_set_font(ctx, &fontHeading1->handle);
+      fontType = type;
+    }
+    break;
+  case FONT_HEADING2:
+    if (fontHeading2 != NULL) {
+      nk_style_set_font(ctx, &fontHeading2->handle);
+      fontType = type;
+    }
+    break;
+  case FONT_SMALL:
+    if (fontSmall != NULL) {
+      nk_style_set_font(ctx, &fontSmall->handle);
       fontType = type;
     }
     break;
@@ -434,6 +573,36 @@ int guidriver_poll(int waitidle)
   glfwPollEvents();
   nk_glfw3_new_frame();
   return 1;
+}
+
+static int hotplug_callback(libusb_context *ctx, libusb_device *device,
+                            libusb_hotplug_event event, void *user_data)
+{
+  (void)ctx;
+  (void)device;
+  (void)user_data;
+  UsbEvent = (event == LIBUSB_HOTPLUG_EVENT_DEVICE_ARRIVED) ? DEVICE_INSERT : DEVICE_REMOVE;
+  return 0;
+}
+
+int guidriver_monitor_usb(unsigned short vid, unsigned short pid)
+{
+  if (UsbVid != vid || UsbPid != pid) {
+    /* one-time initialization: register this window for insertion/removal messages */
+    libusb_init(NULL);
+    if (libusb_has_capability(LIBUSB_CAP_HAS_HOTPLUG)) {
+      libusb_hotplug_callback_handle callback_handle;
+      libusb_hotplug_register_callback(NULL,
+                                       LIBUSB_HOTPLUG_EVENT_DEVICE_ARRIVED | LIBUSB_HOTPLUG_EVENT_DEVICE_LEFT,
+                                       0, vid, pid, LIBUSB_HOTPLUG_MATCH_ANY,
+                                       hotplug_callback, NULL, &callback_handle);
+    }
+    UsbVid = vid;
+    UsbPid = pid;
+    UsbEvent = 0;
+  }
+
+  return UsbEvent;
 }
 
 void *guidriver_apphandle(void)

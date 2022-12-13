@@ -81,12 +81,13 @@ void tracelog_statusmsg(int type, const char *msg, int code);
 void tracelog_statusclear(void);
 const char *tracelog_getstatusmsg(int idx);
 float tracelog_labelwidth(float rowheight);
-void tracelog_widget(struct nk_context *ctx, const char *id, float rowheight, int markline,
-                       const TRACEFILTER *filters, nk_flags widget_flags);
+void tracelog_widget(struct nk_context *ctx, const char *id, float rowheight, int limitlines,
+                     int markline, const TRACEFILTER *filters, nk_flags widget_flags);
 
 void timeline_getconfig(double *spacing, unsigned long *scale, unsigned long *delta);
 void timeline_setconfig(double spacing, unsigned long scale, unsigned long delta);
-double timeline_widget(struct nk_context *ctx, const char *id, float rowheight, nk_flags widget_flags);
+double timeline_widget(struct nk_context *ctx, const char *id, float rowheight,
+                       int limitlines, nk_flags widget_flags);
 
 double get_timestamp(void);
 

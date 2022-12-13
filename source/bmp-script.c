@@ -515,18 +515,12 @@ static const char *parseline(const char *line, const REG_DEF *registers, size_t 
  */
 int bmscript_load(const char *mcu, const char *arch)
 {
-  REG_DEF *registers = NULL;
-  size_t reg_size = 0, reg_count = 0;
-  SCRIPTLINE *lines = NULL;
-  size_t line_size = 0, line_count = 0;
-  SCRIPT *script;
-  char path[_MAX_PATH];
-  char arch_name[50];
-  FILE *fp;
-  unsigned idx;
+  assert(mcu != NULL);
 
   /* the name in the root is set to the MCU name, to detect double loading of
      the same script */
+  unsigned idx;
+  SCRIPT *script;
   if (script_root.name != NULL && strcmp(script_root.name, mcu) == 0) {
     idx = 0;
     for (script = script_root.next; script != NULL; script = script->next)
@@ -535,6 +529,7 @@ int bmscript_load(const char *mcu, const char *arch)
   }
   bmscript_clear();  /* unload any scripts loaded at this point */
 
+  char path[_MAX_PATH];
   if (folder_AppData(path, sizearray(path))) {
     strlcat(path, DIR_SEPARATOR "BlackMagic", sizearray(path));
     #if defined _MSC_VER
@@ -549,6 +544,8 @@ int bmscript_load(const char *mcu, const char *arch)
 
   /* create a list of registers, to use in script parsing
      first step: the hard-coded registers */
+  REG_DEF *registers = NULL;
+  size_t reg_size = 0, reg_count = 0;
   for (idx = 0; idx < sizearray(register_defaults); idx++) {
     if (mcu_match(mcu, register_defaults[idx].mcu_list)) {
       assert(reg_count <= reg_size);
@@ -573,6 +570,7 @@ int bmscript_load(const char *mcu, const char *arch)
   }
 
   /* second step: get the registers from the file */
+  FILE *fp;
   if (strlen(path) > 0 && (fp = fopen(path, "rt")) != NULL) {
     char line[512], regname[64], address[64], mcu_list[256];
     while (fgets(line, sizearray(line), fp) != NULL) {
@@ -627,14 +625,15 @@ int bmscript_load(const char *mcu, const char *arch)
     fclose(fp);
   }
 
+  char arch_name[50] = "";
   if (arch != NULL && strlen(arch) > 0) {
     assert(strlen(arch) < sizearray(arch_name) - 2);
     sprintf(arch_name, "[%s]", arch);
-  } else {
-    arch_name[0] = '\0';
   }
 
   /* interpret the scripts, first step: the hard-coded scripts */
+  SCRIPTLINE *lines = NULL;
+  size_t line_size = 0, line_count = 0;
   for (idx = 0; idx < sizearray(script_defaults); idx++) {
     if (mcu_match(mcu, script_defaults[idx].mcu_list)
         || (arch_name[0] != '\0' && mcu_match(arch_name, script_defaults[idx].mcu_list)))

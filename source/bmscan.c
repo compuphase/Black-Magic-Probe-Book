@@ -23,11 +23,21 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#if !defined _WIN32
+#if defined _WIN32
+  #define STRICT
+  #define WIN32_LEAN_AND_MEAN
+  #include <windows.h>
+  #if defined __MINGW32__ || defined __MINGW64__ || defined _MSC_VER
+    #include "strlcpy.h"
+  #endif
+#else
   #include <fcntl.h>
   #include <unistd.h>
+  #include <bsd/string.h>
 #endif
 #include "bmp-scan.h"
+#include "bmp-support.h"
+#include "gdb-rsp.h"
 #include "tcpip.h"
 #include "svnrev.h"
 
@@ -54,38 +64,97 @@ static void print_port(const char *portname)
   printf("%s", portname);
 }
 
-static int test_port(const char *portname)
+static HCOM *open_port(const char *portname)
 {
-  #if defined _WIN32
-    char localname[20];
-    HANDLE hcom;
-    if (strnicmp(portname, "COM", 3) == 0
-        && strlen(portname) >= 5
-        && strlen(portname) + 5 < sizearray(localname)
-        && isdigit(*(portname + 3)))
-    {
-      sprintf(localname, "\\\\.\\%s", portname);
-      portname = localname;
+  assert(portname != NULL);
+  HCOM *hCom = rs232_open(portname, 115200, 8, 1, PAR_NONE, FLOWCTRL_NONE);
+  if (!rs232_isopen(hCom))
+    hCom = NULL;
+  bmp_sethandle(hCom);
+  return hCom;
+}
+
+static void close_port(HCOM *hCom)
+{
+  assert(hCom != NULL);
+  rs232_close(hCom);
+  bmp_sethandle(NULL);
+}
+
+static bool check_probe(HCOM *hCom, char *versionstring, size_t maxlength)
+{
+  assert(hCom != NULL);
+  assert(versionstring != NULL);
+  assert(maxlength > 0);
+
+  /* toggle DTR, for the handshake */
+  rs232_setstatus(hCom, LINESTAT_RTS, 1);
+  rs232_setstatus(hCom, LINESTAT_DTR, 1); /* required by GDB RSP */
+
+  /* check for reception of the handshake */
+  char buffer[256];
+  size_t size = gdbrsp_recv(buffer, sizearray(buffer), 250);
+  if (size == 0) {
+    /* toggle DTR, to be sure */
+    rs232_setstatus(hCom, LINESTAT_RTS, 0);
+    rs232_setstatus(hCom, LINESTAT_DTR, 0);
+    #if defined _WIN32
+      Sleep(200);
+    #else
+      usleep(200 * 1000);
+    #endif
+    rs232_setstatus(hCom, LINESTAT_RTS, 1);
+    rs232_setstatus(hCom, LINESTAT_DTR, 1);
+    size = gdbrsp_recv(buffer, sizearray(buffer), 250);
+  }
+  if (size != 2 || memcmp(buffer, "OK", size) != 0) {
+    /* the expected handshake is missing, but we ignore this because the answer
+       to the version command is considered conclusive */
+    rs232_flush(hCom);
+  }
+
+  char line[512];
+  memset(line, 0, sizeof line);
+
+  gdbrsp_xmit("qRcmd,version", -1);
+  *versionstring = '\0';
+  for ( ;; ) {
+    char buffer[512];
+    size_t size = gdbrsp_recv(buffer, sizearray(buffer) - 1, 250);
+    if (size > 0) {
+      assert(size < sizearray(buffer));
+      buffer[size] = '\0';
+      char *ptr;
+      if (buffer[0] == 'o') {
+        if (line[0] == 'o')
+          strlcat(line, buffer + 1, sizearray(line));
+        else
+          strlcpy(line, buffer, sizearray(line));
+        if (strchr(line, '\n') != NULL) {
+          ptr = line + 1; /* skip 'o' */
+          if (strncmp(ptr, "Black Magic Probe", 17) == 0) {
+            ptr += 17;
+            while (*ptr != '\0' && *ptr <= ' ')
+              ptr += 1;
+            strlcpy(versionstring, ptr, maxlength);
+            if ((ptr = strchr(versionstring, '\n')) != NULL)
+              *ptr = '\0';
+          }
+          memset(line, 0, sizeof line);
+        }
+      } else if ((ptr = strchr(buffer, 'o')) != NULL) {
+        strlcpy(line, ptr, sizearray(line));
+      } else if (size == 2 && memcmp(buffer, "OK", size) == 0) {
+        /* end response found */
+        return true;
+      }
+    } else {
+      /* no new data arrived within the time-out, assume there is no more data */
+      return false;
     }
-    hcom = CreateFileA(portname, GENERIC_READ | GENERIC_WRITE, 0, NULL,
-                       OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
-    if (hcom != INVALID_HANDLE_VALUE)
-      CloseHandle(hcom);
-    return hcom != INVALID_HANDLE_VALUE;
-  #else
-    char localname[50];
-    int hcom;
-    if (strncmp(portname, "/dev/", 5) != 0
-        && strlen(portname) + 6 < sizearray(localname))
-    {
-      sprintf(localname, "/dev/%s", portname);
-      portname = localname;
-    }
-    hcom = open(portname, O_RDWR | O_NOCTTY | O_NONBLOCK | O_NDELAY);
-    if (hcom >= 0)
-      close(hcom);
-    return hcom >= 0;
-  #endif
+  }
+
+  return *versionstring != '\0';
 }
 
 int main(int argc, char *argv[])
@@ -120,7 +189,8 @@ int main(int argc, char *argv[])
            "                               for the second device\n"
            "          bmscan ip          - list all IP addresses on which a ctxLink probe\n"
            "                               is detected.\n\n"
-           "Version 1.1.%d, Copyright 2019-2022 CompuPhase.\nLicensed under the Apache License version 2.0.\n", SVNREV_NUM);
+           "Version %s, Copyright 2019-2022 CompuPhase.\nLicensed under the Apache License version 2.0.\n",
+           SVNREV_STR);
     return EXIT_SUCCESS;
   }
 
@@ -207,13 +277,20 @@ int main(int argc, char *argv[])
       printf("Unknown interface \"%s\"\n", iface);
     }
   } else {
-    char access_gdb[64] = "", access_term[64] = "";
     assert(!print_all || seqnr == 0); /* if seqnr were set, print_all is false */
     do {
+      char access_gdb[64] = "", access_term[64] = "";
+      char version[128] = "";
       /* print both ports of each Black Magic Probe */
       if (find_bmp(seqnr, BMP_IF_GDB, port_gdb, sizearray(port_gdb))) {
-        if (!test_port(port_gdb))
+        HCOM *hCom = open_port(port_gdb);
+        if (hCom != NULL) {
+          if (!check_probe(hCom, version, sizearray(version)))
+            strcpy(access_gdb, "[no response]");
+          close_port(hCom);
+        } else {
           strcpy(access_gdb, "[no access]");
+        }
       } else {
         if (print_all && seqnr > 0)
           break;  /* simply exit the do..while loop without giving a further message */
@@ -234,7 +311,10 @@ int main(int argc, char *argv[])
       }
 
       if (find_bmp(seqnr, BMP_IF_UART, port_term, sizearray(port_term))) {
-        if (!test_port(port_term))
+        HCOM *hCom = open_port(port_term);
+        if (hCom != NULL)
+          close_port(hCom);
+        else
           strcpy(access_term, "[no access]");
       } else {
         strcpy(port_term, "not detected");
@@ -242,9 +322,21 @@ int main(int argc, char *argv[])
       if (!find_bmp(seqnr, BMP_IF_TRACE, port_swo, sizearray(port_swo)))
         strcpy(port_swo, "not detected");
       if (!find_bmp(seqnr, BMP_IF_SERIAL, serial, sizearray(serial)))
-        strcpy(serial, "(unknown)");
+        serial[0] = '\0';
 
-      printf("\nBlack Magic Probe found, serial %s:\n", serial);
+      printf("\nBlack Magic Probe");
+      if (version[0] != '\0')
+        printf(" [Version: %s", version);
+      if (serial[0] != '\0') {
+        if (version[0] != '\0')
+          printf(", ");
+        else
+          printf(" [");
+        printf("Serial: %s", serial);
+      }
+      if (version[0] != '\0' || serial[0] != '\0')
+        printf("]");
+      printf("\n");
       printf("  gdbserver port: %s %s\n", port_gdb, access_gdb);
       printf("  TTL UART port:  %s %s\n", port_term, access_term);
       printf("  SWO interface:  %s\n", port_swo);

@@ -393,6 +393,7 @@ nk_stbtt_free(void *ptr, void *user_data) {
     (it can actually approximate a lot more functions) can be
     found here: www.lolengine.net/wiki/oss/lolremez
 */
+#ifdef NK_INCLUDE_VERTEX_BUFFER_OUTPUT
 NK_LIB float
 nk_inv_sqrt(float n)
 {
@@ -405,6 +406,7 @@ nk_inv_sqrt(float n)
     conv.f = conv.f * (threehalfs - (x2 * conv.f * conv.f));
     return conv.f;
 }
+#endif
 #ifndef NK_SIN
 #define NK_SIN nk_sin
 NK_LIB float
@@ -576,9 +578,22 @@ nk_pad_rect(struct nk_rect r, struct nk_vec2 pad)
 {
     r.w = NK_MAX(r.w, 2 * pad.x);
     r.h = NK_MAX(r.h, 2 * pad.y);
-    r.x += pad.x; r.y += pad.y;
+    r.x += pad.x;
+    r.y += pad.y;
     r.w -= 2 * pad.x;
     r.h -= 2 * pad.y;
+    return r;
+}
+NK_LIB struct nk_rect
+nk_square_rect(struct nk_rect r)
+{   /* force rect to be squared (centred inside its current outline) */
+    if (r.w > r.h) {
+        r.x += (r.w - r.h) / 2.0f;
+        r.w = r.h;
+    } else {
+        r.y += (r.h - r.w) / 2.0f;
+        r.h = r.w;
+    }
     return r;
 }
 NK_API struct nk_vec2
@@ -2691,7 +2706,6 @@ nk_str_append_text_utf8(struct nk_str *str, const char *text, int len)
 NK_API int
 nk_str_append_str_utf8(struct nk_str *str, const char *text)
 {
-    int runes = 0;
     int byte_len = 0;
     int num_runes = 0;
     int glyph_len = 0;
@@ -2705,7 +2719,7 @@ nk_str_append_str_utf8(struct nk_str *str, const char *text)
         num_runes++;
     }
     nk_str_append_text_char(str, text, byte_len);
-    return runes;
+    return num_runes;
 }
 NK_API int
 nk_str_append_text_runes(struct nk_str *str, const nk_rune *text, int len)
@@ -2820,7 +2834,6 @@ nk_str_insert_text_utf8(struct nk_str *str, int pos, const char *text, int len)
 NK_API int
 nk_str_insert_str_utf8(struct nk_str *str, int pos, const char *text)
 {
-    int runes = 0;
     int byte_len = 0;
     int num_runes = 0;
     int glyph_len = 0;
@@ -2834,7 +2847,7 @@ nk_str_insert_str_utf8(struct nk_str *str, int pos, const char *text)
         num_runes++;
     }
     nk_str_insert_at_rune(str, pos, text, byte_len);
-    return runes;
+    return num_runes;
 }
 NK_API int
 nk_str_insert_text_runes(struct nk_str *str, int pos, const nk_rune *runes, int len)
@@ -3558,6 +3571,94 @@ nk_draw_text(struct nk_command_buffer *b, struct nk_rect r,
     cmd->string[length] = '\0';
 }
 
+#define NK_SQRT_2   1.414213562f
+
+NK_API void
+nk_fill_slanted_bar(struct nk_command_buffer *b, struct nk_rect r, float thickness, nk_bool forward, struct nk_color c)
+{
+    float step = thickness * NK_SQRT_2/2; /* sqrt(2) / 2 */
+    nk_size size = sizeof(struct nk_command_polygon_filled) + sizeof(short) * 2 * 4;
+    struct nk_command_polygon_filled *cmdpoly = (struct nk_command_polygon_filled*)nk_command_buffer_push(b, NK_COMMAND_POLYGON_FILLED, size);
+    if (!cmdpoly)
+        return;
+    cmdpoly->color = c;
+    cmdpoly->point_count = 4;
+    if (forward) {
+        cmdpoly->points[0].x = r.x + r.w - step;
+        cmdpoly->points[0].y = r.y;
+        cmdpoly->points[1].x = r.x;
+        cmdpoly->points[1].y = r.y + r.h - step;
+        cmdpoly->points[2].x = r.x + step;
+        cmdpoly->points[2].y = r.y + r.h;
+        cmdpoly->points[3].x = r.x + r.w;
+        cmdpoly->points[3].y = r.y + step;
+    } else {
+        cmdpoly->points[0].x = r.x + step;
+        cmdpoly->points[0].y = r.y;
+        cmdpoly->points[1].x = r.x;
+        cmdpoly->points[1].y = r.y + step;
+        cmdpoly->points[2].x = r.x + r.w - step;
+        cmdpoly->points[2].y = r.y + r.h;
+        cmdpoly->points[3].x = r.x + r.w;
+        cmdpoly->points[3].y = r.y + r.h - step;
+    }
+}
+
+NK_API void
+nk_fill_slanted_oblong(struct nk_command_buffer *b, struct nk_rect r, float ratio, struct nk_color c)
+{
+    struct nk_command_circle_filled *cmddisk;
+    struct nk_command_polygon_filled *cmdpoly;
+    float radius, offs;
+    nk_size size = 0;
+
+    NK_ASSERT(b);
+    NK_ASSERT(ratio>0.0 && ratio<1.0);
+    if (!b || c.a == 0 || r.w == 0 || r.h == 0)
+        return;
+    if (b->use_clipping) {
+        const struct nk_rect *clip = &b->clip;
+        if (!NK_INTERSECT(r.x, r.y, r.w, r.h, clip->x, clip->y, clip->w, clip->h))
+            return;
+    }
+
+    /* the disks */
+    cmddisk = (struct nk_command_circle_filled*)nk_command_buffer_push(b, NK_COMMAND_CIRCLE_FILLED, sizeof(*cmddisk));
+    if (!cmddisk)
+        return;
+    cmddisk->x = (short)r.x;
+    cmddisk->y = (short)r.y + (1.0 - ratio) * r.h;
+    cmddisk->w = (unsigned short)NK_MAX(r.w * ratio, 0);
+    cmddisk->h = (unsigned short)NK_MAX(r.h * ratio, 0);
+    cmddisk->color = c;
+
+    cmddisk = (struct nk_command_circle_filled*)nk_command_buffer_push(b, NK_COMMAND_CIRCLE_FILLED, sizeof(*cmddisk));
+    if (!cmddisk)
+        return;
+    cmddisk->x = (short)r.x + (1.0 - ratio) * r.w;
+    cmddisk->y = (short)r.y;
+    cmddisk->w = (unsigned short)NK_MAX(r.w * ratio, 0);
+    cmddisk->h = (unsigned short)NK_MAX(r.h * ratio, 0);
+    cmddisk->color = c;
+
+    /* the polygon joining the disks */
+    radius = (r.w * ratio * 0.5);
+    offs = radius * NK_SQRT_2/2;   /* sqrt(2) / 2 */
+    size = sizeof(*cmdpoly) + sizeof(short) * 2 * 4;
+    cmdpoly = (struct nk_command_polygon_filled*)nk_command_buffer_push(b, NK_COMMAND_POLYGON_FILLED, size);
+    if (!cmdpoly)
+        return;
+    cmdpoly->color = c;
+    cmdpoly->point_count = 4;
+    cmdpoly->points[0].x = (r.x + radius) - offs + 0.5;
+    cmdpoly->points[0].y = (r.y + r.h - radius) - offs + 0.5;
+    cmdpoly->points[1].x = (r.x + radius) + offs + 0.5;
+    cmdpoly->points[1].y = (r.y + r.h - radius) + offs + 0.5;
+    cmdpoly->points[2].x = (r.x + r.w - radius) + offs + 0.5;
+    cmdpoly->points[2].y = (r.y + radius) + offs + 0.5;
+    cmdpoly->points[3].x = (r.x + r.w - radius) - offs + 0.5;
+    cmdpoly->points[3].y = (r.y + radius) - offs + 0.5;
+}
 
 
 
@@ -12380,7 +12481,7 @@ nk_style_from_table(struct nk_context *ctx, const struct nk_color *table)
     toggle->text_active     = table[NK_COLOR_TEXT];
     toggle->padding         = nk_vec2(2.0f, 2.0f);
     toggle->touch_padding   = nk_vec2(0,0);
-    toggle->border_color    = nk_rgba(0,0,0,0);
+    toggle->border_color    = table[NK_COLOR_BORDER];
     toggle->border          = 0.0f;
     toggle->spacing         = 4;
 
@@ -12399,7 +12500,7 @@ nk_style_from_table(struct nk_context *ctx, const struct nk_color *table)
     toggle->text_active     = table[NK_COLOR_TEXT];
     toggle->padding         = nk_vec2(3.0f, 3.0f);
     toggle->touch_padding   = nk_vec2(0,0);
-    toggle->border_color    = nk_rgba(0,0,0,0);
+    toggle->border_color    = table[NK_COLOR_BORDER];
     toggle->border          = 0.0f;
     toggle->spacing         = 4;
 
@@ -12480,13 +12581,13 @@ nk_style_from_table(struct nk_context *ctx, const struct nk_color *table)
     prog->cursor_normal     = nk_style_item_color(table[NK_COLOR_SLIDER_CURSOR]);
     prog->cursor_hover      = nk_style_item_color(table[NK_COLOR_SLIDER_CURSOR_HOVER]);
     prog->cursor_active     = nk_style_item_color(table[NK_COLOR_SLIDER_CURSOR_ACTIVE]);
-    prog->border_color      = nk_rgba(0,0,0,0);
-    prog->cursor_border_color = nk_rgba(0,0,0,0);
+    prog->border_color      = table[NK_COLOR_BORDER];
+    prog->cursor_border_color = table[NK_COLOR_BORDER];
     prog->userdata          = nk_handle_ptr(0);
-    prog->padding           = nk_vec2(4,4);
+    prog->padding           = nk_vec2(2,2);
     prog->rounding          = 0;
     prog->border            = 0;
-    prog->cursor_rounding   = 0;
+    prog->cursor_rounding   = 4;
     prog->cursor_border     = 0;
     prog->draw_begin        = 0;
     prog->draw_end          = 0;
@@ -16596,7 +16697,8 @@ nk_tree_state_base(struct nk_context *ctx, enum nk_tree_type type,
     text.text = style->tab.text;
     text.padding = nk_vec2(0,0);
     nk_widget_text(out, label, title, nk_strlen(title), &text,
-        NK_TEXT_LEFT, style->font);}
+                   NK_TEXT_LEFT, style->font);
+    }
 
     /* increase x-axis cursor widget position pointer */
     if (*state == NK_MAXIMIZED) {
@@ -17558,8 +17660,9 @@ nk_symbol_colored(struct nk_context *ctx, enum nk_symbol_type type,
 
     size = NK_MIN(bounds.w - 2 * padding.x, bounds.h - 2 * padding.y);
     size = NK_MIN(size, font->height);
+    height = size;
+    width = (alignment & NK_TEXT_ALIGN_EXPANDX) ? bounds.w - 2*padding.x : size;
     repeat = (alignment >> 24) & 0xff;
-    width = height = size;
     if (repeat > 0) {
         if (alignment & NK_SYMBOL_VERTICAL)
             height = (2 * repeat - 1) * size;
@@ -17603,6 +17706,15 @@ NK_API void
 nk_symbol(struct nk_context *ctx, enum nk_symbol_type type, nk_flags alignment)
 {
     nk_symbol_colored(ctx, type, alignment, ctx->style.text.color);
+}
+NK_API void
+nk_rule_horizontal(struct nk_context *ctx, struct nk_color color, nk_bool rounding)
+{
+    struct nk_rect space;
+    enum nk_widget_layout_states state = nk_widget(&space, ctx);
+    struct nk_command_buffer *canvas = nk_window_get_canvas(ctx);
+    if (!state) return;
+    nk_fill_rect(canvas, space, rounding && space.h > 1.5f ? space.h / 2.0f : 0, color);
 }
 #ifdef NK_INCLUDE_STANDARD_VARARGS
 NK_API void
@@ -17906,72 +18018,32 @@ nk_draw_symbol(struct nk_command_buffer *out, enum nk_symbol_type type,
     float border_width, const struct nk_user_font *font)
 {
     #define SYMBOL_MARGIN   0.2
-    #define SYMBOL_TRACE    0.2f
+    #define SYMBOL_TRACE    0.2f    /* thickness of the trace, relative to the symbol size */
     switch (type) {
     case NK_SYMBOL_X: {
-        float margin, step;
-        float points[4 * 2];
-        /* make the bounding box rectangular */
-        if (content.w > content.h) {
-            content.x += (content.w - content.h) / 2.0f;
-            content.w = content.h;
-        } else {
-            content.y += (content.h - content.w) / 2.0f;
-            content.h = content.w;
-        }
-        /* add a margin (make the symbol smaller than the control) */
-        margin = SYMBOL_MARGIN * content.w;
-        content.x += margin;
-        content.y += margin;
-        content.w -= 2 * margin;
-        content.h -= 2 * margin;
-        step = content.w * SYMBOL_TRACE * 0.7071f;
-        /* backward slash */
-        points[ 0*2  ] = content.x + step;
-        points[ 0*2+1] = content.y + 0.0f;
-        points[ 1*2  ] = content.x + 0.0f;
-        points[ 1*2+1] = content.y + step;
-        points[ 2*2  ] = content.x + content.w - step;
-        points[ 2*2+1] = content.y + content.h;
-        points[ 3*2  ] = content.x + content.w;
-        points[ 3*2+1] = content.y + content.h - step;
-        nk_fill_polygon(out, points, 4, foreground);
-        /* forward slash */
-        points[ 0*2  ] = content.x + 0.0f;
-        points[ 0*2+1] = content.y + content.h - step;
-        points[ 1*2  ] = content.x + step;
-        points[ 1*2+1] = content.y + content.h;
-        points[ 2*2  ] = content.x + content.w;
-        points[ 2*2+1] = content.y + step;
-        points[ 3*2  ] = content.x + content.w - step;
-        points[ 3*2+1] = content.y + 0.0f;
-        nk_fill_polygon(out, points, 4, foreground);
+        /* make the bounding box rectangular, then add a margin on all sides
+           (make the symbol smaller than the control) */
+        content = nk_square_rect(content);
+        content = nk_shrink_rect(content, SYMBOL_MARGIN * content.w);
+        nk_fill_slanted_bar(out, content, content.w * SYMBOL_TRACE, nk_false, foreground);  /* backward slash */
+        nk_fill_slanted_bar(out, content, content.w * SYMBOL_TRACE, nk_true, foreground);   /* forward slash */
     } break;
     case NK_SYMBOL_UNDERSCORE:
     case NK_SYMBOL_MINUS:
     case NK_SYMBOL_PLUS: {
         struct nk_rect rcbar;
-        float margin;
-        /* make the bounding box rectangular */
-        if (content.w > content.h) {
-            content.x += (content.w - content.h) / 2.0f;
-            content.w = content.h;
-        } else {
-            content.y += (content.h - content.w) / 2.0f;
-            content.h = content.w;
-        }
-        /* add a margin (make the symbol smaller than the control) */
-        margin = SYMBOL_MARGIN * content.w;
-        content.x += margin;
-        content.y += margin;
-        content.w -= 2 * margin - 0.5f;
-        content.h -= 2 * margin - 0.5f;
-        /* horizontal */
+        /* make the bounding box rectangular, then add a margin on all sides
+           (make the symbol smaller than the control) */
+        content = nk_square_rect(content);
+        content = nk_shrink_rect(content, SYMBOL_MARGIN * content.w);
+        content.w += 0.5f;
+        content.h += 0.5f;
+        /* horizontal bar */
         rcbar = content;
         rcbar.h = content.h * SYMBOL_TRACE;
         rcbar.y += (type != NK_SYMBOL_UNDERSCORE) ? (content.h - rcbar.h) / 2.0f : (content.h - rcbar.h - 1);
         nk_fill_rect(out, rcbar,  0, foreground);
-        /* vertical */
+        /* vertical bar */
         if (type == NK_SYMBOL_PLUS) {
             rcbar = content;
             rcbar.w = content.w * SYMBOL_TRACE;
@@ -17981,6 +18053,8 @@ nk_draw_symbol(struct nk_command_buffer *out, enum nk_symbol_type type,
     } break;
     case NK_SYMBOL_CIRCLE_SOLID:
     case NK_SYMBOL_CIRCLE_OUTLINE:
+    case NK_SYMBOL_CIRCLE_SOLID_SMALL:
+    case NK_SYMBOL_CIRCLE_OUTLINE_SMALL:
     case NK_SYMBOL_RECT_SOLID:
     case NK_SYMBOL_RECT_OUTLINE: {
         /* simple empty/filled shapes */
@@ -17989,13 +18063,10 @@ nk_draw_symbol(struct nk_command_buffer *out, enum nk_symbol_type type,
             if (type == NK_SYMBOL_RECT_OUTLINE)
                 nk_fill_rect(out, nk_shrink_rect(content, border_width), 0, background);
         } else {
-            if (content.w > content.h) {
-                content.x += (content.w - content.h) / 2.0f;
-                content.w = content.h;
-            } else {
-                content.y += (content.h - content.w) / 2.0f;
-                content.h = content.w;
-            }
+            /* circles: make the bounding box rectangular */
+            content = nk_square_rect(content);
+            if (type == NK_SYMBOL_CIRCLE_SOLID_SMALL || type == NK_SYMBOL_CIRCLE_OUTLINE_SMALL)
+                content = nk_shrink_rect(content, 3);
             nk_fill_circle(out, content, foreground);
             if (type == NK_SYMBOL_CIRCLE_OUTLINE)
                 nk_fill_circle(out, nk_shrink_rect(content, 1), background);
@@ -18028,6 +18099,30 @@ nk_draw_symbol(struct nk_command_buffer *out, enum nk_symbol_type type,
             nk_fill_circle(out, rcdot, foreground);
             rcdot.x += 2 * rcdot.w;
         }
+    } break;
+    case NK_SYMBOL_LINK: {  /* made to look similar to Unicode U+1F517 (absent in nearly every font) */
+        int trace;
+        /* make the bounding box rectangular */
+        content = nk_square_rect(content);
+        trace = (int)(content.w / 10);
+        nk_fill_slanted_oblong(out, content, 0.5, foreground);
+        nk_fill_slanted_oblong(out, nk_shrink_rect(content, trace), 0.5, background);
+        nk_fill_slanted_bar(out, nk_shrink_rect(content, 2*trace), 5*trace, nk_false, background);
+        nk_fill_slanted_oblong(out, nk_shrink_rect(content, 4*trace), 0.2, foreground);
+    } break;
+    case NK_SYMBOL_LINK_ALT: {  /* made to look similar to Unicode UU+29C9, "joined squares" (absent in most fonts) */
+        struct nk_rect rcsquare;
+        int trace;
+        /* make the bounding box rectangular */
+        content = nk_square_rect(content);
+        trace = (int)(content.w / 10);
+        rcsquare.w = rcsquare.h = content.w * (2.0f/3.0f);
+        rcsquare.x = content.x;
+        rcsquare.y = content.y;
+        nk_stroke_rect(out, rcsquare, 0, trace, foreground);
+        rcsquare.x = content.x + content.w - rcsquare.w;
+        rcsquare.y = content.y + content.h - rcsquare.h;
+        nk_stroke_rect(out, rcsquare, 0, trace, foreground);
     } break;
     default:
     case NK_SYMBOL_NONE:
@@ -18698,13 +18793,15 @@ nk_draw_checkbox(struct nk_command_buffer *out,
 
     /* draw background and cursor */
     if (background->type == NK_STYLE_ITEM_COLOR) {
-        nk_fill_rect(out, *selector, 0, style->border_color);
-        nk_fill_rect(out, nk_shrink_rect(*selector, style->border), 0, background->data.color);
-    } else nk_draw_image(out, *selector, &background->data.image, nk_white);
+        nk_fill_rect(out, *selector, 0, background->data.color);
+        nk_stroke_rect(out, *selector, 2, 1, style->border_color);
+    } else
+	    nk_draw_image(out, *selector, &background->data.image, nk_white);
     if (active) {
         if (cursor->type == NK_STYLE_ITEM_IMAGE)
             nk_draw_image(out, *cursors, &cursor->data.image, nk_white);
-        else nk_fill_rect(out, *cursors, 0, cursor->data.color);
+        else
+            nk_fill_rect(out, *cursors, 0, cursor->data.color);
     }
 
     text.padding.x = 0;
@@ -18740,13 +18837,15 @@ nk_draw_option(struct nk_command_buffer *out,
 
     /* draw background and cursor */
     if (background->type == NK_STYLE_ITEM_COLOR) {
-        nk_fill_circle(out, *selector, style->border_color);
-        nk_fill_circle(out, nk_shrink_rect(*selector, style->border), background->data.color);
-    } else nk_draw_image(out, *selector, &background->data.image, nk_white);
+	    nk_fill_circle(out, *selector, background->data.color);
+        nk_stroke_circle(out, *selector, 1, style->border_color);
+    } else
+	    nk_draw_image(out, *selector, &background->data.image, nk_white);
     if (active) {
         if (cursor->type == NK_STYLE_ITEM_IMAGE)
             nk_draw_image(out, *cursors, &cursor->data.image, nk_white);
-        else nk_fill_circle(out, *cursors, cursor->data.color);
+        else
+            nk_fill_circle(out, *cursors, cursor->data.color);
     }
 
     text.padding.x = 0;
@@ -19622,9 +19721,10 @@ nk_draw_progress(struct nk_command_buffer *out, nk_flags state,
 
     /* draw cursor */
     if (cursor->type == NK_STYLE_ITEM_COLOR) {
-        nk_fill_rect(out, *scursor, style->rounding, cursor->data.color);
-        nk_stroke_rect(out, *scursor, style->rounding, style->border, style->border_color);
-    } else nk_draw_image(out, *scursor, &cursor->data.image, nk_white);
+        nk_fill_rect(out, *scursor, style->cursor_rounding, cursor->data.color);
+        nk_stroke_rect(out, *scursor, style->cursor_rounding, style->cursor_border, style->cursor_border_color);
+    } else
+        nk_draw_image(out, *scursor, &cursor->data.image, nk_white);
 }
 NK_LIB nk_size
 nk_do_progress(nk_flags *state,
@@ -19642,14 +19742,9 @@ nk_do_progress(nk_flags *state,
     if (!out || !style) return 0;
 
     /* calculate progressbar outer rect */
-    outer.w = NK_MAX(bounds.w, 2 * (style->margin.x + style->border ) );
-    outer.h = NK_MAX(bounds.h, 2 * (style->margin.y + style->border ) );
     outer = nk_pad_rect(bounds, nk_vec2(style->margin.x + style->border,
                                         style->margin.y + style->border));
-
     /* calculate progressbar cursor */
-    cursor.w = NK_MAX(bounds.w, 2 * (style->padding.x + style->margin.x + style->border ) );
-    cursor.h = NK_MAX(bounds.h, 2 * (style->padding.y + style->margin.y + style->border ) );
     cursor = nk_pad_rect(bounds, nk_vec2(style->padding.x + style->margin.x + style->border,
                                          style->padding.y + style->margin.y + style->border));
     prog_scale = (float)value / (float)max;
@@ -23888,6 +23983,8 @@ nk_is_popup_open(struct nk_context *ctx)
 ///    - [yy]: Minor version with non-breaking API and library changes
 ///    - [zz]: Bug fix version with no direct changes to API
 ///
+/// - 2022/10/03 (4.10.4) - Updated the look and feel of checkboxes and radio buttons to be more distinguishable
+/// - 2022/04/19 (4.09.8) - Added nk_rule_horizontal() widget
 /// - 2021/03/17 (4.07.0) - Fix nk_property hover bug
 /// - 2021/03/15 (4.06.4) - Change nk_propertyi back to int
 /// - 2021/03/15 (4.06.3) - Update documentation for functions that now return nk_bool

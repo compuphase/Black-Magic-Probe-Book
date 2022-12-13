@@ -309,6 +309,7 @@ nk_glfw3_new_frame(void)
     nk_input_key(ctx, NK_KEY_ENTER,         plain && glfwGetKey(win, GLFW_KEY_ENTER) == GLFW_PRESS);
     nk_input_key(ctx, NK_KEY_TAB,           plain && glfwGetKey(win, GLFW_KEY_TAB) == GLFW_PRESS);
     nk_input_key(ctx, NK_KEY_BACKSPACE,     plain && glfwGetKey(win, GLFW_KEY_BACKSPACE) == GLFW_PRESS);
+    nk_input_key(ctx, NK_KEY_ESCAPE,        plain && glfwGetKey(win, GLFW_KEY_ESCAPE) == GLFW_PRESS);
     nk_input_key(ctx, NK_KEY_UP,            plain && glfwGetKey(win, GLFW_KEY_UP) == GLFW_PRESS);
     nk_input_key(ctx, NK_KEY_DOWN,          plain && glfwGetKey(win, GLFW_KEY_DOWN) == GLFW_PRESS);
     nk_input_key(ctx, NK_KEY_TEXT_START,    plain && glfwGetKey(win, GLFW_KEY_HOME) == GLFW_PRESS);

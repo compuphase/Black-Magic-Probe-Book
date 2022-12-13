@@ -19,22 +19,28 @@
 #if defined _WIN32
   #define WIN32_LEAN_AND_MEAN
   #include <windows.h>
+  #include <mmsystem.h>
 #elif defined __linux__
   #include <sys/time.h>
 #endif
+#include <stdbool.h>
 #include <string.h>
 #include "nuklear_tooltip.h"
 
-/* timestamp() returns the timestamp in ms (under Windows, the granularity of
-   the timestamp is 55ms, which is not great, but good enough for tooltips */
+/* timestamp() returns the timestamp (time since start-up) in ms */
 unsigned long timestamp(void)
 {
-  #if defined WIN32 || defined _WIN32
-    return GetTickCount();  /* 55ms granularity, but good enough */
+  #if defined _WIN32
+    static bool init = true;
+    if (init) {
+      timeBeginPeriod(1); /* force millisecond resolution */
+      init = false;
+    }
+    return timeGetTime();
   #else
-    struct timeval  tv;
+    struct timeval tv;
     gettimeofday(&tv, NULL);
-    return tv.tv_sec * 1000 + tv.tv_usec / 1000;
+    return 1000 * tv.tv_sec + tv.tv_usec / 1000;
   #endif
 }
 
@@ -107,21 +113,40 @@ nk_bool button_tooltip(struct nk_context *ctx, const char *title,
     nk_style_pop_color(ctx);
     nk_style_pop_color(ctx);
     nk_style_pop_color(ctx);
-    result = nk_false;  /* any input us to be ignored */
+    result = nk_false;  /* any input is to be ignored */
   }
 
   return result;
 }
 
-nk_bool button_symbol_tooltip(struct nk_context *ctx, enum nk_symbol_type symbol, enum nk_keys hotkey,
-                              const char *tiptext)
+nk_bool button_symbol_tooltip(struct nk_context *ctx, enum nk_symbol_type symbol,
+                              enum nk_keys hotkey, nk_bool enabled, const char *tiptext)
 {
   struct nk_rect bounds = nk_widget_bounds(ctx);
+  struct nk_style_button *style = &ctx->style.button;
+  if (!enabled) {
+    nk_style_push_color(ctx, &style->text_normal, style->text_disabled);
+    nk_style_push_color(ctx, &style->text_hover, style->text_disabled);
+    nk_style_push_color(ctx, &style->text_active, style->text_disabled);
+    nk_style_push_color(ctx, &style->hover.data.color, style->normal.data.color);
+    nk_style_push_color(ctx, &style->active.data.color, style->normal.data.color);
+  }
+
   nk_bool result = nk_button_symbol(ctx, symbol);
   if (tiptext != NULL)
     tooltip(ctx, bounds, tiptext);
   if (!result && hotkey != NK_KEY_NONE)
     result = nk_input_is_key_pressed(&ctx->input, hotkey);
+
+  if (!enabled) {
+    nk_style_pop_color(ctx);
+    nk_style_pop_color(ctx);
+    nk_style_pop_color(ctx);
+    nk_style_pop_color(ctx);
+    nk_style_pop_color(ctx);
+    result = nk_false;  /* any input is to be ignored */
+  }
+
   return result;
 }
 
@@ -138,7 +163,7 @@ nk_bool option_tooltip(struct nk_context *ctx, const char *label, nk_bool active
                        const char *tiptext)
 {
   struct nk_rect bounds = nk_widget_bounds(ctx);
-  nk_bool result =nk_option_text(ctx, label, nk_strlen(label), active, align);
+  nk_bool result = nk_option_text(ctx, label, nk_strlen(label), active, align);
   tooltip(ctx, bounds, tiptext);
   return result;
 }

@@ -3,7 +3,7 @@
  * micro-controllers. At this moment, the utility supports various ranges
  * of the LPC family by NXP.
  *
- * Copyright 2019-2021 CompuPhase
+ * Copyright 2019-2022 CompuPhase
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -52,7 +52,7 @@ static void usage(int flags)
 
 static void version(void)
 {
-  printf("elf-postlink version 1.1.%d.\n", SVNREV_NUM);
+  printf("elf-postlink version %s.\n", SVNREV_STR);
   printf("Copyright 2019-2022 CompuPhase\nLicensed under the Apache License version 2.0\n");
 }
 

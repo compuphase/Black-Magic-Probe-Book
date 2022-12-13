@@ -138,36 +138,45 @@ bool bmp_connect(int probe, const char *ipaddress)
     /* serial port is selected, and it is currently not open */
     FlashRgnCount = 0;
     if (find_bmp(probe, BMP_IF_GDB, devname, sizearray(devname))) {
-      char buffer[256];
+      char buffer[512];
       size_t size;
       /* connect to the port */
-      hCom = rs232_open(devname, 115200, 8, 1, PAR_NONE);
+      hCom = rs232_open(devname, 115200, 8, 1, PAR_NONE, FLOWCTRL_NONE);
       if (!rs232_isopen(hCom)) {
         notice(BMPERR_PORTACCESS, "Failure opening port %s", devname);
         return false;
       }
-      rs232_rts(hCom, 1);
-      rs232_dtr(hCom, 1); /* required by GDB RSP */
+      rs232_setstatus(hCom, LINESTAT_RTS, 1);
+      rs232_setstatus(hCom, LINESTAT_DTR, 1); /* required by GDB RSP */
       /* check for reception of the handshake */
-      size = gdbrsp_recv(buffer, sizearray(buffer), 500);
+      size = gdbrsp_recv(buffer, sizearray(buffer), 250);
       if (size == 0) {
         /* toggle DTR, to be sure */
-        rs232_rts(hCom, 0);
-        rs232_dtr(hCom, 0);
+        rs232_setstatus(hCom, LINESTAT_RTS, 0);
+        rs232_setstatus(hCom, LINESTAT_DTR, 0);
         #if defined _WIN32
           Sleep(200);
         #else
           usleep(200 * 1000);
         #endif
-        rs232_rts(hCom, 1);
-        rs232_dtr(hCom, 1);
-        size = gdbrsp_recv(buffer, sizearray(buffer), 500);
+        rs232_setstatus(hCom, LINESTAT_RTS, 0);
+        rs232_setstatus(hCom, LINESTAT_DTR, 1);
+        size = gdbrsp_recv(buffer, sizearray(buffer), 250);
       }
       if (size != 2 || memcmp(buffer, "OK", size)!= 0) {
-        notice(BMPERR_NORESPONSE, "No response on %s", devname);
-        rs232_close(hCom);
-        hCom = NULL;
-        return false;
+        /* send "monitor version" command to check for a response (ignore the
+           text of the response, only check for the "OK" end code) */
+        rs232_flush(hCom);
+        gdbrsp_xmit("qRcmd,version", -1);
+        do {
+          size=gdbrsp_recv(buffer, sizearray(buffer)-1, 250);
+        } while (size > 0 && size != 2);
+        if (size != 2 || memcmp(buffer, "OK", size)!= 0) {
+          notice(BMPERR_NORESPONSE, "No response on %s", devname);
+          rs232_close(hCom);
+          hCom = NULL;
+          return false;
+        }
       }
       initialize = true;
     }
@@ -235,8 +244,8 @@ bool bmp_disconnect(void)
   bool result = false;
 
   if (rs232_isopen(hCom)) {
-    rs232_dtr(hCom, 0);
-    rs232_rts(hCom, 0);
+    rs232_setstatus(hCom, LINESTAT_RTS, 0);
+    rs232_setstatus(hCom, LINESTAT_DTR, 0);
     rs232_close(hCom);
     hCom = NULL;
     result = true;
@@ -248,8 +257,17 @@ bool bmp_disconnect(void)
   return result;
 }
 
-/** bmp_comport() returns the virtual COM port for gdbserver, or NULL if the
- *  connection is over TCP/IP.
+/** bmp_sethandle() sets a COM handle to use for the communication with the
+ *  Black Magic Probe (for those applications that open the RS232 port by other
+ *  means than bmp_connect()).
+ */
+void bmp_sethandle(HCOM *hcom)
+{
+  hCom = hcom;
+}
+
+/** bmp_comport() returns the COM port handle for gdbserver. It returns NULL if
+ *  the connection is over TCP/IP, or if no connection is open.
  */
 HCOM *bmp_comport(void)
 {

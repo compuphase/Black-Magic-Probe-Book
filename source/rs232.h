@@ -1,6 +1,7 @@
-/*  rs232 - RS232 support, limited to the functions that the GDB RSP needs
+/*
+ *  rs232 - RS232 support, limited to the functions that the GDB RSP needs.
  *
- *  Copyright 2012-2021, CompuPhase
+ *  Copyright 2012-2022, CompuPhase
  *
  *  Licensed under the Apache License, Version 2.0 (the "License"); you may not
  *  use this file except in compliance with the License. You may obtain a copy
@@ -28,20 +29,39 @@
 #endif /* _WIN32 */
 
 enum {
-  PAR_NONE = 1,
+  PAR_NONE = 0,
   PAR_ODD,
   PAR_EVEN,
+  PAR_MARK,
+  PAR_SPACE,
 };
 
-HCOM*  rs232_open(const char *port, unsigned baud, int databits, int stopbits, int parity);
-void   rs232_close(HCOM *hCom);
-int    rs232_isopen(const HCOM *hCom);
-size_t rs232_xmit(HCOM *hCom, const unsigned char *buffer, size_t size);
-size_t rs232_recv(HCOM *hCom, unsigned char *buffer, size_t size);
-void   rs232_flush(HCOM *hCom);
-void   rs232_break(HCOM *hCom);
-void   rs232_dtr(HCOM *hCom, int set);
-void   rs232_rts(HCOM *hCom, int set);
+enum {
+  FLOWCTRL_NONE,
+  FLOWCTRL_RTSCTS,  /* RTS / CTS */
+  FLOWCTRL_XONXOFF, /* XON / XOFF */
+};
+
+#define LINESTAT_RTS    0x0001
+#define LINESTAT_DTR    0x0002
+#define LINESTAT_CTS    0x0004
+#define LINESTAT_DSR    0x0008
+#define LINESTAT_RI     0x0010
+#define LINESTAT_CD     0x0020
+#define LINESTAT_ERR    0x0040
+#define LINESTAT_BREAK  0x0080  /* remote host sent break */
+#define LINESTAT_LBREAK 0x0100  /* local host sent break */
+
+HCOM*    rs232_open(const char *port, unsigned baud, int databits, int stopbits, int parity, int flowctrl);
+void     rs232_close(HCOM *hCom);
+int      rs232_isopen(const HCOM *hCom);
+size_t   rs232_xmit(HCOM *hCom, const unsigned char *buffer, size_t size);
+size_t   rs232_recv(HCOM *hCom, unsigned char *buffer, size_t size);
+void     rs232_flush(HCOM *hCom);
+void     rs232_setstatus(HCOM *hCom, int code, int status);
+unsigned rs232_getstatus(HCOM *hCom);
+void     rs232_framecheck(HCOM *hCom, int enable);
+int      rs232_collect(char **portlist, int listsize);
 
 #if defined __cplusplus
   }

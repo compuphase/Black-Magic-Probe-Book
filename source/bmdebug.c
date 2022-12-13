@@ -137,6 +137,7 @@ static DWARF_PATHLIST dwarf_filetable = { NULL};
 #define STRFLG_MI_INPUT 0x0100  /* '-' */
 #define STRFLG_SCRIPT   0x0200  /* log output from script */
 #define STRFLG_MON_OUT  0x0400  /* monitor echo */
+#define STRFLG_NO_EOL   0x2000  /* output string not terminated with \n */
 #define STRFLG_STARTUP  0x4000
 #define STRFLG_HANDLED  0x8000
 
@@ -733,27 +734,48 @@ static bool console_add(const char *text, int flags)
     if (*head == '\n')
       head++;
     if (addstring) {
-      int xtraflags, prompt;
+      int xtraflags;
       ptr = gdbmi_leader(console_buffer, &xtraflags, NULL);
-      if ((curflags & STRFLG_MON_OUT) != 0 && (xtraflags & STRFLG_TARGET) != 0)
+      bool targetmsg = ((xtraflags & STRFLG_TARGET) != 0);
+      if ((curflags & STRFLG_MON_OUT) && (xtraflags & STRFLG_TARGET)) {
+        /* distinguish replies to monitor commands from semihosting */
         xtraflags = (xtraflags & ~STRFLG_TARGET) | STRFLG_STATUS;
-      prompt = is_gdb_prompt(ptr) && (xtraflags & STRFLG_TARGET) == 0;
+      }
+      bool prompt = is_gdb_prompt(ptr) && (xtraflags & STRFLG_TARGET) == 0;
       if (prompt) {
         foundprompt = true; /* don't add prompt to the output console, but mark that we've seen it */
       } else {
         /* after gdbmi_leader(), there may again be '\n' characters in the resulting string */
-        char *tok;
         if ((xtraflags & STRFLG_TARGET) != 0 && (curflags & STRFLG_STARTUP) == 0)
           semihosting_add(&semihosting_root, ptr, curflags | xtraflags);
-        for (tok = strtok((char*)ptr, "\n"); tok != NULL; tok = strtok(NULL, "\n")) {
-          /* avoid adding a "log" string when the same string is at the tail of
-             the list */
-          if (xtraflags & STRFLG_LOG) {
-            STRINGLIST *last = stringlist_getlast(&consolestring_root, 0, 0);
-            if (strcmp(last->text, tok) == 0)
-              continue;
+        const char *str = ptr;
+        while (str != NULL && *str != '\0') {
+          char *eol = strchr(str, '\n');
+          if (eol != NULL)
+            *eol = '\0';  /* terminate the string here (simulate strtok()) */
+          else if (targetmsg)
+            xtraflags |= STRFLG_NO_EOL;
+          /* avoid adding a "log" string when the same string is already at the
+             tail of the list */
+          STRINGLIST *last = stringlist_getlast(&consolestring_root, 0, 0);
+          if ((xtraflags & STRFLG_LOG) == 0 || last == NULL || strcmp(last->text, str) != 0) {
+            int fullflags = flags | xtraflags;
+            /* check whether the concatenate this line to the last line */
+            if (last != NULL && (last->flags & STRFLG_NO_EOL) && ((last->flags ^ fullflags) & ~STRFLG_NO_EOL) == 0) {
+              size_t sz = strlen(last->text) + strlen(str) + 1;
+              char *newtext = malloc(sz * sizeof(char));
+              if (newtext != NULL) {
+                strcpy(newtext, last->text);
+                strcat(newtext, str);
+                free((void*)last->text);
+                last->text = newtext;
+                last->flags = fullflags;
+              }
+            } else {
+              stringlist_append(&consolestring_root, str, fullflags);
+            }
           }
-          stringlist_append(&consolestring_root, tok, flags | xtraflags);
+          str = (eol != NULL) ? eol + 1 : NULL;
         }
       }
       console_buffer[0]= '\0';
@@ -800,7 +822,7 @@ static int console_autocomplete(char *text, size_t textsize, const DWARF_SYMBOLL
     { "info", NULL, "args breakpoints frame functions locals scope set sources stack svd variables vtbl" },
     { "list", NULL, "%func %var %file" },
     { "load", NULL, NULL },
-    { "monitor", "mon", "connect_srst frequency halt_timeout hard_srst heapinfo jtag_scan morse option swdp_scan targets tpwr traceswo vector_catch" },
+    { "monitor", "mon", "auto_scan connect_srst frequency halt_timeout hard_srst heapinfo jtag_scan morse option swdp_scan reset rtt targets tpwr traceswo vector_catch" },
     { "next", "n", NULL },
     { "print", "p", "%var %reg" },
     { "ptype", NULL, "%var" },
@@ -3263,7 +3285,7 @@ static void console_widget(struct nk_context *ctx, const char *id, float rowheig
       else if (item->flags & STRFLG_ERROR)
         nk_label_colored(ctx, item->text, NK_TEXT_LEFT, COLOUR_FG_RED);
       else if (item->flags & STRFLG_RESULT)
-        nk_label_colored(ctx, item->text, NK_TEXT_LEFT, COLOUR_FG_BLUE);
+        nk_label_colored(ctx, item->text, NK_TEXT_LEFT, COLOUR_FG_CYAN);
       else if (item->flags & STRFLG_NOTICE)
         nk_label_colored(ctx, item->text, NK_TEXT_LEFT, COLOUR_FG_PURPLE);
       else if (item->flags & STRFLG_STATUS)
@@ -3356,8 +3378,7 @@ static int line_addr2phys(int fileindex, uint32_t address)
   int best_line = 1;
   uint32_t low_addr = 0;
   int line = 1;
-  SOURCELINE *item;
-  for (item = source_firstline(fileindex); item != NULL; item = item->next) {
+  for (SOURCELINE *item = source_firstline(fileindex); item != NULL; item = item->next) {
     if (item->hidden)
       continue;
     if (item->address > low_addr && item->address <= address) {
@@ -3374,28 +3395,25 @@ static int line_addr2phys(int fileindex, uint32_t address)
 static void source_widget(struct nk_context *ctx, const char *id, float rowheight,
                           bool grayed, bool disassembly)
 {
-  int fonttype;
-  SOURCELINE *item;
   struct nk_rect rcwidget = nk_layout_widget_bounds(ctx);
   struct nk_style_window const *stwin = &ctx->style.window;
-  struct nk_style_button stbtn = ctx->style.button;
-  struct nk_user_font const *font;
 
   /* preset common parts of the new button style */
+  struct nk_style_button stbtn = ctx->style.button;
   stbtn.border = 0;
   stbtn.rounding = 0;
   stbtn.padding.x = stbtn.padding.y = 0;
 
   /* monospaced font */
-  fonttype = guidriver_setfont(ctx, FONT_MONO);
-  font = ctx->style.font;
+  int fonttype = guidriver_setfont(ctx, FONT_MONO);
+  struct nk_user_font const *font = ctx->style.font;
 
   /* black background on group */
   nk_style_push_color(ctx, &ctx->style.window.fixed_background.data.color, COLOUR_BG0);
   if (nk_group_begin(ctx, id, NK_WINDOW_BORDER)) {
     int lines = 0, maxlen = 0;
     float maxwidth = 0;
-    for (item = source_firstline(source_cursorfile); item != NULL; item = item->next) {
+    for (SOURCELINE *item = source_firstline(source_cursorfile); item != NULL; item = item->next) {
       if (item->hidden)
         continue;
       lines++;
@@ -3416,10 +3434,7 @@ static void source_widget(struct nk_context *ctx, const char *id, float rowheigh
         stbtn.normal.data.color = stbtn.hover.data.color
           = stbtn.active.data.color = stbtn.text_background
           = COLOUR_BG0;
-        if (bkpt->enabled)
-          stbtn.text_normal = stbtn.text_active = stbtn.text_hover = COLOUR_BG_RED;
-        else
-          stbtn.text_normal = stbtn.text_active = stbtn.text_hover = COLOUR_BG_RED;
+        stbtn.text_normal = stbtn.text_active = stbtn.text_hover = COLOUR_BG_RED;
         nk_button_symbol_styled(ctx, &stbtn, bkpt->enabled ? NK_SYMBOL_CIRCLE_SOLID : NK_SYMBOL_CIRCLE_OUTLINE);
       } else if (item->linenumber != 0) {
         nk_layout_row_push(ctx, 2 * rowheight);
@@ -5112,7 +5127,7 @@ static void version(void)
     printf("\n");
   #endif
 
-  printf("BMDebug version 1.1.%d.\n", SVNREV_NUM);
+  printf("BMDebug version %s.\n", SVNREV_STR);
   printf("Copyright 2019-2022 CompuPhase\nLicensed under the Apache License version 2.0\n");
 }
 
@@ -5185,7 +5200,7 @@ typedef struct tagAPPSTATE {
   nk_bool warn_source_tstamps;  /**< whether warning must be given when source files are more recent than target */
   unsigned watchseq;            /**< sequence number for watches */
   int console_activate;         /**< whether the edit line should get the focus (and whether to move the cursor to the end) */
-  nk_bool console_isactive;     /**< whether the console is currently active */
+  bool console_isactive;        /**< whether the console is currently active */
   char console_edit[256];       /**< edit line for console input */
   const STRINGLIST *console_mark;/**< marker to help parsing GDB output */
   STRINGLIST consoleedit_root;  /**< edit history */
@@ -5265,7 +5280,7 @@ static void help_popup(struct nk_context *ctx, APPSTATE *state, float canvas_wid
     nk_layout_row(ctx, NK_DYNAMIC, ROW_HEIGHT, 3, bottomrow_ratio);
     nk_label(ctx, (state->popup_active == POPUP_INFO) ? "More info" : "More help", NK_TEXT_LEFT);
     nk_edit_focus(ctx, 0);
-    int result = nk_edit_string_zero_terminated(ctx, NK_EDIT_FIELD|NK_EDIT_SIG_ENTER|NK_EDIT_CLIPBOARD,
+    int result = nk_edit_string_zero_terminated(ctx, NK_EDIT_FIELD|NK_EDIT_SIG_ENTER,
                                                 state->help_edit, sizearray(state->help_edit),
                                                 nk_filter_ascii);
     if ((result & NK_EDIT_COMMITED) != 0 && strlen(state->help_edit) > 0) {
@@ -5550,7 +5565,7 @@ static void console_view(struct nk_context *ctx, APPSTATE *state,
         nk_edit_focus(ctx, (state->console_activate == 2) ? NK_EDIT_GOTO_END_ON_ACTIVATE : 0);
         state->console_activate = 1;
       }
-      int result = nk_edit_string_zero_terminated(ctx, NK_EDIT_FIELD|NK_EDIT_SIG_ENTER|NK_EDIT_CLIPBOARD,
+      int result = nk_edit_string_zero_terminated(ctx, NK_EDIT_FIELD|NK_EDIT_SIG_ENTER,
                                                   state->console_edit, sizearray(state->console_edit),
                                                   nk_filter_ascii);
       state->console_isactive = ((result & NK_EDIT_ACTIVE) != 0);
@@ -5714,13 +5729,13 @@ static void panel_configuration(struct nk_context *ctx, APPSTATE *state,
       nk_layout_row_push(ctx, LABEL_WIDTH);
       nk_label(ctx, "IP", NK_TEXT_ALIGN_LEFT | NK_TEXT_ALIGN_MIDDLE);
       nk_layout_row_push(ctx, edtwidth);
-      int result = editctrl_tooltip(ctx, NK_EDIT_FIELD|NK_EDIT_SIG_ENTER|NK_EDIT_CLIPBOARD,
+      int result = editctrl_tooltip(ctx, NK_EDIT_FIELD|NK_EDIT_SIG_ENTER,
                                     state->IPaddr, sizearray(state->IPaddr), nk_filter_ascii,
                                     "IP address of the ctxLink");
       if ((result & NK_EDIT_COMMITED) != 0 && is_ip_address(state->IPaddr))
         reconnect = 1;
       nk_layout_row_push(ctx, BROWSEBTN_WIDTH);
-      if (button_symbol_tooltip(ctx, NK_SYMBOL_TRIPLE_DOT, NK_KEY_NONE, "Scan network for ctxLink probes.")) {
+      if (button_symbol_tooltip(ctx, NK_SYMBOL_TRIPLE_DOT, NK_KEY_NONE, nk_true, "Scan network for ctxLink probes.")) {
         #if defined WIN32 || defined _WIN32
           HCURSOR hcur = SetCursor(LoadCursor(NULL, IDC_WAIT));
         #endif
@@ -5755,13 +5770,17 @@ static void panel_configuration(struct nk_context *ctx, APPSTATE *state,
     nk_label(ctx, "GDB", NK_TEXT_LEFT);
     nk_layout_row_push(ctx, edtwidth);
     strlcpy(tooltip, (strlen(state->GDBpath) > 0) ? state->GDBpath : "Path to the GDB executable", sizearray(tooltip));
-    editctrl_tooltip(ctx, NK_EDIT_FIELD | NK_EDIT_READ_ONLY,
+    editctrl_tooltip(ctx, NK_EDIT_FIELD|NK_EDIT_READ_ONLY,
                      basename, sizearray(basename), nk_filter_ascii, tooltip);
     nk_layout_row_push(ctx, BROWSEBTN_WIDTH);
     if (nk_button_symbol(ctx, NK_SYMBOL_TRIPLE_DOT)) {
+      #if defined _WIN32
+        const char *filter = "Executables\0*.exe;*.\0All files\0*.*\0";
+      #else
+        const char *filter = "Executables\0*\0All files\0*\0";
+      #endif
       int res = noc_file_dialog_open(state->GDBpath, sizearray(state->GDBpath),
-                                     NOC_FILE_DIALOG_OPEN,
-                                     "Executables\0*.elf;*.\0All files\0*.*\0",
+                                     NOC_FILE_DIALOG_OPEN, filter,
                                      NULL, state->GDBpath, "Select GDB program",
                                      guidriver_apphandle());
       if (res) {
@@ -5779,14 +5798,18 @@ static void panel_configuration(struct nk_context *ctx, APPSTATE *state,
     nk_label(ctx, "File", NK_TEXT_LEFT);
     nk_layout_row_push(ctx, edtwidth);
     strlcpy(tooltip, (strlen(state->ELFfile) > 0) ? state->ELFfile : "Path to the target ELF file", sizearray(tooltip));
-    editctrl_tooltip(ctx, NK_EDIT_FIELD | NK_EDIT_READ_ONLY,
+    editctrl_tooltip(ctx, NK_EDIT_FIELD|NK_EDIT_READ_ONLY,
                      basename, sizearray(basename), nk_filter_ascii, tooltip);
     nk_layout_row_push(ctx, BROWSEBTN_WIDTH);
     if (nk_button_symbol(ctx, NK_SYMBOL_TRIPLE_DOT)) {
       translate_path(state->ELFfile, 1);
+      #if defined _WIN32
+        const char *filter = "ELF Executables\0*.elf;*.\0All files\0*.*\0";
+      #else
+        const char *filter = "ELF Executables\0*.elf\0All files\0*\0";
+      #endif
       int res = noc_file_dialog_open(state->ELFfile, sizearray(state->ELFfile),
-                                     NOC_FILE_DIALOG_OPEN,
-                                     "ELF Executables\0*.elf;*.bin;*.\0All files\0*.*\0",
+                                     NOC_FILE_DIALOG_OPEN, filter,
                                      NULL, state->ELFfile, "Select ELF Executable",
                                      guidriver_apphandle());
       if (res) {
@@ -5802,7 +5825,7 @@ static void panel_configuration(struct nk_context *ctx, APPSTATE *state,
     nk_layout_row_push(ctx, LABEL_WIDTH);
     nk_label(ctx, "Entry point", NK_TEXT_LEFT);
     nk_layout_row_push(ctx, edtwidth + BROWSEBTN_WIDTH);
-    int result = editctrl_tooltip(ctx, NK_EDIT_FIELD|NK_EDIT_SIG_ENTER|NK_EDIT_CLIPBOARD,
+    int result = editctrl_tooltip(ctx, NK_EDIT_FIELD|NK_EDIT_SIG_ENTER,
                                   state->EntryPoint, sizearray(state->EntryPoint), nk_filter_ascii,
                                   "The name of the entry point function (if not \"main\")");
     nk_layout_row_end(ctx);
@@ -5817,7 +5840,7 @@ static void panel_configuration(struct nk_context *ctx, APPSTATE *state,
     nk_label(ctx, "SVD", NK_TEXT_LEFT);
     nk_layout_row_push(ctx, edtwidth);
     strlcpy(tooltip, (strlen(state->SVDfile) > 0) ? state->SVDfile : "Path to an SVD file with the MCU description & registers", sizearray(tooltip));
-    editctrl_tooltip(ctx, NK_EDIT_FIELD | NK_EDIT_READ_ONLY,
+    editctrl_tooltip(ctx, NK_EDIT_FIELD|NK_EDIT_READ_ONLY,
                      basename, sizearray(basename), nk_filter_ascii, tooltip);
     nk_layout_row_push(ctx, BROWSEBTN_WIDTH);
     if (nk_button_symbol(ctx, NK_SYMBOL_TRIPLE_DOT)) {
@@ -6152,7 +6175,7 @@ static void panel_watches(struct nk_context *ctx, APPSTATE *state,
     if (w < 150)
       w = 150;
     nk_layout_row_push(ctx, w);
-    result = nk_edit_string_zero_terminated(ctx, NK_EDIT_FIELD|NK_EDIT_SIG_ENTER|NK_EDIT_CLIPBOARD,
+    result = nk_edit_string_zero_terminated(ctx, NK_EDIT_FIELD|NK_EDIT_SIG_ENTER,
                                             state->watch_edit, sizearray(state->watch_edit),
                                             nk_filter_ascii);
     nk_layout_row_push(ctx, ROW_HEIGHT);
@@ -6358,7 +6381,7 @@ static void panel_traceswo(struct nk_context *ctx, APPSTATE *state,
   if (result) {
     tracestring_process(state->trace_status == TRACESTAT_OK);
     nk_layout_row_dynamic(ctx, state->sizerbar_swo.size, 1);
-    tracelog_widget(ctx, "tracelog", opt_fontsize, -1, NULL, 0);
+    tracelog_widget(ctx, "tracelog", opt_fontsize, -1, -1, NULL, 0);
     state->swo_lines = tracestring_count();
     nk_sizer(ctx, &state->sizerbar_swo);
     nk_tree_state_pop(ctx);
@@ -6596,8 +6619,10 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
         } else {
           snprintf(state->cmdline, CMD_BUFSIZE, "Port %s busy or unavailable\n", state->port_gdb);
           console_add(state->cmdline, STRFLG_ERROR);
-          MOVESTATE(state, STATE_SCAN_BMP);
-          set_idle_time(1000); /* drop back to scan (after on timeout) */
+          if (get_bmp_count() > 0) {
+            MOVESTATE(state, STATE_SCAN_BMP);
+            set_idle_time(1000); /* drop back to scan (after on timeout) */
+          }
         }
         gdbmi_sethandled(nk_false);
       }
@@ -7707,6 +7732,14 @@ int main(int argc, char *argv[])
     if (!guidriver_poll(appstate.waitidle)) /* if text was added to the console, don't wait in guidriver_poll(); system is NOT idle */
       break;
     nk_input_end(ctx);
+
+    /* other events */
+    int dev_event = guidriver_monitor_usb(0x1d50, 0x6018);
+    if (dev_event != 0) {
+      clear_probelist(appstate.probelist, appstate.netprobe);
+      appstate.probelist = get_probelist(&appstate.probe, &appstate.netprobe);
+      appstate.curstate = STATE_INIT; /* BMP was inserted or removed */
+    }
 
     /* GUI */
     guidriver_appsize(&canvas_width, &canvas_height);

@@ -33,7 +33,7 @@ nk_bool button_tooltip(struct nk_context *ctx, const char *title,
                        const char *tiptext);
 void label_tooltip(struct nk_context *ctx, const char *label, nk_flags align, const char *tiptext);
 nk_bool button_symbol_tooltip(struct nk_context *ctx, enum nk_symbol_type symbol,
-                              enum nk_keys hotkey, const char *tiptext);
+                              enum nk_keys hotkey, nk_bool enabled, const char *tiptext);
 nk_bool checkbox_tooltip(struct nk_context *ctx, const char *label,
                          nk_bool *active, nk_flags align, const char *tiptext);
 nk_bool option_tooltip(struct nk_context *ctx, const char *label, nk_bool active,

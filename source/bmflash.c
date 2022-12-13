@@ -57,6 +57,7 @@
 
 #include "guidriver.h"
 #include "noc_file_dialog.h"
+#include "nuklear_guide.h"
 #include "nuklear_mousepointer.h"
 #include "nuklear_style.h"
 #include "nuklear_tooltip.h"
@@ -149,11 +150,9 @@ static int log_widget(struct nk_context *ctx, const char *id, const char *conten
   int lines = 0;
   struct nk_rect rcwidget = nk_layout_widget_bounds(ctx);
   struct nk_style_window *stwin = &ctx->style.window;
-  struct nk_style_item bkgnd;
 
   /* black background on group */
-  bkgnd = stwin->fixed_background;
-  stwin->fixed_background = nk_style_item_color(COLOUR_BG0);
+  nk_style_push_color(ctx, &stwin->fixed_background.data.color, COLOUR_BG0);
   if (nk_group_begin(ctx, id, NK_WINDOW_BORDER)) {
     float lineheight = 0;
     const char *head = content;
@@ -206,7 +205,7 @@ static int log_widget(struct nk_context *ctx, const char *id, const char *conten
       }
     }
   }
-  stwin->fixed_background = bkgnd;
+  nk_style_pop_color(ctx);
   return lines;
 }
 
@@ -645,56 +644,15 @@ static void version(void)
     printf("\n");
   #endif
 
-  printf("BMFlash version 1.1.%d.\n", SVNREV_NUM);
+  printf("BMFlash version %s.\n", SVNREV_STR);
   printf("Copyright 2019-2022 CompuPhase\nLicensed under the Apache License version 2.0\n");
 }
 
-static int help_popup(struct nk_context *ctx)
+static bool help_popup(struct nk_context *ctx)
 {
-  static const char helptext[] =
-    "This utility downloads firmware into a micro-controller using the\n"
-    "Black Magic Probe. It automatically handles idiosyncrasies of MCU\n"
-    "families, and supports setting a serial number during the download\n"
-    "(i.e. serialization). It does not require GDB.\n\n"
-    "Copyright 2019-2022 CompuPhase\n"
-    "Licensed under the Apache License version 2.0\n\n"
-    "^3Options\n"
-    "The MCU family must be set for post-processing the ELF file or\n"
-    "performing additional configurations before the download. It is\n"
-    "currently needed for the LPC family by NXP. For other micro-\n"
-    "controllers, this field should be set to \"standard\"\n\n"
-    "The \"Power Target\" option can be set to drive the power-sense pin\n"
-    "with 3.3V (to power the target).\n\n"
-    "The \"Full Flash Erase\" option erases all Flash sectors in the MCU.\n"
-    "If not set, only the Flash sectors for which there is new data get\n"
-    "erased & overwritten.\n\n"
-    "The \"Reset during connect\" option may be needed on some MCUs,\n"
-    "especially if SWD pins get redefined.\n\n"
-    "The \"Keep log of downloads\" option adds a date/time entry,\n"
-    "together with information of the ELF to a log. This is especially\n"
-    "useful in combination with serialization, for tracking the firmware\n"
-    "version and the date of the download.\n\n"
-    "^3Serialization\n"
-    "The serialization method is either \"No serialization\", \"Address\" (to\n"
-    "store the serial number at a specific address), or \"Match\" (to search\n"
-    "for a text or byte pattern and replace it with the serial number).\n\n"
-    "For \"Address\" mode, you may optionally give the name of a section\n"
-    "in the ELF file. The address is relative to the section, or relative\n"
-    "to the beginning of the ELF file if no section name is given. The\n"
-    "address is interpreted as a hexadecimal value.\n\n"
-    "For \"Match\" mode, you give a pattern to match and an optional\n"
-    "prefix. When the pattern is found, it is overwritten by the prefix,\n"
-    "immediately followed the serial number. The match and prefix strings\n"
-    "may contain \\### and \\x## specifications (where \"#\" represents\n"
-    "a decimal or hexadecimal digit) for non-ASCII byte values. It may\n"
-    "furthermore contain the sequence \\U* to interpret the text that\n"
-    "follows as Unicode, or \\A* to switch back to ASCII. When a literal \\\n"
-    "is part of the pattern, it must be doubled, as in \\\\.\n\n"
-    "The serial number is a decimal value. It is incremented after each\n"
-    "successful download. The size of the serial number is in bytes. The\n"
-    "format can be chosen as binary, ASCII or Unicode. In the latter two\n"
-    "cases, the serial number is stored as readable text.\n\n";
-  int is_active = 1;
+  #include "bmflash_help.h"
+  (void)bmflash_helpsize;
+
   struct nk_rect rc = nk_window_get_bounds(ctx);
   #define MARGIN  10
   rc.x += MARGIN;
@@ -702,20 +660,7 @@ static int help_popup(struct nk_context *ctx)
   rc.w -= 2*MARGIN;
   rc.h -= 2*MARGIN;
   #undef MARGIN
-  if (nk_popup_begin(ctx, NK_POPUP_STATIC, "Help", NK_WINDOW_NO_SCROLLBAR, rc)) {
-    nk_layout_row_dynamic(ctx, rc.h - ROW_HEIGHT - opt_fontsize, 1);
-    log_widget(ctx, "help", helptext, opt_fontsize, NULL);
-    nk_layout_row_dynamic(ctx, ROW_HEIGHT, 4);
-    nk_spacing(ctx, 3);
-    if (nk_button_label(ctx, "Close") || nk_input_is_key_pressed(&ctx->input, NK_KEY_ESCAPE)) {
-      is_active = 0;
-      nk_popup_close(ctx);
-    }
-    nk_popup_end(ctx);
-  } else {
-    is_active = 0;
-  }
-  return is_active;
+  return nk_guide(ctx, &rc, opt_fontsize, (const char*)bmflash_help, NULL);
 }
 
 
@@ -997,11 +942,11 @@ static void panel_options(struct nk_context *ctx, APPSTATE *state,
       nk_layout_row(ctx, NK_DYNAMIC, ROW_HEIGHT, 4, nk_ratio(4, 0.05, 0.40, 0.49, 0.06));
       nk_spacing(ctx, 1);
       nk_label(ctx, "IP Address", NK_TEXT_ALIGN_LEFT | NK_TEXT_ALIGN_MIDDLE);
-      nk_flags result = nk_edit_string_zero_terminated(ctx, NK_EDIT_FIELD|NK_EDIT_SIG_ENTER|NK_EDIT_CLIPBOARD,
+      nk_flags result = nk_edit_string_zero_terminated(ctx, NK_EDIT_FIELD|NK_EDIT_SIG_ENTER,
                                                        state->IPaddr, sizearray(state->IPaddr),
                                                        nk_filter_ascii);
       int reconnect = ((result & NK_EDIT_COMMITED) != 0 && bmp_is_ip_address(state->IPaddr));
-      if (button_symbol_tooltip(ctx, NK_SYMBOL_TRIPLE_DOT, NK_KEY_NONE, "Scan network for ctxLink probes.")) {
+      if (button_symbol_tooltip(ctx, NK_SYMBOL_TRIPLE_DOT, NK_KEY_NONE, nk_true, "Scan network for ctxLink probes.")) {
         #if defined WIN32 || defined _WIN32
           HCURSOR hcur = SetCursor(LoadCursor(NULL, IDC_WAIT));
         #endif
@@ -1033,10 +978,10 @@ static void panel_options(struct nk_context *ctx, APPSTATE *state,
 
     nk_layout_row(ctx, NK_DYNAMIC, ROW_HEIGHT, 3, nk_ratio(3, 0.45, 0.497, 0.053));
     nk_label(ctx, "Post-process", NK_TEXT_ALIGN_LEFT | NK_TEXT_ALIGN_MIDDLE);
-    editctrl_tooltip(ctx, NK_EDIT_FIELD|NK_EDIT_CLIPBOARD,
+    editctrl_tooltip(ctx, NK_EDIT_FIELD,
                      state->PostProcess, sizearray(state->PostProcess),
                      nk_filter_ascii, "Program/script to run after successful download");
-    if (button_symbol_tooltip(ctx, NK_SYMBOL_TRIPLE_DOT, NK_KEY_NONE, "Browse...")) {
+    if (button_symbol_tooltip(ctx, NK_SYMBOL_TRIPLE_DOT, NK_KEY_NONE, nk_true, "Browse...")) {
       #if defined _WIN32
         const char *filter = "Executables\0*.exe\0All files\0*.*\0";
       #else
@@ -1051,13 +996,13 @@ static void panel_options(struct nk_context *ctx, APPSTATE *state,
     nk_layout_row_dynamic(ctx, ROW_HEIGHT, 1);
     checkbox_tooltip(ctx, "Power Target (3.3V)", &state->tpwr, NK_TEXT_LEFT,
                      "Let the debug probe provide power to the target");
-    checkbox_tooltip(ctx, "Full Flash erase before download", &state->fullerase, NK_TEXT_LEFT,
+    checkbox_tooltip(ctx, "Full Flash Erase before download", &state->fullerase, NK_TEXT_LEFT,
                      "Erase entire Flash memory, instead of only sectors that are overwritten");
-    checkbox_tooltip(ctx, "Reset target during connect", &state->connect_srst, NK_TEXT_LEFT,
+    checkbox_tooltip(ctx, "Reset Target during connect", &state->connect_srst, NK_TEXT_LEFT,
                      "Keep target MCU reset while debug probe attaches");
-    checkbox_tooltip(ctx, "Keep log of downloads", &state->write_log, NK_TEXT_LEFT,
+    checkbox_tooltip(ctx, "Keep Log of downloads", &state->write_log, NK_TEXT_LEFT,
                      "Write successful downloads to a log file");
-    checkbox_tooltip(ctx, "Print download time", &state->print_time, NK_TEXT_LEFT,
+    checkbox_tooltip(ctx, "Print Download Time", &state->print_time, NK_TEXT_LEFT,
                      "Print how long the download took upon completion");
 
     nk_tree_state_pop(ctx);
@@ -1074,26 +1019,26 @@ static void panel_serialize(struct nk_context *ctx, APPSTATE *state,
     nk_layout_row(ctx, NK_DYNAMIC, ROW_HEIGHT, 4, nk_ratio(4, 0.25, 0.3, 0.15, 0.3));
     if (nk_option_label(ctx, "Address", (state->serialize == SER_ADDRESS), NK_TEXT_LEFT))
       state->serialize = SER_ADDRESS;
-    editctrl_tooltip(ctx, NK_EDIT_FIELD|NK_EDIT_CLIPBOARD, state->Section, sizearray(state->Section),
+    editctrl_tooltip(ctx, NK_EDIT_FIELD, state->Section, sizearray(state->Section),
                      nk_filter_ascii, "The name of the section in the ELF file");
     nk_label(ctx, "offset", NK_TEXT_ALIGN_RIGHT | NK_TEXT_ALIGN_MIDDLE);
-    editctrl_tooltip(ctx, NK_EDIT_FIELD|NK_EDIT_CLIPBOARD, state->Address, sizearray(state->Address),
+    editctrl_tooltip(ctx, NK_EDIT_FIELD, state->Address, sizearray(state->Address),
                      nk_filter_hex, "The offset in hexadecimal");
     nk_layout_row(ctx, NK_DYNAMIC, ROW_HEIGHT, 4, nk_ratio(4, 0.25, 0.3, 0.15, 0.3));
     if (nk_option_label(ctx, "Match", (state->serialize == SER_MATCH), NK_TEXT_LEFT))
       state->serialize = SER_MATCH;
-    editctrl_tooltip(ctx, NK_EDIT_FIELD|NK_EDIT_CLIPBOARD, state->Match, sizearray(state->Match),
+    editctrl_tooltip(ctx, NK_EDIT_FIELD, state->Match, sizearray(state->Match),
                      nk_filter_ascii, "The text to match");
     nk_label(ctx, "prefix", NK_TEXT_ALIGN_RIGHT | NK_TEXT_ALIGN_MIDDLE);
-    editctrl_tooltip(ctx, NK_EDIT_FIELD|NK_EDIT_CLIPBOARD, state->Prefix, sizearray(state->Prefix),
+    editctrl_tooltip(ctx, NK_EDIT_FIELD, state->Prefix, sizearray(state->Prefix),
                      nk_filter_ascii, "Text to write back at the matched position, prefixing the serial number");
     nk_layout_row(ctx, NK_DYNAMIC, ROW_HEIGHT, 5, nk_ratio(5, 0.05, 0.193, 0.3, 0.155, 0.3));
     nk_spacing(ctx, 1);
     nk_label(ctx, "Serial", NK_TEXT_ALIGN_LEFT | NK_TEXT_ALIGN_MIDDLE);
-    editctrl_tooltip(ctx, NK_EDIT_FIELD|NK_EDIT_CLIPBOARD, state->Serial, sizearray(state->Serial),
+    editctrl_tooltip(ctx, NK_EDIT_FIELD, state->Serial, sizearray(state->Serial),
                      nk_filter_decimal, "The serial number to write (decimal value)");
     nk_label(ctx, "size", NK_TEXT_ALIGN_RIGHT | NK_TEXT_ALIGN_MIDDLE);
-    editctrl_tooltip(ctx, NK_EDIT_FIELD|NK_EDIT_CLIPBOARD, state->SerialSize, sizearray(state->SerialSize),
+    editctrl_tooltip(ctx, NK_EDIT_FIELD, state->SerialSize, sizearray(state->SerialSize),
                      nk_filter_decimal, "The size (in bytes) that the serial number is padded to");
     nk_layout_row(ctx, NK_DYNAMIC, ROW_HEIGHT, 5, nk_ratio(5, 0.05, 0.20, 0.25, 0.25, 0.25));
     nk_spacing(ctx, 1);
@@ -1107,12 +1052,12 @@ static void panel_serialize(struct nk_context *ctx, APPSTATE *state,
     nk_layout_row(ctx, NK_DYNAMIC, ROW_HEIGHT, 5, nk_ratio(5, 0.05, 0.193, 0.25, 0.5));
     nk_spacing(ctx, 1);
     nk_label(ctx, "Increment", NK_TEXT_ALIGN_LEFT | NK_TEXT_ALIGN_MIDDLE);
-    editctrl_tooltip(ctx, NK_EDIT_FIELD|NK_EDIT_CLIPBOARD, state->SerialIncr, sizearray(state->SerialIncr),
+    editctrl_tooltip(ctx, NK_EDIT_FIELD, state->SerialIncr, sizearray(state->SerialIncr),
                      nk_filter_decimal, "The increment for the serial number");
     nk_layout_row(ctx, NK_DYNAMIC, ROW_HEIGHT, 4, nk_ratio(5, 0.05, 0.19, 0.75));
     nk_spacing(ctx, 1);
     nk_label(ctx, "File", NK_TEXT_ALIGN_LEFT | NK_TEXT_ALIGN_MIDDLE);
-    editctrl_tooltip(ctx, NK_EDIT_FIELD|NK_EDIT_CLIPBOARD, state->SerialFile, sizearray(state->SerialFile),
+    editctrl_tooltip(ctx, NK_EDIT_FIELD, state->SerialFile, sizearray(state->SerialFile),
                      nk_filter_ascii, "The file to store the serialization settings in\nLeave empty to use the local configuration file");
     nk_tree_state_pop(ctx);
   }
@@ -1444,7 +1389,7 @@ int main(int argc, char *argv[])
   APPSTATE appstate;
   int idx;
   char txtConfigFile[_MAX_PATH];
-  int help_active = 0;
+  bool help_active = false;
   int toolmenu_active = TOOL_CLOSE;
   int load_options = 0;
   char opt_fontstd[64] = "", opt_fontmono[64] = "";
@@ -1539,13 +1484,21 @@ int main(int argc, char *argv[])
       running = 0;
     nk_input_end(ctx);
 
+    /* other events */
+    int dev_event = guidriver_monitor_usb(0x1d50, 0x6018);
+    if (dev_event != 0) {
+      if (dev_event == DEVICE_REMOVE)
+        bmp_disconnect();
+      appstate.curstate = STATE_INIT; /* BMP was inserted or removed */
+    }
+
     /* GUI */
     if (nk_begin(ctx, "MainPanel", nk_rect(0, 0, WINDOW_WIDTH, WINDOW_HEIGHT), 0)) {
       struct nk_rect rc_toolbutton;
       int result;
       nk_layout_row_begin(ctx, NK_STATIC, ROW_HEIGHT, 2);
       nk_layout_row_push(ctx, WINDOW_WIDTH - 4 * opt_fontsize);
-      result = nk_edit_string_zero_terminated(ctx, NK_EDIT_FIELD|NK_EDIT_SIG_ENTER|NK_EDIT_CLIPBOARD,
+      result = nk_edit_string_zero_terminated(ctx, NK_EDIT_FIELD|NK_EDIT_SIG_ENTER,
                                               appstate.ELFfile, sizearray(appstate.ELFfile), nk_filter_ascii);
       if (result & NK_EDIT_COMMITED)
         load_options = 2;
@@ -1554,9 +1507,13 @@ int main(int argc, char *argv[])
         load_options = 2;
       nk_layout_row_push(ctx, BROWSEBTN_WIDTH);
       if (nk_button_symbol(ctx, NK_SYMBOL_TRIPLE_DOT) || nk_input_is_key_pressed(&ctx->input, NK_KEY_OPEN)) {
+        #if defined _WIN32
+          const char *filter = "ELF Executables\0*.elf;*.\0All files\0*.*\0";
+        #else
+          const char *filter = "ELF Executables\0*.elf\0All files\0*\0";
+        #endif
         int res = noc_file_dialog_open(appstate.ELFfile, sizearray(appstate.ELFfile),
-                                       NOC_FILE_DIALOG_OPEN,
-                                       "ELF Executables\0*.elf;*.bin;*.\0All files\0*.*\0",
+                                       NOC_FILE_DIALOG_OPEN, filter,
                                        NULL, NULL, "Select ELF Executable",
                                        guidriver_apphandle());
         if (res)
@@ -1573,7 +1530,7 @@ int main(int argc, char *argv[])
           nk_layout_row_dynamic(ctx, LOGVIEW_ROWS*ROW_HEIGHT, 1);
           log_widget(ctx, "status", logtext, opt_fontsize, &loglines);
 
-          nk_layout_row_dynamic(ctx, ROW_HEIGHT*0.45, 1);
+          nk_layout_row_dynamic(ctx, ROW_HEIGHT*0.4, 1);
           nk_size progress, progress_range;
           bmp_progress_get(&progress, &progress_range);
           nk_progress(ctx, &progress, progress_range, NK_FIXED);
@@ -1617,18 +1574,18 @@ int main(int argc, char *argv[])
         load_options = 0;
       }
 
-      nk_layout_row(ctx, NK_DYNAMIC, ROW_HEIGHT, 5, nk_ratio(5, 0.25, 0.025, 0.30, 0.025, 0.4));
-      if (nk_button_label(ctx, "Help") || nk_input_is_key_pressed(&ctx->input, NK_KEY_F1))
-        help_active = 1;
+      nk_layout_row(ctx, NK_DYNAMIC, ROW_HEIGHT, 5, nk_ratio(5, 0.4, 0.025, 0.30, 0.025, 0.25));
+      if (button_tooltip(ctx, "Download", NK_KEY_F5, appstate.curstate == STATE_IDLE, "Download ELF file into target (F5)")) {
+        appstate.skip_download = 0;      /* should already be 0 */
+        appstate.curstate = STATE_SAVE;  /* start the real download sequence */
+      }
       nk_spacing(ctx, 1);
       rc_toolbutton = nk_widget_bounds(ctx);
       if (button_tooltip(ctx, "Tools", NK_KEY_NONE, appstate.curstate == STATE_IDLE, "Other commands"))
         toolmenu_active = TOOL_OPEN;
       nk_spacing(ctx, 1);
-      if (button_tooltip(ctx, "Download", NK_KEY_F5, appstate.curstate == STATE_IDLE, "Download ELF file into target (F5)")) {
-        appstate.skip_download = 0;      /* should already be 0 */
-        appstate.curstate = STATE_SAVE;  /* start the real download sequence */
-      }
+      if (nk_button_label(ctx, "Help") || nk_input_is_key_pressed(&ctx->input, NK_KEY_F1))
+        help_active = true;
 
       if (help_active)
         help_active = help_popup(ctx);

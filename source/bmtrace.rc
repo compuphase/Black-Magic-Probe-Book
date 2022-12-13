@@ -30,9 +30,9 @@ AppIcon ICON "res/icon_trace.ico"
  *  for details on version information and the VERSIONINFO structure.
  */
 #define VERSION              1
-#define REVISION             1
+#define REVISION             2
 #define BUILD                SVNREV_NUM
-#define VERSIONSTR           "1.1.*\0"
+#define VERSIONSTR           SVNREV_STR
 #define VERSIONNAME          "bmtrace.exe\0"
 #define VERSIONDESCRIPTION   "Serial Wire Trace Viewer\0"
 #define VERSIONCOMPANYNAME   "CompuPhase\0"

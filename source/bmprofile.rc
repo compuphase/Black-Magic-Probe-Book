@@ -30,9 +30,9 @@ AppIcon ICON "res/icon_profile.ico"
  *  for details on version information and the VERSIONINFO structure.
  */
 #define VERSION              1
-#define REVISION             1
+#define REVISION             2
 #define BUILD                SVNREV_NUM
-#define VERSIONSTR           "1.0.*\0"
+#define VERSIONSTR           SVNREV_STR
 #define VERSIONNAME          "bmprofile.exe\0"
 #define VERSIONDESCRIPTION   "Statistical Profiler\0"
 #define VERSIONCOMPANYNAME   "CompuPhase\0"

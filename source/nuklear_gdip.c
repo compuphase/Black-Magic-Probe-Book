@@ -76,16 +76,6 @@ typedef enum
     SmoothingModeAntiAlias8x8
 } SmoothingMode;
 
-typedef enum
-{
-    FontStyleRegular    = 0,
-    FontStyleBold       = 1,
-    FontStyleItalic     = 2,
-    FontStyleBoldItalic = 3,
-    FontStyleUnderline  = 4,
-    FontStyleStrikeout  = 8
-} FontStyle;
-
 typedef enum {
     FillModeAlternate,
     FillModeWinding
@@ -631,7 +621,7 @@ nk_gdip_image_free(struct nk_image image)
 }
 
 GdipFont*
-nk_gdipfont_create(const char *name, float size)
+nk_gdipfont_create(const char *name, float size, int style)
 {
     GdipFont *font = (GdipFont*)calloc(1, sizeof(GdipFont));
     GpFontFamily *family;
@@ -647,7 +637,7 @@ nk_gdipfont_create(const char *name, float size)
         free(font);
         return NULL;
     }
-    if (GdipCreateFont(family, size, FontStyleRegular, UnitPixel, &font->handle)) {
+    if (GdipCreateFont(family, size, style, UnitPixel, &font->handle)) {
         free(font);
         return NULL;
     }
@@ -663,7 +653,7 @@ nk_gdip_getCurFontCollection()
 }
 
 GdipFont*
-nk_gdipfont_create_from_collection(float size)
+nk_gdipfont_create_from_collection(float size, int style)
 {
     GpFontFamily **families;
     INT count;
@@ -689,7 +679,7 @@ nk_gdipfont_create_from_collection(float size)
         free(font);
         return NULL;
     }
-    if( GdipCreateFont(families[count-1], size, FontStyleRegular, UnitPixel, &font->handle) ) {
+    if( GdipCreateFont(families[count-1], size, style, UnitPixel, &font->handle) ) {
         free(families);
         free(font);
         return NULL;
@@ -700,21 +690,21 @@ nk_gdipfont_create_from_collection(float size)
 }
 
 GdipFont*
-nk_gdipfont_create_from_memory(const void* membuf, int membufSize, float size)
+nk_gdipfont_create_from_memory(const void* membuf, int membufSize, float size, int style)
 {
     if( !nk_gdip_getCurFontCollection() )
         if( GdipNewPrivateFontCollection(&gdip.fontCollection[gdip.curFontCollection]) ) return NULL;
     if( GdipPrivateAddMemoryFont(nk_gdip_getCurFontCollection(), membuf, membufSize) ) return NULL;
-    return nk_gdipfont_create_from_collection(size);
+    return nk_gdipfont_create_from_collection(size, style);
 }
 
 GdipFont*
-nk_gdipfont_create_from_file(const WCHAR* filename, float size)
+nk_gdipfont_create_from_file(const WCHAR* filename, float size, int style)
 {
     if( !nk_gdip_getCurFontCollection() )
         if( GdipNewPrivateFontCollection(&gdip.fontCollection[gdip.curFontCollection]) ) return NULL;
     if( GdipPrivateAddFontFile(nk_gdip_getCurFontCollection(), filename) ) return NULL;
-    return nk_gdipfont_create_from_collection(size);
+    return nk_gdipfont_create_from_collection(size, style);
 }
 
 static float
