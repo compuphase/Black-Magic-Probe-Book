@@ -20,6 +20,8 @@ A summary of the utilities:
 </tr><tr>
 <td> <img src="https://www.compuphase.com/electronics/icon_profile_64.png" alt="Icon">  </td><td> bmprofile    </td><td> A sampling profiler using the CoreSight debugging features and the TRACESWO channel. </td>
 </tr><tr>
+<td> <img src="https://www.compuphase.com/electronics/icon_serial_64.png" alt="Icon">  </td><td> bmserial    </td><td> A serial monitor/terminal for monitoring data on a serial port/UART, or for console I/O to a serial terminal. </td>
+</tr><tr>
 <td> <img src="https://www.compuphase.com/electronics/icon_trace_64.png" alt="Icon">    </td><td> bmtrace      </td><td> A utility to monitor SWO trace messages, with support for filtering, multiple channels and the <a href="https://diamon.org/ctf/">Common Trace Format</a>. </td>
 </tr><tr>
 <td>                                                                                    </td><td> bmscan       </td><td> A command-line utility to check the COM port (Windows) or ttyACM device (Linux) that the Black Magic Probe is attached to. It can locate the IP address of a ctxLink probe by doing a network scan. </td>
