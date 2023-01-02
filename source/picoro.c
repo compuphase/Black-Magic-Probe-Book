@@ -20,7 +20,7 @@
 /*
  * Each coroutine has a jmp_buf to hold its context when suspended.
  *
- * There are lists of running and idle coroutines.
+ * There are two lists: for running and for idle coroutines.
  *
  * The coroutine at the head of the running list has the CPU, and all
  * others are suspended inside resume(). The "first" coro object holds
@@ -41,12 +41,12 @@ static struct coro {
  * A coroutine can be passed to resume() if
  * it is not on the running or idle lists.
  */
-int resumable(coro c) {
+bool resumable(coro c) {
 	return(c != NULL && c->next == NULL);
 }
 
 /*
- * Add a coroutine to a list and return the previous head of the list.
+ * Add a coroutine to the head of a list and return the previous head of the list.
  */
 static void push(coro *list, coro c) {
 	c->next = *list;

@@ -149,7 +149,7 @@ uint32_t cksum(FILE *fp)
 #if defined STANDALONE
 
 #if !defined STREQ
-  #define STREQ(s1, s2)  (stricmp((s1), (s2)) == 0)
+# define STREQ(s1, s2)  (stricmp((s1), (s2)) == 0)
 #endif
 
 static void usage(int status)

@@ -27,29 +27,33 @@
 #include "elf.h"
 #include "dwarf.h"
 
+#if defined FORTIFY
+# include <alloc/fortify.h>
+#endif
+
 #if defined __GNUC__
-  #define PACKED        __attribute__((packed))
+# define PACKED        __attribute__((packed))
 #else
-  #define PACKED
+# define PACKED
 #endif
 
 #if defined __LINUX__ || defined __FreeBSD__ || defined __APPLE__
-  #pragma pack(1)       /* structures must be packed (byte-aligned) */
+# pragma pack(1)       /* structures must be packed (byte-aligned) */
 #elif defined MACOS && defined __MWERKS__
-  #pragma options align=mac68k
+# pragma options align=mac68k
 #else
-  #pragma pack(push)
-  #pragma pack(1)       /* structures must be packed (byte-aligned) */
-  #if defined __TURBOC__
-    #pragma option -a-  /* "pack" pragma for older Borland compilers */
-  #endif
+# pragma pack(push)
+# pragma pack(1)       /* structures must be packed (byte-aligned) */
+# if defined __TURBOC__
+#   pragma option -a-  /* "pack" pragma for older Borland compilers */
+# endif
 #endif
 #if defined _MSC_VER
-  #define strdup(s)   _strdup(s)
+# define strdup(s)   _strdup(s)
 #endif
 
 #if !defined _MAX_PATH
-  #define _MAX_PATH 260
+# define _MAX_PATH 260
 #endif
 
 typedef struct tagDWARFTABLE {
@@ -486,11 +490,11 @@ typedef struct tagPUBNAME_HDR32 {
 #define DW_OP_hi_user                 0xff
 
 #if defined __LINUX__ || defined __FreeBSD__ || defined __APPLE__
-  #pragma pack()      /* reset default packing */
+# pragma pack()      /* reset default packing */
 #elif defined MACOS && defined __MWERKS__
-  #pragma options align=reset
+# pragma options align=reset
 #else
-  #pragma pack(pop)   /* reset previous packing */
+# pragma pack(pop)   /* reset previous packing */
 #endif
 
 
@@ -1017,7 +1021,7 @@ static void read_string(FILE *fp,int format,int stringtable,char *string,int max
 
 static void dwarf_abbrev(FILE *fp,const DWARFTABLE tables[],ABBREVLIST *abbrevlist)
 {
-  #define MAX_ATTRIBUTES  50  /* max. number of attributes for a single tag */
+# define MAX_ATTRIBUTES  50  /* max. number of attributes for a single tag */
   int unit,tag,attrib,format;
   int size,count;
   unsigned char flag;
@@ -1093,7 +1097,7 @@ static int read_unitheader(FILE *fp,UNIT_HDR32 *header,int *size)
         uint32_t abbrev_offs;    offset into the .debug_abbrev table
         uint8_t  address_size;   size in bytes of an address
      */
-    #define HDRSIZE 11
+#   define HDRSIZE 11
     unsigned char hdr[HDRSIZE];
     fseek(fp,mark,SEEK_SET);
     fread(&hdr,1,HDRSIZE,fp);
@@ -1103,7 +1107,7 @@ static int read_unitheader(FILE *fp,UNIT_HDR32 *header,int *size)
     memcpy(&header->address_size,hdr+10,1);
     header->unit_type=DW_UT_compile;
     *size=HDRSIZE;
-    #undef HDRSIZE
+#   undef HDRSIZE
   }
   //??? on big_endian, swap fields
   return 1;
@@ -1138,7 +1142,7 @@ static int read_prologue(FILE *fp,DWARF_PROLOGUE32 *prologue,int *size)
            sequence itself ends with a zero-byte)
         file names: base name, location, modification date, size
      */
-    #define HDRSIZE 15
+#   define HDRSIZE 15
     unsigned char hdr[HDRSIZE];
     fseek(fp,mark,SEEK_SET);
     fread(&hdr,1,HDRSIZE,fp);
@@ -1154,7 +1158,7 @@ static int read_prologue(FILE *fp,DWARF_PROLOGUE32 *prologue,int *size)
     prologue->segment_sel_size=0;
     prologue->max_oper_per_instruction=1;
     *size=HDRSIZE;
-    #undef HDRSIZE
+#   undef HDRSIZE
   } else if (prologue->version==4) {
     /* un-read v5 structure, then read & copy the v4 structure
         uint32_t total_length;     length of the line number table, minus the 4 bytes for this total_length field
@@ -1171,7 +1175,7 @@ static int read_prologue(FILE *fp,DWARF_PROLOGUE32 *prologue,int *size)
            sequence itself ends with a zero-byte)
         file names: base name, location, modification date, size
      */
-    #define HDRSIZE 16
+#   define HDRSIZE 16
     unsigned char hdr[HDRSIZE];
     fseek(fp,mark,SEEK_SET);
     fread(&hdr,sizeof(hdr),1,fp);
@@ -1187,7 +1191,7 @@ static int read_prologue(FILE *fp,DWARF_PROLOGUE32 *prologue,int *size)
     prologue->address_size=4; /* assume 32-bit, 64-bit not yet supported */
     prologue->segment_sel_size=0;
     *size=HDRSIZE;
-    #undef HDRSIZE
+#   undef HDRSIZE
   } else {
     assert(0);  /* DWARF 1 is not supported */
     return 0;
@@ -1911,10 +1915,10 @@ int dwarf_fileindex_from_path(const DWARF_PATHLIST *filetable,const char *path)
     const char *base;
     if ((base = strrchr(filename, '/')) != NULL)
       filename = base + 1;
-    #if defined _WIN32
+#   if defined _WIN32
       if ((base = strrchr(filename, '\\')) != NULL)
         filename = base + 1;
-    #endif
+#   endif
     if (strcmp(path,filename)==0)
       return fileindex;
     fileindex++;

@@ -42,13 +42,13 @@
 #include <shellapi.h>
 #include <shlobj.h>
 #if defined __MINGW32__ || defined __MINGW64__ || defined _MSC_VER
-  #include "strlcpy.h"
+# include "strlcpy.h"
 #endif
 
 #if defined UNICODE || defined _UNICODE
-  #define SHGETFOLDERPATH "SHGetFolderPathW"
+# define SHGETFOLDERPATH "SHGetFolderPathW"
 #else
-  #define SHGETFOLDERPATH "SHGetFolderPathA"
+# define SHGETFOLDERPATH "SHGetFolderPathA"
 #endif
 
 static void _SHFree(void *p)       // free shell item identifier memory
@@ -65,14 +65,14 @@ static void _SHFree(void *p)       // free shell item identifier memory
 typedef HRESULT (WINAPI *fpSHGetFolderPath)(HWND hwndOwner, int nFolder, HANDLE hToken, DWORD dwFlags, LPTSTR pszPath);
 typedef HRESULT (WINAPI *fpSHGetSpecialFolderLocation)(HWND hwndOwner, int nFolder, LPITEMIDLIST *ppidl);
 #if !defined CSIDL_FLAG_DONT_VERIFY
-  #define CSIDL_FLAG_DONT_VERIFY  0x4000
+# define CSIDL_FLAG_DONT_VERIFY 0x4000
 #endif
 #if !defined CSIDL_FLAG_CREATE
-  #define CSIDL_FLAG_CREATE       0x8000
+# define CSIDL_FLAG_CREATE      0x8000
 #endif
 #if !defined SHGFP_TYPE_CURRENT
-  #define SHGFP_TYPE_CURRENT      0
-  #define SHGFP_TYPE_DEFAULT      1
+# define SHGFP_TYPE_CURRENT     0
+# define SHGFP_TYPE_DEFAULT     1
 #endif
 
 static BOOL GetShellFolder(int FolderID, LPTSTR pszSelectedDir, size_t MaxPathLength)
@@ -211,16 +211,16 @@ static int GetDefaultFolder(char *path, size_t maxlength,
 int folder_AppData(char *path, size_t maxlength)
 {
   assert(path != NULL);
-  #if defined _WIN32
+# if defined _WIN32
     return GetShellFolder(CSIDL_APPDATA, path, maxlength);
-  #elif defined __APPLE__
+# elif defined __APPLE__
     int result = GetHomeFolder(path, maxlength);
     if (result)
       strlcat(path, "/Library/Application Support", maxlength);
     return result;
-  #else
+# else
     return GetDefaultFolder(path, maxlength, "XDG_DATA_HOME", ".local/share");
-  #endif
+# endif
 }
 
 /** folder_AppConfig() the base name for storing configuration files for the
@@ -234,15 +234,15 @@ int folder_AppData(char *path, size_t maxlength)
 int folder_AppConfig(char *path, size_t maxlength)
 {
   assert(path != NULL);
-  #if defined _WIN32
+# if defined _WIN32
     return GetShellFolder(CSIDL_APPDATA, path, maxlength);
-  #elif defined __APPLE__
+# elif defined __APPLE__
     int result = GetHomeFolder(path, maxlength);
     if (result)
       strlcat(path, "/Library/Application Support", maxlength);
     return result;
-  #else
+# else
     return GetDefaultFolder(path, maxlength, "XDG_CONFIG_HOME", ".config");
-  #endif
+# endif
 }
 

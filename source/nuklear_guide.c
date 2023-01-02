@@ -28,15 +28,20 @@
 #include "nuklear_tooltip.h"
 
 #if defined WIN32 || defined _WIN32
-  #if defined __MINGW32__ || defined __MINGW64__ || defined _MSC_VER
-    #include "strlcpy.h"
-  #endif
+# if defined __MINGW32__ || defined __MINGW64__ || defined _MSC_VER
+#   include "strlcpy.h"
+# endif
 #elif defined __linux__
-  #include <bsd/string.h>
+# include <bsd/string.h>
 #endif
 
+#if defined FORTIFY
+# include <alloc/fortify.h>
+#endif
+
+
 #if !defined sizearray
-#  define sizearray(e)    (sizeof(e) / sizeof((e)[0]))
+# define sizearray(e)   (sizeof(e) / sizeof((e)[0]))
 #endif
 
 
@@ -647,6 +652,8 @@ static bool getpage(struct nk_context *ctx, float pagewidth, const char *content
           }
         }
         /* prepare for next part to the string */
+        if (type == TYPE_BULLETLIST || type == TYPE_NUMBERLIST)
+          type = TYPE_INDENTBLOCK;  /* to avoid repeating the bullet after word-wrap */
         head = (char*)skipwhite(breakpos, false);
       } while (*head != '\0');
       free((void*)segment);

@@ -17,31 +17,36 @@
  */
 
 #if defined _WIN32
-  #define WIN32_LEAN_AND_MEAN
-  #include <windows.h>
-  #include <mmsystem.h>
+# define WIN32_LEAN_AND_MEAN
+# include <windows.h>
+# include <mmsystem.h>
 #elif defined __linux__
-  #include <sys/time.h>
+# include <sys/time.h>
 #endif
 #include <stdbool.h>
 #include <string.h>
 #include "nuklear_tooltip.h"
 
+#if defined FORTIFY
+# include <alloc/fortify.h>
+#endif
+
+
 /* timestamp() returns the timestamp (time since start-up) in ms */
 unsigned long timestamp(void)
 {
-  #if defined _WIN32
+# if defined _WIN32
     static bool init = true;
     if (init) {
       timeBeginPeriod(1); /* force millisecond resolution */
       init = false;
     }
     return timeGetTime();
-  #else
+# else
     struct timeval tv;
     gettimeofday(&tv, NULL);
     return 1000 * tv.tv_sec + tv.tv_usec / 1000;
-  #endif
+# endif
 }
 
 int tooltip(struct nk_context *ctx, struct nk_rect bounds, const char *text)

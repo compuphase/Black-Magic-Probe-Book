@@ -20,22 +20,22 @@
 #include <stdlib.h>
 #include <string.h>
 #if defined _WIN32
-  #include <windows.h>
+# include <windows.h>
 #else
-  #include <ctype.h>
-  #include <dirent.h>
-  #include <fcntl.h>
-  #include <stdio.h>
-  #include <string.h>
-  #include <termios.h>
-  #include <unistd.h>
-  #include <sys/ioctl.h>
+# include <ctype.h>
+# include <dirent.h>
+# include <fcntl.h>
+# include <stdio.h>
+# include <string.h>
+# include <termios.h>
+# include <unistd.h>
+# include <sys/ioctl.h>
 #endif
 #include "rs232.h"
 
 
 #if !defined sizearray
-  #define sizearray(a)    (sizeof(a) / sizeof((a)[0]))
+# define sizearray(a)    (sizeof(a) / sizeof((a)[0]))
 #endif
 #define MAX_COMPORTS  4
 
@@ -43,7 +43,7 @@ static HCOM comport[MAX_COMPORTS];
 static int initialized = 0;
 
 #if !defined _WIN32
-  #define INVALID_HANDLE_VALUE (-1)
+# define INVALID_HANDLE_VALUE (-1)
   static struct termios oldtio;
 #endif /* _WIN32 */
 
@@ -76,12 +76,12 @@ static void check_init(void)
  */
 HCOM* rs232_open(const char *port, unsigned baud, int databits, int stopbits, int parity, int flowctrl)
 {
-  #if defined _WIN32
+# if defined _WIN32
     DCB dcb;
     COMMTIMEOUTS commtimeouts;
-  #else
+# else
     struct termios newtio;
-  #endif
+# endif
   HCOM *hCom = NULL;
 
   /* find available slot */
@@ -92,7 +92,7 @@ HCOM* rs232_open(const char *port, unsigned baud, int databits, int stopbits, in
   if (hCom==NULL)
     return NULL;
 
-  #if defined _WIN32
+# if defined _WIN32
     /* set up the connection */
     *hCom = CreateFileA(port,GENERIC_READ|GENERIC_WRITE,0,NULL,OPEN_EXISTING,FILE_ATTRIBUTE_NORMAL,NULL);
     if (*hCom==INVALID_HANDLE_VALUE && strlen(port)<10) {
@@ -149,7 +149,7 @@ HCOM* rs232_open(const char *port, unsigned baud, int databits, int stopbits, in
     commtimeouts.WriteTotalTimeoutMultiplier=0;
     commtimeouts.WriteTotalTimeoutConstant  =0;
     SetCommTimeouts(*hCom,&commtimeouts);
-  #else /* _WIN32 */
+# else /* _WIN32 */
     /* open the serial port device file
      * O_NDELAY   - tells port to operate and ignore the DCD line
      * O_NONBLOCK - same as O_NDELAY under Linux
@@ -186,7 +186,7 @@ HCOM* rs232_open(const char *port, unsigned baud, int databits, int stopbits, in
     }
     if (flowctrl==FLOWCTRL_RTSCTS)
       newtio.c_cflag |= CRTSCTS;
-#define NEWTERMIOS_SETBAUDARTE(bps) newtio.c_cflag |= bps;
+#   define NEWTERMIOS_SETBAUDARTE(bps) newtio.c_cflag |= bps;
     switch (baud) {
     #ifdef B1152000
       case 1152000: NEWTERMIOS_SETBAUDARTE( B1152000 ); break;
@@ -236,7 +236,7 @@ HCOM* rs232_open(const char *port, unsigned baud, int databits, int stopbits, in
      * get what's in the input buffer or nothing
      */
     fcntl(*hCom, F_SETFL,FNDELAY);
-  #endif /* _WIN32 */
+# endif /* _WIN32 */
 
   return hCom;
 }
@@ -244,16 +244,16 @@ HCOM* rs232_open(const char *port, unsigned baud, int databits, int stopbits, in
 void rs232_close(HCOM *hCom)
 {
   if (rs232_isopen(hCom)) {
-    #if defined _WIN32
+#   if defined _WIN32
       BOOL result = FlushFileBuffers(*hCom);
       if (result || GetLastError() != ERROR_INVALID_HANDLE)
         CloseHandle(*hCom);
-    #else /* _WIN32 */
+#   else /* _WIN32 */
       tcflush(*hCom, TCOFLUSH);
       tcflush(*hCom, TCIFLUSH);
       tcsetattr(*hCom, TCSANOW, &oldtio);
       close(*hCom);
-    #endif /* _WIN32 */
+#   endif /* _WIN32 */
     *hCom = INVALID_HANDLE_VALUE;
   }
 }
@@ -275,16 +275,16 @@ int rs232_isopen(const HCOM *hCom)
 size_t rs232_xmit(HCOM *hCom, const unsigned char *buffer, size_t size)
 {
   if (rs232_isopen(hCom)) {
-    #if defined _WIN32
+#   if defined _WIN32
       DWORD written = 0;
       if (!WriteFile(*hCom, buffer, size, &written, NULL))
         written = 0;
       return (size_t)written;
-    #else /* _WIN32 */
+#   else /* _WIN32 */
       size_t written = write(*hCom, buffer, size);
       tcdrain(*hCom);
       return written;
-    #endif /* _WIN32 */
+#   endif /* _WIN32 */
   }
   return 0;
 }
@@ -297,7 +297,7 @@ size_t rs232_xmit(HCOM *hCom, const unsigned char *buffer, size_t size)
 size_t rs232_recv(HCOM *hCom, unsigned char *buffer, size_t size)
 {
   if (rs232_isopen(hCom)) {
-    #if defined _WIN32
+#   if defined _WIN32
       DWORD read = 0;
       if (!ReadFile(*hCom, buffer, size, &read, NULL)) {
         DWORD error = GetLastError();
@@ -308,14 +308,14 @@ size_t rs232_recv(HCOM *hCom, unsigned char *buffer, size_t size)
         read = 0;
       }
       return (size_t)read;
-    #else /* _WIN32 */
+#   else /* _WIN32 */
       int num = (int)read(*hCom, buffer, size);
       if (num < 0) {
         rs232_close(hCom);
         num = 0;
       }
       return num;
-    #endif /* _WIN32 */
+#   endif /* _WIN32 */
   }
   return 0;
 }
@@ -323,13 +323,13 @@ size_t rs232_recv(HCOM *hCom, unsigned char *buffer, size_t size)
 void rs232_flush(HCOM *hCom)
 {
   if (rs232_isopen(hCom)) {
-    #if defined _WIN32
+#   if defined _WIN32
       FlushFileBuffers(*hCom);
-    #else
+#   else
       tcdrain(*hCom);
       tcflush(*hCom, TCOFLUSH);
       tcflush(*hCom, TCIFLUSH);
-    #endif
+#   endif
   }
 }
 
@@ -342,7 +342,7 @@ void rs232_flush(HCOM *hCom)
 void rs232_setstatus(HCOM *hCom, int code, int status)
 {
   if (rs232_isopen(hCom)) {
-    #if defined _WIN32
+#   if defined _WIN32
       switch (code) {
       case LINESTAT_RTS:
         EscapeCommFunction(*hCom, status ? SETRTS : CLRRTS);
@@ -357,7 +357,7 @@ void rs232_setstatus(HCOM *hCom, int code, int status)
           ClearCommBreak(*hCom);
         break;
       }
-    #else /* _WIN32 */
+#   else /* _WIN32 */
       int flags;
       ioctl(*hCom,TIOCMGET,&flags);
       switch (code) {
@@ -379,7 +379,7 @@ void rs232_setstatus(HCOM *hCom, int code, int status)
         break;
       }
       ioctl(*hCom,TIOCMSET,&flags);
-    #endif /* _WIN32 */
+#   endif /* _WIN32 */
   }
 }
 
@@ -392,7 +392,7 @@ unsigned rs232_getstatus(HCOM *hCom)
 {
   unsigned result = 0;
   if (rs232_isopen(hCom)) {
-    #if defined _WIN32
+#   if defined _WIN32
       DWORD flags;
       if (!GetCommModemStatus(*hCom,&flags))
         flags = 0;
@@ -404,7 +404,7 @@ unsigned rs232_getstatus(HCOM *hCom)
         result |= LINESTAT_RI;
       if (flags & MS_RLSD_ON)
         result |= LINESTAT_CD;
-    #else /* _WIN32 */
+#   else /* _WIN32 */
       int flags;
       ioctl(*hCom,TIOCMGET,&flags);
       if (flags & TIOCM_RTS)
@@ -419,14 +419,14 @@ unsigned rs232_getstatus(HCOM *hCom)
         result |= LINESTAT_RI;
       if (flags & TIOCM_CD)
         result |= LINESTAT_CD;
-    #endif /* _WIN32 */
+#   endif /* _WIN32 */
   }
   return result;
 }
 
 void rs232_framecheck(HCOM *hCom, int enable)
 {
-  #if !defined _WIN32
+# if !defined _WIN32
     /* detect BREAK: ff 00 00 is sent when neither IGNBRK nor BRKINT are set,
        but PARMRK is set
 
@@ -443,7 +443,7 @@ void rs232_framecheck(HCOM *hCom, int enable)
     else
       tio.c_iflag = (tio.c_iflag & ~(PARMRK | INPCK)) | (IGNPAR | IGNBRK);
     tcsetattr(*hCom, TCSANOW, &tio);
-  #endif
+# endif
 }
 
 static int portname_compare(const char *name1,const char *name2)
@@ -498,7 +498,7 @@ int rs232_collect(char **portlist, int listsize)
     portlist[count] = NULL;
   }
 
-  #if defined _WIN32
+# if defined _WIN32
     HKEY hkey;
     if (RegOpenKeyEx(HKEY_LOCAL_MACHINE,"HARDWARE\\DEVICEMAP\\SERIALCOMM",0,KEY_READ,&hkey)==ERROR_SUCCESS) {
       for (count=0;; count++) {
@@ -514,7 +514,7 @@ int rs232_collect(char **portlist, int listsize)
       }
       RegCloseKey(hkey);
     }
-  #else /* _WIN32 */
+# else /* _WIN32 */
     DIR *dp=opendir("/dev");
     struct dirent *dirp;
     count=0;
@@ -530,7 +530,7 @@ int rs232_collect(char **portlist, int listsize)
       }
     }
     closedir(dp);
-  #endif /* _WIN32 */
+# endif /* _WIN32 */
 
   if (portlist!=NULL) {
     /* sort the entries in the list (insertion sort) */

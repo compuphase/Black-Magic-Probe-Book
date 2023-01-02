@@ -1,3 +1,5 @@
+#c-include svnrev.h
+-- ---------------------------------------------------------------------------
 # BlackMagic Flash Programmer
 
 This utility downloads firmware into a micro-controller using the
@@ -43,9 +45,10 @@ file that is selected. So you can use different options for separate projects.
   field should be set to "Standard".
 
 *Post-process*
-: A post-processing program (or shell script) is run after every successful
-  download, with the name of the ELF file and the serial number (if serialization)
-  is active.
+: A post-processing script is run after every successful download, with information
+  on the ELF file and the serial number (if serialization) is active. The script
+  must be in the Tcl language. See the book "Embedded Debugging with the Black Magic Probe"
+  for more information on scripting.
 
 *Power Target*
 : This option can be set to drive the power-sense pin with 3.3V (to power the
@@ -74,7 +77,7 @@ file that is selected. So you can use different options for separate projects.
 See also:
     [[Serialization]]
     [[Tools]]
-
+    [[About BlackMagic Flash Programmer]]
 
 # Serialization
 
@@ -110,7 +113,17 @@ The serialization method is either "No serialization", "Address" or "Match".
 
 *Serial*
 : The serial number is a decimal value. It is incremented after each successful
-  download. The size of the serial number is in bytes.
+  download.
+
+*Size*
+: The size of the serial number is in bytes. The serial number is padded with
+  zeroes to fill up the size. Note that the prefix is part of the size.
+
+: For example, if the serial number is 12, the size is 8 and the format is ASCII
+  (and there is no prefix), the string stored is 00000012. But if the format is
+  Unicode, where each character takes two bytes, 0012 would be stored. And if
+  the format is binary, there would be 7 bytes with a zero value stored, followed
+  by a single byte with the value 12.
 
 *Format*
 : The format that the serial number is written in. It can be chosen as binary,
@@ -165,6 +178,7 @@ The utility requires a debug probe that is compatible with the Black Magic Probe
 It is a self-contained utility; it does not require GDB.
 
 ---
+Version {{SVNREV_STR}} \
 Copyright 2019-2022 CompuPhase \
 Licensed under the Apache License version 2.0
 

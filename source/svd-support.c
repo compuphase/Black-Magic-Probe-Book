@@ -24,12 +24,17 @@
 #include "xmltractor.h"
 
 #if defined __MINGW32__ || defined __MINGW64__
-  #include "strlcpy.h"
+# include "strlcpy.h"
 #elif defined __linux__
-  #include <bsd/string.h>
+# include <bsd/string.h>
 #elif defined(_MSC_VER) && _MSC_VER < 1900
-  #include "c99_snprintf.h"
+# include "c99_snprintf.h"
 #endif
+
+#if defined FORTIFY
+# include <alloc/fortify.h>
+#endif
+
 
 struct tagPERIPHERAL;
 
@@ -65,7 +70,7 @@ typedef struct tagPERIPHERAL {
 #define INVALID_ADDRESS (unsigned long)(~0)
 
 #if !defined sizearray
-  #define sizearray(e)    (sizeof(e) / sizeof((e)[0]))
+# define sizearray(e)    (sizeof(e) / sizeof((e)[0]))
 #endif
 
 static char svd_prefix[50]= ""; /* "header prefix" as defined in SVD files */

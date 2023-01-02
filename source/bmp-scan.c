@@ -25,30 +25,34 @@
 #include <string.h>
 
 #if defined WIN32 || defined _WIN32
-  #define STRICT
-  #define WIN32_LEAN_AND_MEAN
-  #include <windows.h>
-  #include <tchar.h>
-  #if defined __MINGW32__ || defined __MINGW64__
-    #include <winreg.h>
-    #define LSTATUS LONG
-  #endif
+# define STRICT
+# define WIN32_LEAN_AND_MEAN
+# include <windows.h>
+# include <tchar.h>
+# if defined __MINGW32__ || defined __MINGW64__
+#   include <winreg.h>
+#   define LSTATUS LONG
+# endif
 #else
-  #include <dirent.h>
-  #include <pthread.h>
-  #include <unistd.h>
-  #include <bsd/string.h>
+# include <dirent.h>
+# include <pthread.h>
+# include <unistd.h>
+# include <bsd/string.h>
 #endif
 
 #include "bmp-scan.h"
 #include "tcpip.h"
 
+#if defined FORTIFY
+# include <alloc/fortify.h>
+#endif
+
 
 #if !defined sizearray
-  #define sizearray(e)    (sizeof(e) / sizeof((e)[0]))
+# define sizearray(e)    (sizeof(e) / sizeof((e)[0]))
 #endif
 #if !defined MAX_PATH
-  #define MAX_PATH    300
+# define MAX_PATH    300
 #endif
 
 
@@ -309,7 +313,7 @@ int find_bmp(int seqnr, int iface, char *name, size_t namelen)
   *name = '\0';
 
   /* run through directories in the sysfs branch */
-  #define SYSFS_ROOT  "/sys/bus/usb/devices"
+# define SYSFS_ROOT  "/sys/bus/usb/devices"
   dsys = opendir(SYSFS_ROOT);
   if (dsys == NULL)
     return 0;
@@ -484,23 +488,23 @@ static void *scan_range(void *arg)
 
   ((PORTRANGE*)arg)->mask = mask;
 
-  #if !(defined WIN32 || defined _WIN32)
+# if !(defined WIN32 || defined _WIN32)
     pthread_mutex_lock(&running_mutex);
     running_threads--;
     pthread_mutex_unlock(&running_mutex);
-  #endif
+# endif
   return 0;
 }
 
 int scan_network(unsigned long *addresses, int address_count)
 {
-  #define NUM_THREADS 32
+# define NUM_THREADS 32
   PORTRANGE pr[NUM_THREADS];
-  #if defined WIN32 || defined _WIN32
+# if defined WIN32 || defined _WIN32
     HANDLE hThread[NUM_THREADS];
-  #else
+# else
     pthread_t hThread[NUM_THREADS];
-  #endif
+# endif
   char local_ip[30], *ptr;
   unsigned long local_ip_addr;
   int idx, range, count;
@@ -521,11 +525,11 @@ int scan_network(unsigned long *addresses, int address_count)
 
   /* create threads to scan the network and wait for all these threads to
      finish */
-  #if defined WIN32 || defined _WIN32
+# if defined WIN32 || defined _WIN32
     for (idx=0; idx<NUM_THREADS; idx++)
       hThread[idx] = CreateThread(NULL, 0, scan_range, &pr[idx], 0, NULL);
     WaitForMultipleObjects(NUM_THREADS, hThread, TRUE, INFINITE);
-  #else
+# else
     for (idx=0; idx<NUM_THREADS; idx++) {
       if (pthread_create(&hThread[idx], NULL, scan_range, NULL) == 0) {
         pthread_mutex_lock(&running_mutex);
@@ -535,7 +539,7 @@ int scan_network(unsigned long *addresses, int address_count)
     }
     while (running_threads > 0)
       usleep(50000);
-  #endif
+# endif
 
   /* construct the list of matching addresses */
   assert(addresses != NULL && address_count > 0);

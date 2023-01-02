@@ -4,7 +4,7 @@
  * was lacking).
  * This utility is built with Nuklear for a cross-platform GUI.
  *
- * Copyright 2022 CompuPhase
+ * Copyright 2022-2023 CompuPhase
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -20,26 +20,26 @@
  */
 
 #if defined WIN32 || defined _WIN32
-  #define STRICT
-  #define WIN32_LEAN_AND_MEAN
-  #define _WIN32_WINNT   0x0500 /* for AttachConsole() */
-  #include <windows.h>
-  #include <direct.h>
-  #include <io.h>
-  #include <malloc.h>
-  #if defined __MINGW32__ || defined __MINGW64__
-    #include "strlcpy.h"
-  #elif defined _MSC_VER
-    #include "strlcpy.h"
-    #define access(p,m)       _access((p),(m))
-  #endif
+# define STRICT
+# define WIN32_LEAN_AND_MEAN
+# define _WIN32_WINNT   0x0500 /* for AttachConsole() */
+# include <windows.h>
+# include <direct.h>
+# include <io.h>
+# include <malloc.h>
+# if defined __MINGW32__ || defined __MINGW64__
+#   include "strlcpy.h"
+# elif defined _MSC_VER
+#   include "strlcpy.h"
+#   define access(p,m)       _access((p),(m))
+# endif
 #elif defined __linux__
-  #include <alloca.h>
-  #include <pthread.h>
-  #include <unistd.h>
-  #include <bsd/string.h>
-  #include <sys/stat.h>
-  #include <sys/time.h>
+# include <alloca.h>
+# include <pthread.h>
+# include <unistd.h>
+# include <bsd/string.h>
+# include <sys/stat.h>
+# include <sys/time.h>
 #endif
 #include <assert.h>
 #include <ctype.h>
@@ -48,6 +48,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #include "guidriver.h"
 #include "minIni.h"
@@ -60,28 +61,33 @@
 #include "rs232.h"
 #include "specialfolder.h"
 #include "svnrev.h"
+#include "tcl.h"
+
+#if defined FORTIFY
+# include <alloc/fortify.h>
+#endif
 
 #if defined __linux__ || defined __unix__
-  #include "res/icon_serial_64.h"
+# include "res/icon_serial_64.h"
 #endif
 
 #if !defined _MAX_PATH
-  #define _MAX_PATH 260
+# define _MAX_PATH 260
 #endif
 
 #if defined __linux__ || defined __FreeBSD__ || defined __APPLE__
 #  define stricmp(s1,s2)  strcasecmp((s1),(s2))
 #endif
 #if !defined sizearray
-  #define sizearray(e)    (sizeof(e) / sizeof((e)[0]))
+# define sizearray(e)    (sizeof(e) / sizeof((e)[0]))
 #endif
 
 #if defined WIN32 || defined _WIN32
-  #define DIRSEP_CHAR '\\'
-  #define IS_OPTION(s)  ((s)[0] == '-' || (s)[0] == '/')
+# define DIRSEP_CHAR '\\'
+# define IS_OPTION(s)  ((s)[0] == '-' || (s)[0] == '/')
 #else
-  #define DIRSEP_CHAR '/'
-  #define IS_OPTION(s)  ((s)[0] == '-')
+# define DIRSEP_CHAR '/'
+# define IS_OPTION(s)  ((s)[0] == '-')
 #endif
 
 
@@ -96,13 +102,13 @@ static float opt_fontsize = FONT_HEIGHT;
 
 static void usage(const char *invalid_option)
 {
-  #if defined _WIN32  /* fix console output on Windows */
+# if defined _WIN32  /* fix console output on Windows */
     if (AttachConsole(ATTACH_PARENT_PROCESS)) {
       freopen("CONOUT$", "wb", stdout);
       freopen("CONOUT$", "wb", stderr);
     }
     printf("\n");
-  #endif
+# endif
 
   if (invalid_option != NULL)
     fprintf(stderr, "Unknown option %s; use -h for help.\n\n", invalid_option);
@@ -118,18 +124,34 @@ static void usage(const char *invalid_option)
 
 static void version(void)
 {
-  #if defined _WIN32  /* fix console output on Windows */
+# if defined _WIN32  /* fix console output on Windows */
     if (AttachConsole(ATTACH_PARENT_PROCESS)) {
       freopen("CONOUT$", "wb", stdout);
       freopen("CONOUT$", "wb", stderr);
     }
     printf("\n");
-  #endif
+# endif
 
   printf("BMSerial version %s.\n", SVNREV_STR);
   printf("Copyright 2022 CompuPhase\nLicensed under the Apache License version 2.0\n");
 }
 
+#if defined FORTIFY
+  void Fortify_OutputFunc(const char *str, int type)
+  {
+#   if defined _WIN32  /* fix console output on Windows */
+      if (AttachConsole(ATTACH_PARENT_PROCESS)) {
+        freopen("CONOUT$", "wb", stdout);
+        freopen("CONOUT$", "wb", stderr);
+      }
+      printf("Fortify: [%d] %s\n", type, str);
+#   endif
+  }
+#endif
+
+
+#define DFLAG_LOCAL   0x01    /* this data block is local input (transmitted text) */
+#define DFLAG_SCRIPT  0x02    /* this data block is script output */
 
 typedef struct tagDATALIST {
   struct tagDATALIST *next;
@@ -139,10 +161,11 @@ typedef struct tagDATALIST {
   int textlines;              /* the number of (valid) lines in the text array */
   int maxlines;               /* the maximum size of the text array */
   unsigned long timestamp;    /* timestamp of reception (milliseconds) */
-  bool local;
+  int flags;                  /* data flags */
 } DATALIST;
 
 static DATALIST datalist_root = { NULL };
+static time_t reception_timestamp;
 
 static void datalist_freeitem(DATALIST *item)
 {
@@ -166,12 +189,19 @@ static void datalist_clear(void)
   }
 }
 
-static DATALIST *datalist_append(const unsigned char *buffer, size_t size, bool isascii, bool local)
+static DATALIST *datalist_append(const unsigned char *buffer, size_t size, bool isascii, int flags)
 {
   assert(buffer != NULL && size > 0);
 
   /* get the time (in milliseconds) of this reception */
   unsigned long tstamp = timestamp();
+
+  /* for the very first data block, also get the local time, and store it in
+     the root block */
+  if (datalist_root.next == NULL) {
+    reception_timestamp = time(NULL);
+    datalist_root.timestamp = tstamp;
+  }
 
   /* check whether the buffer should be appended to the previous one */
   DATALIST *last = &datalist_root;
@@ -180,7 +210,7 @@ static DATALIST *datalist_append(const unsigned char *buffer, size_t size, bool 
 
   /* never append a local echo, and obviously don't append if the list is empty,
      but also don't append *to* a local echo */
-  bool append = !local && datalist_root.next != NULL && !datalist_root.next->local;
+  bool append = flags == 0 && datalist_root.next != NULL && !datalist_root.next->flags == 0;
   if (append) {
     /* if there is significant delay between the reception of the two blocks,
        assume separate receptions; but "significant" is different for blocks
@@ -221,8 +251,8 @@ static DATALIST *datalist_append(const unsigned char *buffer, size_t size, bool 
     }
     memcpy(item->data, buffer, size);
     item->datasize = size;
-    item->local = local;
-    item->timestamp = tstamp;
+    item->flags = flags;
+    item->timestamp = tstamp - datalist_root.timestamp;
     assert(last != NULL && last->next == NULL);
     last->next = item;
   }
@@ -338,6 +368,7 @@ enum {
   TAB_DISPLAYOPTIONS,
   TAB_TRANSMITOPTIONS,
   TAB_FILTERS,
+  TAB_SCRIPT,
   /* --- */
   TAB_COUNT
 };
@@ -345,6 +376,12 @@ enum {
 enum {
   VIEW_TEXT,
   VIEW_HEX,
+};
+
+enum {
+  TIMESTAMP_NONE,
+  TIMESTAMP_RELATIVE,
+  TIMESTAMP_ABSOLUTE,
 };
 
 enum {
@@ -377,14 +414,24 @@ typedef struct tagAPPSTATE {
   nk_bool scrolltolast;         /**< scroll to bottom on reception of new data */
   char bytesperline[16];        /**< bytes per line (Hex mode), edit field */
   int bytesperline_val;         /**< copied from the edit buffer when the edit field looses focus */
+  int recv_timestamp;           /**< whether to prefix timestamp to received text */
   char linelimit[16];           /**< max. number of lines retained in the viewport */
   int linelimit_val;            /**< copied from the edit buffer when the edit field looses focus */
   nk_bool localecho;            /**< echo transmitted text */
   int append_eol;               /**< append CR, LF or CR+LF */
   FILTER filter_root;           /**< highlight filters */
   FILTER filter_edit;           /**< the filter being edited */
+  char scriptfile[_MAX_PATH];   /**< path of the script file */
+  time_t scriptfiletime;        /**< "modified" timestamp of the loaded file */
+  char *script;                 /**< script loaded in memory */
+  bool script_reload;           /**< whether the script must be reloaded */
+  bool script_block_run;        /**< block running the script (because errors were found) */
+  bool script_cache;            /**< whether data from a previous reception must be kept */
+  unsigned char *script_recv;   /**< data buffer for the script */
+  size_t script_recv_size;      /**< size of the memory buffer */
+  struct tcl tcl;               /**< Tcl context (for running the script) */
   bool help_popup;              /**< whether "help" popup is active */
-  int viewport_width;           /**< width of the viewport in characters */
+  int viewport_width;           /**< width of the viewport in characters (excluding the width of a timestamp field) */
 } APPSTATE;
 
 static bool get_configfile(char *filename, size_t maxsize, const char *basename)
@@ -396,11 +443,11 @@ static bool get_configfile(char *filename, size_t maxsize, const char *basename)
     return false;
 
   strlcat(filename, DIR_SEPARATOR "BlackMagic", maxsize);
-  #if defined _WIN32
+# if defined _WIN32
     mkdir(filename);
-  #else
+# else
     mkdir(filename, S_IRWXU | S_IRWXG | S_IROTH | S_IXOTH);
-  #endif
+# endif
   strlcat(filename, DIR_SEPARATOR, maxsize);
   strlcat(filename, basename, maxsize);
   return true;
@@ -433,6 +480,7 @@ static bool save_settings(const char *filename, const APPSTATE *state,
   ini_putl("View", "wordwrap", state->wordwrap, filename);
   ini_putl("View", "scrolltolast", state->scrolltolast, filename);
   ini_putl("View", "bytesperline", state->bytesperline_val, filename);
+  ini_putl("View", "timestamp", state->recv_timestamp, filename);
   ini_putl("View", "linemimit", state->linelimit_val, filename);
 
   ini_putf("Settings", "splitter", splitter_hor->ratio, filename);
@@ -451,6 +499,8 @@ static bool save_settings(const char *filename, const APPSTATE *state,
             flt->colour.r, flt->colour.g, flt->colour.b, flt->text);
     ini_puts("Filters", key, data, filename);
   }
+
+  ini_puts("Script", "file", state->scriptfile, filename);
 
   return access(filename, 0) == 0;
 }
@@ -489,6 +539,7 @@ static bool load_settings(const char *filename, APPSTATE *state,
   if (state->bytesperline_val <= 0)
     state->bytesperline_val = 8;
   sprintf(state->bytesperline, "%d", state->bytesperline_val);
+  state->recv_timestamp = (int)ini_getl("View", "timestamp", TIMESTAMP_NONE, filename);
   state->linelimit_val = ini_getl("View", "linelimit", 0, filename);
   if (state->linelimit_val <= 0)
     state->linelimit[0] = '\0';
@@ -523,7 +574,187 @@ static bool load_settings(const char *filename, APPSTATE *state,
       filter_add(&state->filter_root, flttext, nk_rgb(r, g, b), enabled);
   }
 
+  ini_gets("Script", "file", "", state->scriptfile, sizearray(state->scriptfile), filename);
+
   return true;
+}
+
+static void reformat_data(APPSTATE *state, DATALIST *item);
+static void tcl_add_message(APPSTATE *state, const char *text, size_t length, bool isascii)
+{
+  DATALIST *item = datalist_append((const unsigned char*)text, length, isascii, DFLAG_SCRIPT);
+  if (item != NULL)
+    reformat_data(state, item); /* format the block of data */
+}
+
+static int tcl_cmd_exec(struct tcl *tcl, struct tcl_value *args, void *arg)
+{
+  (void)arg;
+  struct tcl_value *cmd = tcl_list_item(args, 1);
+  int retcode = system(tcl_data(cmd));
+  tcl_free(cmd);
+  return tcl_result(tcl, (retcode >= 0), tcl_value("", 0));
+}
+
+static int tcl_cmd_puts(struct tcl *tcl, struct tcl_value *args, void *arg)
+{
+  (void)arg;
+  APPSTATE *state = (APPSTATE*)arg;
+  assert(state);
+  struct tcl_value *text = tcl_list_item(args, 1);
+  tcl_add_message(state, tcl_data(text), tcl_length(text), false);
+  return tcl_result(tcl, true, text);
+}
+
+static int tcl_cmd_wait(struct tcl *tcl, struct tcl_value *args, void *arg)
+{
+  (void)arg;
+  struct tcl_value *text = tcl_list_item(args, 1);
+# if defined _WIN32
+    Sleep((int)tcl_number(text));
+# else
+    usleep((int)tcl_number(text) * 1000);
+# endif
+  return tcl_result(tcl, true, text);
+}
+
+static int tcl_cmd_serial(struct tcl *tcl, struct tcl_value *args, void *arg)
+{
+  (void)arg;
+  APPSTATE *state = (APPSTATE*)arg;
+  assert(state);
+  int nargs = tcl_list_length(args);
+  struct tcl_value *subcmd = tcl_list_item(args, 1);
+  if (strcmp(tcl_data(subcmd), "cache") == 0 || strcmp(tcl_data(subcmd), "gobble") == 0) {
+    int gobble = INT_MAX; /* default for "serial gobble" is: gobble everything */
+    if (strcmp(tcl_data(subcmd), "cache") == 0) {
+      state->script_cache = true;
+      gobble = 0;         /* default for "serial cache" is: keep everything, gobble nothing */
+    }
+    if (nargs >= 3) {
+      struct tcl_value *v_gobble = tcl_list_item(args, 2);
+      gobble = tcl_number(v_gobble);
+      tcl_free(v_gobble);
+    }
+    if (gobble > 0 && gobble < state->script_recv_size) {
+      state->script_recv_size -= gobble;
+      memmove(state->script_recv, state->script_recv + gobble, state->script_recv_size);
+    } else if (gobble != 0) {
+      state->script_recv_size = 0;  /* gobble more than there is data -> nothing left */
+    }
+    if (gobble != 0)
+      tcl_var(&state->tcl, "recv", tcl_value((const char*)state->script_recv, state->script_recv_size));
+  } else if (strcmp(tcl_data(subcmd), "send") == 0) {
+    if (nargs >= 3 && rs232_isopen(state->hCom)) {
+      struct tcl_value *data = tcl_list_item(args, 1);
+      rs232_xmit(state->hCom, (const unsigned char*)tcl_data(data), tcl_length(data));
+      tcl_free(data);
+    }
+  }
+  tcl_free(subcmd);
+  return tcl_result(tcl, 1, tcl_value("", 0));
+}
+
+static bool tcl_runscript(APPSTATE *state, const unsigned char *data, size_t size)
+{
+  /* (re-)load the script file */
+  assert(state != NULL);
+  /* check whether the file date/time changes; if so, also reload the script */
+  if (state->script != NULL && strlen(state->scriptfile) > 0) {
+    struct stat fstat;
+    if (stat(state->scriptfile, &fstat) == 0 && state->scriptfiletime != fstat.st_mtime) {
+      state->scriptfiletime =fstat.st_mtime;
+      state->script_reload = true;
+    }
+  }
+  if (state->script_reload) {
+    state->script_reload = false;
+    state->script_block_run = false;
+    if (state->script != NULL) {
+      free((void*)state->script);
+      state->script = NULL;
+    }
+    if (strlen(state->scriptfile) == 0)
+      return false;
+    FILE *fp = fopen(state->scriptfile, "rt");
+    if (fp == NULL) {
+      static const char *msg = "Tcl script file not found.";
+      tcl_add_message(state, msg, strlen(msg), false);
+      return false;
+    }
+    fseek(fp, 0, SEEK_END);
+    size_t sz = ftell(fp) + 2;
+    state->script = malloc((sz)*sizeof(char));
+    if (state->script == NULL) {
+      static const char *msg = "Memory allocation failure (when loading Tcl script).";
+      tcl_add_message(state, msg, strlen(msg), false);
+      fclose(fp);
+      return false;
+    }
+    fseek(fp, 0, SEEK_SET);
+    memset(state->script, 0, sz);
+    char *line = state->script;
+    while (fgets(line, sz, fp) != NULL)
+      line += strlen(line);
+    assert(line - state->script < sz);
+    fclose(fp);
+  }
+  if (state->script == NULL || state->script_block_run)
+    return false;
+  /* set variables, but first build the memory buffer (together with cached data) */
+  size_t total = state->script_recv_size + size;
+  unsigned char *buffer = malloc(total * sizeof(unsigned char));
+  if (buffer != NULL) {
+    if (state->script_recv_size > 0) {
+      assert(state->script_recv != NULL);
+      memcpy(buffer, state->script_recv, state->script_recv_size);
+    }
+    memcpy(buffer + state->script_recv_size, data, size);
+    if (state->script_recv != NULL)
+      free((void*)state->script_recv);
+    state->script_recv = buffer;
+    state->script_recv_size = total;
+  }
+  if (state->script_recv == NULL)
+    return false; /* these are small allocations, if these go wrong, there is more trouble */
+  tcl_var(&state->tcl, "recv", tcl_value((const char*)state->script_recv, state->script_recv_size));
+  /* now run it */
+  state->script_cache = false;
+  bool ok = tcl_eval(&state->tcl, state->script, strlen(state->script) + 1);
+  if (!ok) {
+    int line;
+    char symbol[64];
+    const char *err = tcl_errorinfo(&state->tcl, NULL, &line, symbol, sizearray(symbol));
+    char msg[256];
+    sprintf(msg, "Tcl script error: %s, on or after line %d", err, line);
+    if (strlen(symbol) > 0)
+      sprintf(msg + strlen(msg), ": %s", symbol);
+    tcl_add_message(state, msg, strlen(msg), false);
+    state->script_block_run = true; /* block the script from running, until it is reloaded */
+  }
+  /* if data was marked to be cached, leave it in the buffer; otherwise, free it
+     (and always delete a buffer if every data has been gobbled) */
+  if ((!state->script_cache || state->script_recv_size == 0) && state->script_recv != NULL) {
+    free((void*)state->script_recv);
+    state->script_recv = NULL;
+    state->script_recv_size = 0;
+    state->script_cache = false;
+  }
+  return ok;
+}
+
+static char *format_time(char *buffer, size_t size, unsigned long timestamp, time_t basetime, int format)
+{
+  assert(format == TIMESTAMP_RELATIVE || TIMESTAMP_ABSOLUTE);
+  assert(buffer != NULL);
+  assert(size >= 20);
+  if (format == TIMESTAMP_RELATIVE) {
+    sprintf(buffer, "%9.3f", timestamp/1000.0);
+  } else {
+    time_t tstamp = basetime + (timestamp + 500) / 1000;
+    strftime(buffer, size, "%Y-%m-%d %H:%M:%S", localtime(&tstamp));
+  }
+  return buffer;
 }
 
 static bool save_data(const char *filename, const APPSTATE *state)
@@ -535,6 +766,12 @@ static bool save_data(const char *filename, const APPSTATE *state)
   for (DATALIST *item = datalist_root.next; item != NULL; item = item->next) {
     assert(item->text != NULL);
     for (int lineidx = 0; lineidx < item->textlines; lineidx++) {
+      if (state->recv_timestamp != TIMESTAMP_NONE) {
+        char buffer[40];
+        format_time(buffer, sizearray(buffer), item->timestamp, reception_timestamp, state->recv_timestamp);
+        fprintf(fp, "[%s]", buffer);
+        fputc((state->view == VIEW_TEXT) ? ' ' : '\n', fp);
+      }
       assert(item->text[lineidx] != NULL);
       fputs(item->text[lineidx], fp);
       fputc('\n', fp);
@@ -560,7 +797,7 @@ static void reformat_data(APPSTATE *state, DATALIST *item)
     item->maxlines = 0;
   }
 
-  if (state->view == VIEW_TEXT) {
+  if (state->view == VIEW_TEXT || (item->flags & DFLAG_SCRIPT)) {
     /* split the data buffer into lines */
     if (state->wordwrap && state->viewport_width == 0)
       state->reformat_view = true;  /* special case, viewport width is not yet calculated */
@@ -591,7 +828,7 @@ static void reformat_data(APPSTATE *state, DATALIST *item)
       for (int idx = start; idx < stop; idx++) {
         if ((item->data[idx] < ' ' && item->data[idx] != '\r' && item->data[idx] != '\n')
             || (item->data[idx] >= 0x80 && item->data[idx] < 0xa0))
-          len += 3; // 0xE2 0x96 0xAB
+          len += 3; // 0xE2 0x96 0xAB for unknown character
         else if (item->data[idx] >= 0xa0)
           len += 2;
         else
@@ -609,7 +846,7 @@ static void reformat_data(APPSTATE *state, DATALIST *item)
                position in word-wrap */
           } else if ((item->data[idx] < ' ')
               || (item->data[idx] >= 0x80 && item->data[idx] < 0xa0)) {
-            memcpy(pos, "\xe2\x96\xab", 3);
+            memcpy(pos, "\xe2\x96\xab", 3); /* glyph for "unknown character" */
             pos += 3;
           } else if (item->data[idx] >= 0xa0) {
             *pos++ = (char)(0xc0 | ((item->data[idx] >> 6) & 0x3));
@@ -684,7 +921,7 @@ static int process_data(APPSTATE *state)
   if (count == 0)
     return 0;
 
-  #if !defined _WIN32
+# if !defined _WIN32
     /* In Linux (and similar), frame errors show up in the data stream as a
        byte sequence FF 00, and breaks as the sequence FF 00 00.
        However, such sequences might also occur in normal (binary) transfer,
@@ -709,7 +946,7 @@ static int process_data(APPSTATE *state)
         }
       }
     }
-  #endif
+# endif
 
   /* check whether the entirity of the block is ASCII */
   bool isascii = true;
@@ -733,12 +970,15 @@ static int process_data(APPSTATE *state)
       stop = count;
     }
 
-    DATALIST *item = datalist_append(buffer + start, stop - start, isascii, false);
+    DATALIST *item = datalist_append(buffer + start, stop - start, isascii, 0);
     if (item != NULL)
       reformat_data(state, item); /* format (or re-format) the block of data */
 
     start = stop;
   }
+
+  /* run script after handling raw data */
+  tcl_runscript(state, buffer, count);
 
   if (state->linelimit_val > 0) {
     /* count number of blocks in the datalist, then decide home many lines to
@@ -818,9 +1058,16 @@ static void widget_monitor(struct nk_context *ctx, const char *id, APPSTATE *sta
   int fonttype = guidriver_setfont(ctx, FONT_MONO);
   struct nk_user_font const *font = ctx->style.font;
 
+  /* calculate viewport & timestamp field width */
   assert(font != NULL && font->width != NULL);
   float charwidth = font->width(font->userdata, font->height, "1234567890", 10) / 10.0;
-  state->viewport_width = (int)((rcwidget.w - 2 * stwin->padding.x - 4) / charwidth);
+  float timefield_width = 0;
+  if (state->recv_timestamp != TIMESTAMP_NONE) {
+    char buffer[40];
+    format_time(buffer, sizearray(buffer), 0, 0, state->recv_timestamp);
+    timefield_width = strlen(buffer) * charwidth + 2 * stwin->padding.x;
+  }
+  state->viewport_width = (int)((rcwidget.w - timefield_width - 2 * stwin->padding.x - 4) / charwidth);
 
   nk_style_push_color(ctx, &stwin->fixed_background.data.color, COLOUR_BG0);
   if (nk_group_begin(ctx, id, widget_flags)) {
@@ -834,17 +1081,34 @@ static void widget_monitor(struct nk_context *ctx, const char *id, APPSTATE *sta
       for (int lineidx = 0; lineidx < item->textlines; lineidx++) {
         cur_linecount++;
         assert(item->text[lineidx] != NULL);
-        nk_layout_row_begin(ctx, NK_STATIC, rowheight, 1);
+        nk_layout_row_begin(ctx, NK_STATIC, rowheight, 1 + (timefield_width > 1));
         if (lineheight <= 0.1) {
           struct nk_rect rcline = nk_layout_widget_bounds(ctx);
           lineheight = rcline.h;
           vpwidth = rcline.w;
         }
-        struct nk_color fgcolour = item->local ? COLOUR_FG_AQUA : COLOUR_TEXT;
+        if (timefield_width > 1) {
+          nk_layout_row_push(ctx, timefield_width);
+          if (lineidx == 0) {
+            unsigned long tstamp = item->timestamp;
+            if (state->recv_timestamp == TIMESTAMP_ABSOLUTE)
+              tstamp += datalist_root.timestamp;
+            char buffer[40];
+            format_time(buffer, sizearray(buffer), tstamp, reception_timestamp, state->recv_timestamp);
+            nk_text_colored(ctx, buffer, strlen(buffer), NK_TEXT_LEFT, COLOUR_FG_CYAN);
+          } else {
+            nk_spacing(ctx, 1);
+          }
+        }
+        struct nk_color fgcolour = COLOUR_TEXT;
+        if (item->flags & DFLAG_SCRIPT)
+          fgcolour = COLOUR_FG_GREEN;
+        else if (item->flags & DFLAG_LOCAL)
+          fgcolour = COLOUR_FG_AQUA;
         int len = strlen(item->text[lineidx]);
         float textwidth = len * charwidth + 8;
-        if (textwidth < vpwidth)
-          textwidth = vpwidth;
+        if (textwidth < vpwidth - timefield_width)
+          textwidth = vpwidth - timefield_width;
         nk_layout_row_push(ctx, textwidth);
         FILTER* flt = filter_match(&state->filter_root, item->text[lineidx]);
         if (flt != NULL) {
@@ -887,7 +1151,7 @@ static void widget_monitor(struct nk_context *ctx, const char *id, APPSTATE *sta
 
 static void widget_lineinput(struct nk_context *ctx, APPSTATE *state)
 {
-  #define SPACING 4
+# define SPACING 4
 
   assert(ctx != NULL);
   assert(state != NULL);
@@ -958,7 +1222,7 @@ static void widget_lineinput(struct nk_context *ctx, APPSTATE *state)
           memcpy(buffer + pos, "\r\n", 2);
         rs232_xmit(state->hCom, buffer, size);
         if (state->localecho) {
-          DATALIST *item = datalist_append(buffer, size, false, true);
+          DATALIST *item = datalist_append(buffer, size, false, DFLAG_LOCAL);
           if (item != NULL)
             reformat_data(state, item);
         }
@@ -967,22 +1231,21 @@ static void widget_lineinput(struct nk_context *ctx, APPSTATE *state)
       state->console_edit[0] = '\0';
     }
   }
-  #undef SPACING
+# undef SPACING
 }
 
 static void help_popup(struct nk_context *ctx, APPSTATE *state, float canvas_width, float canvas_height)
 {
-  #include "bmserial_help.h"
-  (void)bmserial_helpsize;
+# include "bmserial_help.h"
 
   if (state->help_popup) {
-    #define MARGIN  10
+#   define MARGIN  10
     float w = opt_fontsize * 40;
     if (w > canvas_width - 2*MARGIN)  /* clip "ideal" help window size of canvas size */
       w = canvas_width - 2*MARGIN;
     float h = canvas_height * 0.75;
     struct nk_rect rc = nk_rect((canvas_width - w) / 2, (canvas_height - h) / 2, w, h);
-    #undef MARGIN
+#   undef MARGIN
 
     state->help_popup = nk_guide(ctx, &rc, opt_fontsize, (const char*)bmserial_help, NULL);
   }
@@ -1001,9 +1264,9 @@ static void panel_portconfig(struct nk_context *ctx, APPSTATE *state,
   static const char *parity_strings[] = { "None", "Odd", "Even", "Mark", "Space" };
   static const char *flowctrl_strings[] = { "None", "RTS / CTS", "XON / XOFF" };
 
-  #define SPACING     4
-  #define LABEL_WIDTH (5.5 * opt_fontsize)
-  #define VALUE_WIDTH (panel_width - LABEL_WIDTH - (2 * SPACING + 18))
+# define SPACING     4
+# define LABEL_WIDTH (5.5 * opt_fontsize)
+# define VALUE_WIDTH (panel_width - LABEL_WIDTH - (2 * SPACING + 18))
 
   if (nk_tree_state_push(ctx, NK_TREE_TAB, "Configuration", &tab_states[TAB_PORTCONFIG])) {
     int result, curidx;
@@ -1094,9 +1357,9 @@ static void panel_portconfig(struct nk_context *ctx, APPSTATE *state,
 
     nk_tree_state_pop(ctx);
   }
-  #undef LABEL_WIDTH
-  #undef VALUE_WIDTH
-  #undef SPACING
+# undef LABEL_WIDTH
+# undef VALUE_WIDTH
+# undef SPACING
 }
 
 static int nk_ledbutton(struct nk_context *ctx, const char *label, const char *tiptext,
@@ -1126,9 +1389,9 @@ static void panel_linestatus(struct nk_context *ctx, APPSTATE *state,
                              enum nk_collapse_states tab_states[TAB_COUNT],
                              float panel_width)
 {
-  #define LABEL_WIDTH   (4 * opt_fontsize)
-  #define BUTTON_WIDTH  ((panel_width - LABEL_WIDTH) / 3 - 12)
-  #define BUTTON_HEIGHT (ROW_HEIGHT * 0.6)
+# define LABEL_WIDTH   (4 * opt_fontsize)
+# define BUTTON_WIDTH  ((panel_width - LABEL_WIDTH) / 3 - 12)
+# define BUTTON_HEIGHT (ROW_HEIGHT * 0.6)
 
   const char *caption = "Line status";
   if (!rs232_isopen(state->hCom)) {
@@ -1151,12 +1414,12 @@ static void panel_linestatus(struct nk_context *ctx, APPSTATE *state,
           if (state->breakdelay == 0 && (delayedstat & LINESTAT_LBREAK) != 0)
             rs232_setstatus(state->hCom, LINESTAT_LBREAK, 0);
         }
-        #if defined _WIN32
+#       if defined _WIN32
           /* Windows does not return the status that the host sets itself, so
              these must be saved, and merged back in */
           unsigned localstat = state->linestatus & (LINESTAT_RTS | LINESTAT_DTR);
           delayedstat |= localstat;
-        #endif
+#       endif
         state->linestatus = rs232_getstatus(state->hCom);
         /* if a break or frame error are detected in the active states (as opposed
            to the delayed status), make sure it stays "on" for long enough to
@@ -1254,18 +1517,18 @@ static void panel_linestatus(struct nk_context *ctx, APPSTATE *state,
     nk_style_pop_color(ctx);
     nk_style_pop_color(ctx);
   }
-  #undef LABEL_WIDTH
-  #undef BUTTON_WIDTH
-  #undef BUTTON_HEIGHT
+# undef LABEL_WIDTH
+# undef BUTTON_WIDTH
+# undef BUTTON_HEIGHT
 }
 
 static void panel_displayoptions(struct nk_context *ctx, APPSTATE *state,
                                  enum nk_collapse_states tab_states[TAB_COUNT],
                                  float panel_width)
 {
-  #define SPACING     4
-  #define LABEL_WIDTH (5.5 * opt_fontsize)
-  #define VALUE_WIDTH (panel_width - LABEL_WIDTH - (2 * SPACING + 18))
+# define SPACING     4
+# define LABEL_WIDTH (5.5 * opt_fontsize)
+# define VALUE_WIDTH (panel_width - LABEL_WIDTH - (2 * SPACING + 18))
 
   if (nk_tree_state_push(ctx, NK_TREE_TAB, "Display options", &tab_states[TAB_DISPLAYOPTIONS])) {
 
@@ -1276,10 +1539,10 @@ static void panel_displayoptions(struct nk_context *ctx, APPSTATE *state,
     nk_label(ctx, "View mode", NK_TEXT_ALIGN_LEFT | NK_TEXT_ALIGN_MIDDLE);
     nk_layout_row_push(ctx, VALUE_WIDTH / 2);
     int curview = state->view;
-    if (nk_option_label(ctx, "Text", (state->view == VIEW_TEXT), NK_TEXT_LEFT))
+    if (option_tooltip(ctx, "Text", (state->view == VIEW_TEXT), NK_TEXT_LEFT, "Display received data as text"))
       state->view = VIEW_TEXT;
     nk_layout_row_push(ctx, VALUE_WIDTH / 2);
-    if (nk_option_label(ctx, "Hex", (state->view == VIEW_HEX), NK_TEXT_LEFT))
+    if (option_tooltip(ctx, "Hex", (state->view == VIEW_HEX), NK_TEXT_LEFT, "Display received data as hex dump"))
       state->view = VIEW_HEX;
     nk_layout_row_end(ctx);
     if (state->view != curview)
@@ -1315,6 +1578,32 @@ static void panel_displayoptions(struct nk_context *ctx, APPSTATE *state,
       }
     }
 
+    int cur_timestamp = state->recv_timestamp;
+    nk_layout_row_dynamic(ctx, ROW_HEIGHT, 1);
+    nk_bool add_tstamp = (state->recv_timestamp != TIMESTAMP_NONE);
+    checkbox_tooltip(ctx, "Timestamp", &add_tstamp, NK_TEXT_LEFT,
+                     "Add timestamp to the received data.");
+    if (add_tstamp) {
+      if (state->recv_timestamp == TIMESTAMP_NONE)
+        state->recv_timestamp = TIMESTAMP_RELATIVE;
+      nk_layout_row_begin(ctx, NK_STATIC, ROW_HEIGHT, 3);
+      nk_layout_row_push(ctx, 1.0 * opt_fontsize);
+      nk_spacing(ctx, 1);
+      nk_layout_row_push(ctx, 5 * opt_fontsize);
+      if (option_tooltip(ctx, "Relative", (state->recv_timestamp == TIMESTAMP_RELATIVE),
+                         NK_TEXT_LEFT, "Milliseconds since the first reception"))
+        state->recv_timestamp = TIMESTAMP_RELATIVE;
+      nk_layout_row_push(ctx, 5 * opt_fontsize);
+      if (option_tooltip(ctx, "Absolute", (state->recv_timestamp == TIMESTAMP_ABSOLUTE),
+                         NK_TEXT_LEFT, "Wall-clock time"))
+        state->recv_timestamp = TIMESTAMP_ABSOLUTE;
+      nk_layout_row_end(ctx);
+    } else {
+      state->recv_timestamp = TIMESTAMP_NONE;
+    }
+    if (state->recv_timestamp != cur_timestamp)
+      state->reformat_view = true;
+
     nk_layout_row_dynamic(ctx, ROW_HEIGHT, 1);
     checkbox_tooltip(ctx, "Scroll to last", &state->scrolltolast, NK_TEXT_LEFT,
                      "Scroll to bottom of the viewport on reception of new data");
@@ -1337,9 +1626,9 @@ static void panel_displayoptions(struct nk_context *ctx, APPSTATE *state,
 
     nk_tree_state_pop(ctx);
   }
-  #undef LABEL_WIDTH
-  #undef VALUE_WIDTH
-  #undef SPACING
+# undef LABEL_WIDTH
+# undef VALUE_WIDTH
+# undef SPACING
 
   if (state->reformat_view) {
     for (DATALIST *item = datalist_root.next; item != NULL; item = item->next)
@@ -1351,9 +1640,9 @@ static void panel_transmitoptions(struct nk_context *ctx, APPSTATE *state,
                                   enum nk_collapse_states tab_states[TAB_COUNT],
                                   float panel_width)
 {
-  #define SPACING     4
-  #define LABEL_WIDTH (1.0 * opt_fontsize)
-  #define VALUE_WIDTH (panel_width - LABEL_WIDTH - (2 * SPACING + 18))
+# define SPACING     4
+# define LABEL_WIDTH (1.0 * opt_fontsize)
+# define VALUE_WIDTH (panel_width - LABEL_WIDTH - (2 * SPACING + 18))
 
   if (nk_tree_state_push(ctx, NK_TREE_TAB, "Local options", &tab_states[TAB_TRANSMITOPTIONS])) {
     nk_layout_row_dynamic(ctx, ROW_HEIGHT, 1);
@@ -1386,19 +1675,19 @@ static void panel_transmitoptions(struct nk_context *ctx, APPSTATE *state,
 
     nk_tree_state_pop(ctx);
   }
-  #undef LABEL_WIDTH
-  #undef VALUE_WIDTH
-  #undef SPACING
+# undef LABEL_WIDTH
+# undef VALUE_WIDTH
+# undef SPACING
 }
 
 static void panel_filters(struct nk_context *ctx, APPSTATE *state,
                           enum nk_collapse_states tab_states[TAB_COUNT],
                           float panel_width)
 {
-  #define SPACING       4
-  #define ENABLED_WIDTH (2.0 * opt_fontsize)
-  #define BUTTON_WIDTH  (1.6 * opt_fontsize)
-  #define LABEL_WIDTH   (panel_width - ENABLED_WIDTH - BUTTON_WIDTH - (3 * SPACING + 18))
+# define SPACING       4
+# define ENABLED_WIDTH (2.0 * opt_fontsize)
+# define BUTTON_WIDTH  (1.6 * opt_fontsize)
+# define LABEL_WIDTH   (panel_width - ENABLED_WIDTH - BUTTON_WIDTH - (3 * SPACING + 18))
 
   struct nk_style_button stbtn = ctx->style.button;
   if (nk_tree_state_push(ctx, NK_TREE_TAB, "Highlight filters", &tab_states[TAB_FILTERS])) {
@@ -1473,11 +1762,55 @@ static void panel_filters(struct nk_context *ctx, APPSTATE *state,
 
     nk_tree_state_pop(ctx);
   }
-  #undef ENABLED_WIDTH
-  #undef LABEL_WIDTH
-  #undef COLOUR_WIDTH
-  #undef BUTTON_WIDTH
-  #undef SPACING
+# undef ENABLED_WIDTH
+# undef LABEL_WIDTH
+# undef COLOUR_WIDTH
+# undef BUTTON_WIDTH
+# undef SPACING
+}
+
+static void panel_script(struct nk_context *ctx, APPSTATE *state,
+                         enum nk_collapse_states tab_states[TAB_COUNT],
+                         float panel_width)
+{
+# define SPACING     4
+# define LABEL_WIDTH (2 * opt_fontsize)
+# define BROWSEBTN_WIDTH (1.5 * opt_fontsize)
+# define VALUE_WIDTH (panel_width - LABEL_WIDTH - BROWSEBTN_WIDTH - (3 * SPACING + 18))
+
+  if (nk_tree_state_push(ctx, NK_TREE_TAB, "Script", &tab_states[TAB_SCRIPT])) {
+    nk_layout_row_begin(ctx, NK_STATIC, ROW_HEIGHT, 3);
+    nk_layout_row_push(ctx, LABEL_WIDTH);
+    nk_label(ctx, "File", NK_TEXT_ALIGN_LEFT | NK_TEXT_ALIGN_MIDDLE);
+    nk_layout_row_push(ctx, VALUE_WIDTH);
+    bool patherror = (strlen(state->scriptfile) > 0 && access(state->scriptfile, 0) != 0);
+    if (patherror)
+      nk_style_push_color(ctx, &ctx->style.edit.text_normal, COLOUR_FG_RED);
+    int result = editctrl_tooltip(ctx, NK_EDIT_FIELD|NK_EDIT_SIG_ENTER,
+                                  state->scriptfile, sizearray(state->scriptfile),
+                                  nk_filter_ascii, "TCL script");
+    if (result & (NK_EDIT_COMMITED | NK_EDIT_DEACTIVATED))
+      state->script_reload = true;
+    if (patherror)
+      nk_style_pop_color(ctx);
+    nk_layout_row_push(ctx, BROWSEBTN_WIDTH);
+    if (nk_button_symbol(ctx, NK_SYMBOL_TRIPLE_DOT)) {
+      const char *filter = "TCL files\0*.tcl\0All files\0*\0";
+      int res = noc_file_dialog_open(state->scriptfile, sizearray(state->scriptfile),
+                                     NOC_FILE_DIALOG_OPEN, filter, NULL,
+                                     state->scriptfile, "Select TCL script file",
+                                     guidriver_apphandle());
+      if (res)
+        state->script_reload = true;
+    }
+    nk_layout_row_end(ctx);
+
+    nk_tree_state_pop(ctx);
+  }
+# undef LABEL_WIDTH
+# undef BROWSEBTN_WIDTH
+# undef VALUE_WIDTH
+# undef SPACING
 }
 
 static void button_bar(struct nk_context *ctx, APPSTATE *state)
@@ -1543,6 +1876,11 @@ int main(int argc, char *argv[])
   appstate.view = VIEW_TEXT;
   appstate.scrolltolast = nk_true;
   appstate.console_activate = 1;
+  appstate.script_reload = true;
+
+# if defined FORTIFY
+    Fortify_SetOutputFunc(Fortify_OutputFunc);
+# endif
 
   collect_portlist(&appstate);
   char txtConfigFile[_MAX_PATH];
@@ -1564,8 +1902,8 @@ int main(int argc, char *argv[])
   }
   appstate.filter_edit.colour = filter_defcolour(&appstate.filter_root);
 
-  #define SEPARATOR_HOR 4
-  #define SPACING       4
+# define SEPARATOR_HOR 4
+# define SPACING       4
   nk_splitter_init(&splitter_hor, canvas_width - 3 * SPACING, SEPARATOR_HOR, splitter_hor.ratio);
 
   for (int idx = 1; idx < argc; idx++) {
@@ -1604,6 +1942,12 @@ int main(int argc, char *argv[])
       }
     }
   }
+
+  tcl_init(&appstate.tcl);
+  tcl_register(&appstate.tcl, "exec", tcl_cmd_exec, 2, 2, &appstate);
+  tcl_register(&appstate.tcl, "puts", tcl_cmd_puts, 2, 2, &appstate);
+  tcl_register(&appstate.tcl, "serial", tcl_cmd_serial, 2, 3, &appstate);
+  tcl_register(&appstate.tcl, "wait", tcl_cmd_wait, 2, 2, &appstate);
 
   struct nk_context *ctx = guidriver_init("BlackMagic Serial Monitor", canvas_width, canvas_height,
                                           GUIDRV_RESIZEABLE | GUIDRV_TIMER,
@@ -1668,6 +2012,7 @@ int main(int argc, char *argv[])
         panel_displayoptions(ctx, &appstate, tab_states, nk_hsplitter_colwidth(&splitter_hor, 1));
         panel_transmitoptions(ctx, &appstate, tab_states, nk_hsplitter_colwidth(&splitter_hor, 1));
         panel_filters(ctx, &appstate, tab_states, nk_hsplitter_colwidth(&splitter_hor, 1));
+        panel_script(ctx, &appstate, tab_states, nk_hsplitter_colwidth(&splitter_hor, 1));
         nk_group_end(ctx);
       }
 
@@ -1701,6 +2046,11 @@ int main(int argc, char *argv[])
   sprintf(valstr, "%d %d", canvas_width, canvas_height);
   ini_puts("Settings", "size", valstr, txtConfigFile);
 
+  tcl_destroy(&appstate.tcl);
+  if (appstate.script != NULL)
+    free((void*)appstate.script);
+  if (appstate.script_recv != NULL)
+    free((void*)appstate.script_recv);
   filter_clear(&appstate.filter_root);
   datalist_clear();
   free_portlist(&appstate);

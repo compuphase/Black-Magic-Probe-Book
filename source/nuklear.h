@@ -994,6 +994,22 @@ NK_API void nk_input_unicode(struct nk_context*, nk_rune);
 /// __ctx__     | Must point to a previously initialized `nk_context` struct
 */
 NK_API void nk_input_end(struct nk_context*);
+/*/// #### nk_input_clear_mousebuttons
+/// Resets the "clicked" status of the mouse buttons, which may be needed to
+/// avoid handling the same click twice, when a click on a button creates a
+/// popup, and that popup has a button or control that overlaps the button
+/// clicked on.
+///
+/// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~c
+/// void nk_input_clear_mousebuttons(struct nk_context *ctx);
+/// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+///
+/// Parameter   | Description
+/// ------------|-----------------------------------------------------------
+/// __ctx__     | Must point to a previously initialized `nk_context` struct
+*/
+NK_API void nk_input_clear_mousebuttons(struct nk_context *ctx);
+
 /* =============================================================================
  *
  *                                  DRAWING

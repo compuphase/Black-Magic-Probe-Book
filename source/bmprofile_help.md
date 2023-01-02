@@ -1,3 +1,5 @@
+#c-include svnrev.h
+-- ---------------------------------------------------------------------------
 # BlackMagic Profiler
 
 A sampling profiler using SWO (Serial Wire Output) for non-intrusive profiling.
@@ -201,6 +203,7 @@ The BlackMagic Profiler requires a debug probe that is compatible with the
 Black Magic Probe. It is a self-contained utility; it does not require GDB.
 
 ---
+Version {{SVNREV_STR}} \
 Copyright 2022 CompuPhase \
 Licensed under the Apache License version 2.0
 

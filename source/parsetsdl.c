@@ -26,24 +26,28 @@
 #include <stdlib.h>
 #include <string.h>
 
+#if defined FORTIFY
+# include <alloc/fortify.h>
+#endif
+
 #if defined __linux__
-  #include <bsd/string.h>
+# include <bsd/string.h>
 #endif
 #if defined __MINGW32__ || defined __MINGW64__ || defined _MSC_VER
-  #include "strlcpy.h"
-  #if defined _MSC_VER
-    #define strdup(s)       _strdup(s)
-    #define stricmp(s1,s2)  _stricmp((s1),(s2))
-  #endif
+# include "strlcpy.h"
+# if defined _MSC_VER
+#   define strdup(s)       _strdup(s)
+#   define stricmp(s1,s2)  _stricmp((s1),(s2))
+# endif
 #endif
 
 #include "parsetsdl.h"
 
 #if defined __linux__ || defined __FreeBSD__ || defined __APPLE__
-  #define stricmp(s1,s2)  strcasecmp((s1),(s2))
+# define stricmp(s1,s2)  strcasecmp((s1),(s2))
 #endif
 #if !defined sizearray
-  #define sizearray(a)  (sizeof(a) / sizeof((a)[0]))
+# define sizearray(a)  (sizeof(a) / sizeof((a)[0]))
 #endif
 
 #define MAX_LINE_LENGTH   1024

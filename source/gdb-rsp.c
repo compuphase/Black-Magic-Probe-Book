@@ -16,11 +16,11 @@
  * limitations under the License.
  */
 #if defined _WIN32
-  #define WIN32_LEAN_AND_MEAN
-  #include <windows.h>
+# define WIN32_LEAN_AND_MEAN
+# include <windows.h>
 #endif
 #if defined __linux__
-  #include <unistd.h>
+# include <unistd.h>
 #endif
 #include <assert.h>
 #include <ctype.h>
@@ -32,6 +32,11 @@
 #include "gdb-rsp.h"
 #include "rs232.h"
 #include "tcpip.h"
+
+#if defined FORTIFY
+# include <alloc/fortify.h>
+#endif
+
 
 #define TIMEOUT       500
 #define POLL_INTERVAL 50
@@ -211,11 +216,11 @@ size_t gdbrsp_recv(char *buffer, size_t size, int timeout)
     }
     if (cycles > 0 && --cycles == 0)
       return 0;       /* nothing received within timeout period */
-    #if defined _WIN32
+#   if defined _WIN32
       Sleep(POLL_INTERVAL);
-    #else
+#   else
       usleep(POLL_INTERVAL * 1000);
-    #endif
+#   endif
   }
 
   /* when arrived here, tail == size (so the buffer is filled to its maximum),

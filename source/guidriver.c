@@ -17,14 +17,14 @@
  * limitations under the License.
  */
 #if defined _WIN32
-  #define WIN32_LEAN_AND_MEAN
-  #define WINVER       0x0500 /* to enable RegisterDeviceNotification() */
-  #define _WIN32_WINNT 0x0501 /* for DEVICE_NOTIFY_ALL_INTERFACE_CLASSES */
-  #include <windows.h>
-  #include <dbt.h>
+# define WIN32_LEAN_AND_MEAN
+# define WINVER       0x0500 /* to enable RegisterDeviceNotification() */
+# define _WIN32_WINNT 0x0501 /* for DEVICE_NOTIFY_ALL_INTERFACE_CLASSES */
+# include <windows.h>
+# include <dbt.h>
 #elif defined __linux__
-  #include <unistd.h>
-  #include <libusb-1.0/libusb.h>
+# include <unistd.h>
+# include <libusb-1.0/libusb.h>
 #endif
 
 #include <assert.h>
@@ -34,11 +34,15 @@
 #include "nuklear_mousepointer.h"
 
 #if defined _WIN32
-  #include "nuklear_gdip.h"
+# include "nuklear_gdip.h"
 #elif defined __linux__ || defined __unix__
-  #include "findfont.h"
-  #include "lodepng.h"
-  #include "nuklear_glfw_gl2.h"
+# include "findfont.h"
+# include "lodepng.h"
+# include "nuklear_glfw_gl2.h"
+#endif
+
+#if defined FORTIFY
+# include <alloc/fortify.h>
 #endif
 
 #if defined _WIN32
@@ -422,13 +426,13 @@ struct nk_context* guidriver_init(const char *caption, int width, int height, in
   glfwMakeContextCurrent(winApp);
 
   /* add window icon */
-  #if GLFW_VERSION_MAJOR >= 3 && GLFW_VERSION_MINOR >= 2
+# if GLFW_VERSION_MAJOR >= 3 && GLFW_VERSION_MINOR >= 2
     memset(icons, 0, sizeof icons);
     unsigned error = lodepng_decode32(&icons[0].pixels, (unsigned*)&icons[0].width, (unsigned*)&icons[0].height, appicon_data, appicon_datasize);
     if (!error)
       glfwSetWindowIcon(winApp, 1, icons);
     free(icons[0].pixels);
-  #endif
+# endif
 
   ctx = nk_glfw3_init(winApp, NK_GLFW3_INSTALL_CALLBACKS);
   fontconfig = nk_font_config(fontsize);
@@ -611,7 +615,7 @@ void *guidriver_apphandle(void)
 }
 
 #if !defined(GL_GENERATE_MIPMAP)
-  #define GL_GENERATE_MIPMAP 0x8191 /* from GLEW.h, OpenGL 1.4 only! */
+# define GL_GENERATE_MIPMAP 0x8191 /* from GLEW.h, OpenGL 1.4 only! */
 #endif
 
 struct nk_image guidriver_image_from_memory(const unsigned char *data, unsigned size)
@@ -629,13 +633,13 @@ struct nk_image guidriver_image_from_memory(const unsigned char *data, unsigned 
   glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
   glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_NEAREST);
   glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR_MIPMAP_NEAREST);
-  #if defined(_USE_OPENGL) && (_USE_OPENGL > 2)
+# if defined(_USE_OPENGL) && (_USE_OPENGL > 2)
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, data);
     glGenerateMipmap(GL_TEXTURE_2D);
-  #else
+# else
     glTexParameteri(GL_TEXTURE_2D, GL_GENERATE_MIPMAP, GL_TRUE);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, data);
-  #endif
+# endif
 
   return nk_image_id((int)tex);
 }

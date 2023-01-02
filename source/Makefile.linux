@@ -68,13 +68,16 @@ endif
 	$(CC) $(INCLUDE) $(CFLAGS) -o$@ $<
 
 
+%.h : %.md
+	$(QGP) -c $< $@
+
 # -------------------------------------------------------------
 #               Project
 # -------------------------------------------------------------
 
 OBJLIST_BMDEBUG = bmdebug.o armdisasm.o bmcommon.o bmp-scan.o bmp-script.o \
-                  demangle.o dwarf.o elf.o guidriver.o mcu-info.o memdump.o minIni.o \
-                  nuklear_mousepointer.o nuklear_splitter.o nuklear_style.o \
+                  demangle.o dwarf.o elf.o guidriver.o mcu-info.o memdump.o \
+                  minIni.o nuklear_mousepointer.o nuklear_splitter.o nuklear_style.o \
                   nuklear_tooltip.o rs232.o serialmon.o specialfolder.o svd-support.o \
                   swotrace.o tcpip.o xmltractor.o decodectf.o parsetsdl.o \
                   findfont.o lodepng.o nuklear.o nuklear_glfw_gl2.o noc_file_dialog.o
@@ -82,7 +85,7 @@ OBJLIST_BMDEBUG = bmdebug.o armdisasm.o bmcommon.o bmp-scan.o bmp-script.o \
 OBJLIST_BMFLASH = bmflash.o bmcommon.o bmp-scan.o bmp-script.o bmp-support.o \
                   cksum.o crc32.o elf.o gdb-rsp.o guidriver.o ident.o minIni.o \
                   nuklear_guide.o nuklear_mousepointer.o nuklear_style.o nuklear_tooltip.o \
-                  picoro.o rs232.o specialfolder.o tcpip.o xmltractor.o \
+                  picoro.o rs232.o specialfolder.o tcl.o tcpip.o xmltractor.o \
                   findfont.o lodepng.o nuklear.o nuklear_glfw_gl2.o noc_file_dialog.o
 
 OBJLIST_BMPROFILE = bmprofile.o bmcommon.o bmp-scan.o bmp-script.o \
@@ -96,7 +99,7 @@ OBJLIST_BMPROFILE = bmprofile.o bmcommon.o bmp-scan.o bmp-script.o \
 OBJLIST_BMSERIAL = bmserial.o guidriver.o minIni.o rs232.o \
                    specialfolder.o noc_file_dialog.o \
                    nuklear_guide.o nuklear_mousepointer.o nuklear_splitter.o \
-                   nuklear_style.o nuklear_tooltip.o \
+                   nuklear_style.o nuklear_tooltip.o tcl.o \
                    findfont.o lodepng.o nuklear.o nuklear_glfw_gl2.o
 
 OBJLIST_BMTRACE = bmtrace.o bmcommon.o bmp-scan.o bmp-script.o bmp-support.o \
@@ -120,9 +123,10 @@ project: bmdebug bmflash bmprofile bmscan bmserial bmtrace calltree elf-postlink
 
 depend :
 	makedepend -b -fmakefile.dep $(OBJLIST_BMDEBUG:.o=.c) $(OBJLIST_BMFLASH:.o=.c) \
-                   $(OBJLIST_BMPROFILE:.o=.c) $(OBJLIST_BMSCAN:.o=.c) $(OBJLIST_BMSERIAL:.o=.c) \
-                   $(OBJLIST_BMTRACE:.o=.c) $(OBJLIST_CALLTREE) \
-                   $(OBJLIST_POSTLINK:.o=.c) $(OBJLIST_TRACEGEN:.o=.c)
+                   $(OBJLIST_BMPROFILE:.o=.c) $(OBJLIST_BMSCAN:.o=.c) \
+                   $(OBJLIST_BMSERIAL:.o=.c) $(OBJLIST_BMTRACE:.o=.c) \
+                   $(OBJLIST_CALLTREE:.o=.c) $(OBJLIST_POSTLINK:.o=.c) \
+                   $(OBJLIST_TRACEGEN:.o=.c)
 
 
 ##### C files #####
@@ -210,6 +214,8 @@ svd-support.o : svd-support.c
 swotrace.o : swotrace.c
 
 tcpip.o : tcpip.c
+
+tcl.o : tcl.c
 
 tracegen.o : tracegen.c
 

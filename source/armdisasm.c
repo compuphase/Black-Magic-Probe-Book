@@ -22,6 +22,10 @@
 #include <string.h>
 #include "armdisasm.h"
 
+#if defined FORTIFY
+# include <alloc/fortify.h>
+#endif
+
 typedef struct tagENCODEMASK16 {
   uint16_t mask;  /* bits to mask off for the test */
   uint16_t match; /* masked bits must be equal to this */

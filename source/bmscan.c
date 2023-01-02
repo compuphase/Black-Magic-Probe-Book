@@ -24,16 +24,16 @@
 #include <stdlib.h>
 #include <string.h>
 #if defined _WIN32
-  #define STRICT
-  #define WIN32_LEAN_AND_MEAN
-  #include <windows.h>
-  #if defined __MINGW32__ || defined __MINGW64__ || defined _MSC_VER
-    #include "strlcpy.h"
-  #endif
+# define STRICT
+# define WIN32_LEAN_AND_MEAN
+# include <windows.h>
+# if defined __MINGW32__ || defined __MINGW64__ || defined _MSC_VER
+#   include "strlcpy.h"
+# endif
 #else
-  #include <fcntl.h>
-  #include <unistd.h>
-  #include <bsd/string.h>
+# include <fcntl.h>
+# include <unistd.h>
+# include <bsd/string.h>
 #endif
 #include "bmp-scan.h"
 #include "bmp-support.h"
@@ -41,26 +41,29 @@
 #include "tcpip.h"
 #include "svnrev.h"
 
+#if defined FORTIFY
+# include <alloc/fortify.h>
+#endif
 
 #if defined _MSC_VER
-  #define stricmp(s1,s2)  _stricmp((s1),(s2))
+# define stricmp(s1,s2)  _stricmp((s1),(s2))
 #elif defined __linux__ || defined __FreeBSD__ || defined __APPLE__
-  #define stricmp(s1,s2)  strcasecmp((s1),(s2))
+# define stricmp(s1,s2)  strcasecmp((s1),(s2))
 #endif
 
 #if !defined sizearray
-  #define sizearray(e)    (sizeof(e) / sizeof((e)[0]))
+# define sizearray(e)    (sizeof(e) / sizeof((e)[0]))
 #endif
 
 
 static void print_port(const char *portname)
 {
-  #if defined WIN32 || defined _WIN32
+# if defined WIN32 || defined _WIN32
     if (strncmp(portname, "COM", 3) == 0
         && strlen(portname) >= 5
         && isdigit(*(portname + 3)))
       printf("\\\\.\\");
-  #endif
+# endif
   printf("%s", portname);
 }
 
@@ -98,11 +101,11 @@ static bool check_probe(HCOM *hCom, char *versionstring, size_t maxlength)
     /* toggle DTR, to be sure */
     rs232_setstatus(hCom, LINESTAT_RTS, 0);
     rs232_setstatus(hCom, LINESTAT_DTR, 0);
-    #if defined _WIN32
+#   if defined _WIN32
       Sleep(200);
-    #else
+#   else
       usleep(200 * 1000);
-    #endif
+#   endif
     rs232_setstatus(hCom, LINESTAT_RTS, 1);
     rs232_setstatus(hCom, LINESTAT_DTR, 1);
     size = gdbrsp_recv(buffer, sizearray(buffer), 250);

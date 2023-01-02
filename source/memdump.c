@@ -25,8 +25,12 @@
 #include "memdump.h"
 #include "nuklear_style.h"
 
+#if defined FORTIFY
+# include <alloc/fortify.h>
+#endif
+
 #if !defined sizearray
-  #define sizearray(e)    (sizeof(e) / sizeof((e)[0]))
+# define sizearray(e)    (sizeof(e) / sizeof((e)[0]))
 #endif
 
 

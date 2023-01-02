@@ -25,33 +25,33 @@
 #include <string.h>
 
 #if defined WIN32 || defined _WIN32
-  #define STRICT
-  #define WIN32_LEAN_AND_MEAN
-  #include <windows.h>
-  #include <winsock2.h>
-  #include <tchar.h>
-  #include <initguid.h>
-  #include <setupapi.h>
-  #include <malloc.h>
-  #include "usb-support.h"
-  #if defined __MINGW32__ || defined __MINGW64__ || defined _MSC_VER
-    #include "strlcpy.h"
-  #endif
-  #if defined _MSC_VER
-    #define memicmp(p1,p2,c)  _memicmp((p1),(p2),(c))
-  #endif
+# define STRICT
+# define WIN32_LEAN_AND_MEAN
+# include <windows.h>
+# include <winsock2.h>
+# include <tchar.h>
+# include <initguid.h>
+# include <setupapi.h>
+# include <malloc.h>
+# include "usb-support.h"
+# if defined __MINGW32__ || defined __MINGW64__ || defined _MSC_VER
+#   include "strlcpy.h"
+# endif
+# if defined _MSC_VER
+#   define memicmp(p1,p2,c)  _memicmp((p1),(p2),(c))
+# endif
 #elif defined __linux__
-  #include <alloca.h>
-  #include <errno.h>
-  #include <pthread.h>
-  #include <unistd.h>
-  #include <bsd/string.h>
-  #include <sys/stat.h>
-  #include <sys/socket.h>
-  #include <arpa/inet.h>
-  #include <libusb-1.0/libusb.h>
+# include <alloca.h>
+# include <errno.h>
+# include <pthread.h>
+# include <unistd.h>
+# include <bsd/string.h>
+# include <sys/stat.h>
+# include <sys/socket.h>
+# include <arpa/inet.h>
+# include <libusb-1.0/libusb.h>
   typedef int SOCKET;
-  #define INVALID_SOCKET (-1)
+# define INVALID_SOCKET (-1)
 #endif
 
 #include "bmp-scan.h"
@@ -61,16 +61,20 @@
 #include "decodectf.h"
 #include "swotrace.h"
 
+#if defined FORTIFY
+# include <alloc/fortify.h>
+#endif
+
 
 #if defined __linux__ || defined __FreeBSD__ || defined __APPLE__
-  #define stricmp(s1,s2)    strcasecmp((s1),(s2))
+# define stricmp(s1,s2)    strcasecmp((s1),(s2))
   static int memicmp(const unsigned char *p1, const unsigned char *p2, size_t count);
 #elif defined _MSC_VER
-  #define stricmp(a,b)      _stricmp((a),(b))
+# define stricmp(a,b)      _stricmp((a),(b))
 #endif
 
 #if !defined sizearray
-  #define sizearray(e)    (sizeof(e) / sizeof((e)[0]))
+# define sizearray(e)    (sizeof(e) / sizeof((e)[0]))
 #endif
 
 
@@ -752,24 +756,24 @@ static BOOL usb_GetDevicePath(const TCHAR *guid, TCHAR *path, size_t pathsize)
          initialize the cbSize field */
       SetupDiGetDeviceInterfaceDetail(hDevInfo, &DevIntfData, NULL, 0,&dwSize, NULL);
       DevIntfDetailData = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, dwSize);
-      #if defined _UNICODE
+#     if defined _UNICODE
         DevIntfDetailData->cbSize = sizeof(SP_INTERFACE_DEVICE_DETAIL_DATA);
-      #elif defined _WIN64
+#     elif defined _WIN64
         DevIntfDetailData->cbSize = 8; // sizeof(SP_INTERFACE_DEVICE_DETAIL_DATA);
-      #else
+#     else
         DevIntfDetailData->cbSize = 5; // sizeof(SP_INTERFACE_DEVICE_DETAIL_DATA);
-      #endif
+#     endif
 
       loc_errno = 2;
       if (SetupDiGetDeviceInterfaceDetail(hDevInfo, &DevIntfData, DevIntfDetailData, dwSize, &dwSize, &DevData)) {
         assert(path!=NULL);
         assert(pathsize>0);
-        #if defined _UNICODE
+#       if defined _UNICODE
           memset(path, 0, pathsize*sizeof(TCHAR));
           _tcsncpy(path, (TCHAR*)DevIntfDetailData->DevicePath, pathsize-1);
-        #else
+#       else
           strlcpy(path, DevIntfDetailData->DevicePath, pathsize);
-        #endif
+#       endif
       } else {
         result = FALSE;
       }
@@ -1637,8 +1641,8 @@ double timeline_widget(struct nk_context *ctx, const char *id, float rowheight,
     if (mark_spacing / submark_count < 20)
       submark_count = 2;
 
-    #define HORPADDING  4
-    #define VERPADDING  1
+#   define HORPADDING  4
+#   define VERPADDING  1
 
     /* get the scroll position of the graph, because scrolling is manual */
     sprintf(valstr, "%s_graph", id);

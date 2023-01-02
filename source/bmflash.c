@@ -3,7 +3,7 @@
  * the Black Magic Probe on a system. This utility is built with Nuklear for a
  * cross-platform GUI.
  *
- * Copyright 2019-2022 CompuPhase
+ * Copyright 2019-2023 CompuPhase
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -19,31 +19,31 @@
  */
 
 #if defined WIN32 || defined _WIN32
-  #define STRICT
-  #define WIN32_LEAN_AND_MEAN
-  #define _WIN32_WINNT   0x0500 /* for AttachConsole() */
-  #include <windows.h>
-  #include <shellapi.h>
-  #include <direct.h>
-  #include <io.h>
-  #include <process.h>	/* for spawn() */
-  #if defined __MINGW32__ || defined __MINGW64__
-    #include <sys/stat.h>
-    #include "strlcpy.h"
-  #elif defined _MSC_VER
-    #include <sys/stat.h>
-    #include "strlcpy.h"
-    #define stat _stat
-    #define access(p,m)       _access((p),(m))
-    #define mkdir(p)          _mkdir(p)
-    #define stricmp(s1,s2)    _stricmp((s1),(s2))
-  #endif
+# define STRICT
+# define WIN32_LEAN_AND_MEAN
+# define _WIN32_WINNT   0x0500 /* for AttachConsole() */
+# include <windows.h>
+# include <shellapi.h>
+# include <direct.h>
+# include <io.h>
+# include <process.h>	/* for spawn() */
+# if defined __MINGW32__ || defined __MINGW64__
+#   include <sys/stat.h>
+#   include "strlcpy.h"
+# elif defined _MSC_VER
+#   include <sys/stat.h>
+#   include "strlcpy.h"
+#   define stat _stat
+#   define access(p,m)      _access((p),(m))
+#   define mkdir(p)         _mkdir(p)
+#   define stricmp(s1,s2)   _stricmp((s1),(s2))
+# endif
 #elif defined __linux__
-  #include <unistd.h>
-  #include <bsd/string.h>
-  #include <sys/stat.h>
-  #include <sys/types.h>
-  #include <sys/wait.h>
+# include <unistd.h>
+# include <bsd/string.h>
+# include <sys/stat.h>
+# include <sys/types.h>
+# include <sys/wait.h>
 #endif
 #include <assert.h>
 #include <ctype.h>
@@ -75,13 +75,18 @@
 #include "tcpip.h"
 #include "specialfolder.h"
 #include "svnrev.h"
+#include "tcl.h"
+
+#if defined FORTIFY
+# include <alloc/fortify.h>
+#endif
 
 #if defined __linux__ || defined __unix__
-  #include "res/icon_download_64.h"
+# include "res/icon_download_64.h"
 #endif
 
 #if !defined _MAX_PATH
-  #define _MAX_PATH 260
+# define _MAX_PATH 260
 #endif
 
 #if defined __linux__ || defined __FreeBSD__ || defined __APPLE__
@@ -92,11 +97,11 @@
 #endif
 
 #if defined WIN32 || defined _WIN32
-  #define DIRSEP_CHAR '\\'
-  #define IS_OPTION(s)  ((s)[0] == '-' || (s)[0] == '/')
+# define DIRSEP_CHAR '\\'
+# define IS_OPTION(s)  ((s)[0] == '-' || (s)[0] == '/')
 #else
-  #define DIRSEP_CHAR '/'
-  #define IS_OPTION(s)  ((s)[0] == '-')
+# define DIRSEP_CHAR '/'
+# define IS_OPTION(s)  ((s)[0] == '-')
 #endif
 
 
@@ -224,6 +229,94 @@ static int bmp_callback(int code, const char *message)
   log_addstring(fullmsg);
 
   return code >= 0;
+}
+
+static int tcl_cmd_exec(struct tcl *tcl, struct tcl_value *args, void *arg)
+{
+  (void)arg;
+  struct tcl_value *cmd = tcl_list_item(args, 1);
+  int retcode = system(tcl_data(cmd));
+  tcl_free(cmd);
+  return tcl_result(tcl, (retcode >= 0), tcl_value("", 0));
+}
+
+static int tcl_cmd_puts(struct tcl *tcl, struct tcl_value *args, void *arg)
+{
+  (void)arg;
+  struct tcl_value *text = tcl_list_item(args, 1);
+  char msg[512] = "";
+  strlcpy(msg, tcl_data(text), sizearray(msg));
+  strlcat(msg, "\n", sizearray(msg));
+  log_addstring(msg);
+  return tcl_result(tcl, true, text);
+}
+
+static int tcl_cmd_wait(struct tcl *tcl, struct tcl_value *args, void *arg)
+{
+  (void)arg;
+  struct tcl_value *text = tcl_list_item(args, 1);
+# if defined _WIN32
+    Sleep((int)tcl_number(text));
+# else
+    usleep((int)tcl_number(text) * 1000);
+# endif
+  return tcl_result(tcl, true, text);
+}
+
+static bool tcl_runscript(struct tcl *tcl, const char *scriptfile, const char *elffile, const char *serial)
+{
+  /* load the script file */
+  FILE *fp = fopen(scriptfile,"rt");
+  if (fp == NULL) {
+    log_addstring("^1Tcl script file not found.\n");
+    return false;
+  }
+  fseek(fp, 0, SEEK_END);
+  size_t sz = ftell(fp) + 2;
+  char *script = malloc((sz) * sizeof(char));
+  if (script == NULL) {
+    fclose(fp);
+    log_addstring("^1Memory allocation failure (when loading Tcl script).\n");
+    return false;
+  }
+  fseek(fp, 0, SEEK_SET);
+  memset(script, 0, sz);
+  char *line = script;
+  while (fgets(line, sz, fp) != NULL)
+    line += strlen(line);
+  assert(line - script < sz);
+  fclose(fp);
+  /* set variables */
+  tcl_var(tcl, "filename", tcl_value(elffile, strlen(elffile)));
+  tcl_var(tcl, "serial", tcl_value(serial, strlen(serial)));
+  fp = fopen(elffile, "rb");
+  if (fp != NULL) {
+    uint32_t crc = cksum(fp);
+    char key[32], value[128];
+    sprintf(value, "%u, ", crc);
+    tcl_var(tcl, "cksum", tcl_value(value, strlen(value)));
+    ident(fp, 0, key, sizearray(key), value, sizearray(value));
+    tcl_var(tcl, "ident", tcl_value(value, strlen(value)));
+    fclose(fp);
+  } else {
+    tcl_var(tcl, "cksum", tcl_value("", 0));
+    tcl_var(tcl, "ident", tcl_value("", 0));
+  }
+  /* now run it */
+  bool ok = tcl_eval(tcl, script, strlen(script) + 1);
+  if (!ok) {
+    int line;
+    char symbol[64];
+    const char *err = tcl_errorinfo(tcl, NULL, &line, symbol, sizearray(symbol));
+    char msg[256];
+    sprintf(msg, "^1Tcl script error: %s, on or after line %d", err, line);
+    if (strlen(symbol) > 0)
+      sprintf(msg + strlen(msg), ": %s", symbol);
+    strcat(msg, "\n");
+    log_addstring(msg);
+  }
+  free(script);
+  return ok;
 }
 
 static int copyfile(FILE *fdest, FILE *fsrc)
@@ -615,13 +708,13 @@ static int writelog(const char *filename, const char *serial)
 
 static void usage(const char *invalid_option)
 {
-  #if defined _WIN32  /* fix console output on Windows */
+# if defined _WIN32  /* fix console output on Windows */
     if (AttachConsole(ATTACH_PARENT_PROCESS)) {
       freopen("CONOUT$", "wb", stdout);
       freopen("CONOUT$", "wb", stderr);
     }
     printf("\n");
-  #endif
+# endif
 
   if (invalid_option != NULL)
     fprintf(stderr, "Unknown option %s; use -h for help.\n\n", invalid_option);
@@ -636,30 +729,42 @@ static void usage(const char *invalid_option)
 
 static void version(void)
 {
-  #if defined _WIN32  /* fix console output on Windows */
+# if defined _WIN32  /* fix console output on Windows */
     if (AttachConsole(ATTACH_PARENT_PROCESS)) {
       freopen("CONOUT$", "wb", stdout);
       freopen("CONOUT$", "wb", stderr);
     }
     printf("\n");
-  #endif
+# endif
 
   printf("BMFlash version %s.\n", SVNREV_STR);
   printf("Copyright 2019-2022 CompuPhase\nLicensed under the Apache License version 2.0\n");
 }
 
+#if defined FORTIFY
+  void Fortify_OutputFunc(const char *str, int type)
+  {
+#   if defined _WIN32  /* fix console output on Windows */
+      if (AttachConsole(ATTACH_PARENT_PROCESS)) {
+        freopen("CONOUT$", "wb", stdout);
+        freopen("CONOUT$", "wb", stderr);
+      }
+      printf("Fortify: [%d] %s\n", type, str);
+#   endif
+  }
+#endif
+
 static bool help_popup(struct nk_context *ctx)
 {
-  #include "bmflash_help.h"
-  (void)bmflash_helpsize;
+# include "bmflash_help.h"
 
   struct nk_rect rc = nk_window_get_bounds(ctx);
-  #define MARGIN  10
+# define MARGIN  10
   rc.x += MARGIN;
   rc.y += MARGIN;
   rc.w -= 2*MARGIN;
   rc.h -= 2*MARGIN;
-  #undef MARGIN
+# undef MARGIN
   return nk_guide(ctx, &rc, opt_fontsize, (const char*)bmflash_help, NULL);
 }
 
@@ -676,8 +781,8 @@ enum {
 
 static int tools_popup(struct nk_context *ctx, const struct nk_rect *anchor_button)
 {
-  #define MENUROWHEIGHT (1.5 * opt_fontsize)
-  #define MARGIN        4
+# define MENUROWHEIGHT (1.5 * opt_fontsize)
+# define MARGIN        4
   static int prev_active = TOOL_CLOSE;
   int is_active = TOOL_OPEN;
   struct nk_rect rc;
@@ -727,8 +832,8 @@ static int tools_popup(struct nk_context *ctx, const struct nk_rect *anchor_butt
   } else {
     is_active = TOOL_CLOSE;
   }
-  #undef MENUROWHEIGHT
-  #undef MARGIN
+# undef MENUROWHEIGHT
+# undef MARGIN
   stwin->spacing = item_spacing;
   prev_active = is_active;
   return is_active;
@@ -748,7 +853,6 @@ typedef struct tagAPPSTATE {
   nk_bool print_time;           /**< option: print download time */
   int skip_download;            /**< do download+verify procedure without actually downloading */
   char IPaddr[64];              /**< IP address for network probe */
-  char PostProcess[_MAX_PATH];  /**< path to post-process program */
   int serialize;                /**< serialization option */
   int SerialFmt;                /**< serialization: format */
   char Section[32];             /**< serialization: name of the ELF section */
@@ -761,6 +865,8 @@ typedef struct tagAPPSTATE {
   char ELFfile[_MAX_PATH];      /**< ELF path/filename (target) */
   char ParamFile[_MAX_PATH];    /**< configuration file for the target */
   char SerialFile[_MAX_PATH];   /**< optional file for serialization settings */
+  char PostProcess[_MAX_PATH];  /**< path to post-process script */
+  struct tcl tcl;               /**< Tcl context */
   FILE *fpTgt;                  /**< target file */
   FILE *fpWork;                 /**< intermediate work file */
   coro coro_download;           /**< co-routine handle */
@@ -947,14 +1053,14 @@ static void panel_options(struct nk_context *ctx, APPSTATE *state,
                                                        nk_filter_ascii);
       int reconnect = ((result & NK_EDIT_COMMITED) != 0 && bmp_is_ip_address(state->IPaddr));
       if (button_symbol_tooltip(ctx, NK_SYMBOL_TRIPLE_DOT, NK_KEY_NONE, nk_true, "Scan network for ctxLink probes.")) {
-        #if defined WIN32 || defined _WIN32
+#       if defined WIN32 || defined _WIN32
           HCURSOR hcur = SetCursor(LoadCursor(NULL, IDC_WAIT));
-        #endif
+#       endif
         unsigned long addr;
         int count = scan_network(&addr, 1);
-        #if defined WIN32 || defined _WIN32
+#       if defined WIN32 || defined _WIN32
           SetCursor(hcur);
-        #endif
+#       endif
         if (count == 1) {
           sprintf(state->IPaddr, "%lu.%lu.%lu.%lu",
                  addr & 0xff, (addr >> 8) & 0xff, (addr >> 16) & 0xff, (addr >> 24) & 0xff);
@@ -980,17 +1086,17 @@ static void panel_options(struct nk_context *ctx, APPSTATE *state,
     nk_label(ctx, "Post-process", NK_TEXT_ALIGN_LEFT | NK_TEXT_ALIGN_MIDDLE);
     editctrl_tooltip(ctx, NK_EDIT_FIELD,
                      state->PostProcess, sizearray(state->PostProcess),
-                     nk_filter_ascii, "Program/script to run after successful download");
+                     nk_filter_ascii, "Tcl script to run after successful download");
     if (button_symbol_tooltip(ctx, NK_SYMBOL_TRIPLE_DOT, NK_KEY_NONE, nk_true, "Browse...")) {
-      #if defined _WIN32
-        const char *filter = "Executables\0*.exe\0All files\0*.*\0";
-      #else
-        const char *filter = "Executables\0*\0All files\0*\0";
-      #endif
+#     if defined _WIN32
+        const char *filter = "Tcl scripts\0*.tcl\0All files\0*.*\0";
+#     else
+        const char *filter = "Tcl scripts\0*.tcl\0All files\0*\0";
+#     endif
       noc_file_dialog_open(state->PostProcess, sizearray(state->PostProcess),
                            NOC_FILE_DIALOG_OPEN, filter,
                            NULL, state->PostProcess,
-                           "Select Executable", guidriver_apphandle());
+                           "Select Tcl script", guidriver_apphandle());
     }
 
     nk_layout_row_dynamic(ctx, ROW_HEIGHT, 1);
@@ -1282,39 +1388,8 @@ static int handle_stateaction(APPSTATE *state, enum nk_collapse_states tab_state
       log_addstring("^3Failed to write to log file\n");
     /* optionally perform a post-processing step */
     if (strlen(state->PostProcess) > 0) {
-      #if defined WIN32 || defined _WIN32
-        if (state->serialize != SER_NONE)
-          result = spawnlp(P_WAIT, state->PostProcess, state->PostProcess, state->ELFfile, state->Serial, NULL);
-        else
-          result = spawnlp(P_WAIT, state->PostProcess, state->PostProcess, state->ELFfile, NULL);
-      #elif defined __linux__
-        pid_t pid = fork();
-        if (pid > 0) {
-          int status; /* wait for prost-process to finish */
-          waitpid(pid, &status, 0);
-          if (WIFEXITED(status))
-            result = WEXITSTATUS(status);
-          else
-            result = -1;
-        } else {
-          if (pid == 0) {
-            if (state->serialize != SER_NONE)
-              execlp(state->PostProcess, state->PostProcess, state->ELFfile, state->Serial, NULL);
-            else
-              execlp(state->PostProcess, state->PostProcess, state->ELFfile, NULL);
-          }
-          _exit(EXIT_FAILURE); /* this point is only reached on error, because execlp() does not return */
-        }
-      #endif
-      if (result < 0) {
-        log_addstring("^1Failed to run the post-processing program\n");
-      } else if (result > 0) {
-        char msg[100];
-        sprintf(msg, "^3Post-processing program retuns %d\n", result);
-        log_addstring(msg);
-      } else {
-        log_addstring("Post-processing finished\n");
-      }
+      tcl_runscript(&state->tcl, state->PostProcess, state->ELFfile,
+                    (state->serialize != SER_NONE) ? state->Serial : "");
     }
     /* optionally increment the serial number */
     if (state->serialize != SER_NONE && !state->skip_download) {
@@ -1394,6 +1469,10 @@ int main(int argc, char *argv[])
   int load_options = 0;
   char opt_fontstd[64] = "", opt_fontmono[64] = "";
 
+# if defined FORTIFY
+    Fortify_SetOutputFunc(Fortify_OutputFunc);
+# endif
+
   /* global defaults */
   memset(&appstate, 0, sizeof appstate);
   appstate.curstate = STATE_INIT;
@@ -1465,6 +1544,11 @@ int main(int argc, char *argv[])
   strlcpy(appstate.ParamFile, appstate.ELFfile, sizearray(appstate.ParamFile));
   strlcat(appstate.ParamFile, ".bmcfg", sizearray(appstate.ParamFile));
 
+  tcl_init(&appstate.tcl);
+  tcl_register(&appstate.tcl, "exec", tcl_cmd_exec, 2, 2, NULL);
+  tcl_register(&appstate.tcl, "puts", tcl_cmd_puts, 2, 2, NULL);
+  tcl_register(&appstate.tcl, "wait", tcl_cmd_wait, 2, 2, &appstate);
+
   ctx = guidriver_init("BlackMagic Flash Programmer", WINDOW_WIDTH, WINDOW_HEIGHT,
                        GUIDRV_CENTER | GUIDRV_TIMER, opt_fontstd, opt_fontmono, opt_fontsize);
   nuklear_style(ctx);
@@ -1507,11 +1591,11 @@ int main(int argc, char *argv[])
         load_options = 2;
       nk_layout_row_push(ctx, BROWSEBTN_WIDTH);
       if (nk_button_symbol(ctx, NK_SYMBOL_TRIPLE_DOT) || nk_input_is_key_pressed(&ctx->input, NK_KEY_OPEN)) {
-        #if defined _WIN32
+#       if defined _WIN32
           const char *filter = "ELF Executables\0*.elf;*.\0All files\0*.*\0";
-        #else
+#       else
           const char *filter = "ELF Executables\0*.elf\0All files\0*\0";
-        #endif
+#       endif
         int res = noc_file_dialog_open(appstate.ELFfile, sizearray(appstate.ELFfile),
                                        NOC_FILE_DIALOG_OPEN, filter,
                                        NULL, NULL, "Select ELF Executable",
@@ -1584,8 +1668,10 @@ int main(int argc, char *argv[])
       if (button_tooltip(ctx, "Tools", NK_KEY_NONE, appstate.curstate == STATE_IDLE, "Other commands"))
         toolmenu_active = TOOL_OPEN;
       nk_spacing(ctx, 1);
-      if (nk_button_label(ctx, "Help") || nk_input_is_key_pressed(&ctx->input, NK_KEY_F1))
+      if (nk_button_label(ctx, "Help") || nk_input_is_key_pressed(&ctx->input, NK_KEY_F1)) {
+        nk_input_clear_mousebuttons(ctx);
         help_active = true;
+      }
 
       if (help_active)
         help_active = help_popup(ctx);
@@ -1635,11 +1721,18 @@ int main(int argc, char *argv[])
   ini_putl("Settings", "appstate.probe", (appstate.probe == appstate.netprobe) ? 99 : appstate.probe, txtConfigFile);
 
   clear_probelist(appstate.probelist, appstate.netprobe);
+  tcl_destroy(&appstate.tcl);
   guidriver_close();
   bmscript_clear();
   gdbrsp_packetsize(0);
   bmp_disconnect();
   tcpip_cleanup();
+  if (logtext != NULL)
+    free(logtext);
+# if defined FORTIFY
+    Fortify_CheckAllMemory();
+    Fortify_ListAllMemory();
+# endif
   return EXIT_SUCCESS;
 }
 

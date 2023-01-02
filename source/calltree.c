@@ -28,23 +28,27 @@
 #include "svnrev.h"
 
 #if defined __linux__
-  #include <bsd/string.h>
+# include <bsd/string.h>
 #elif defined __MINGW32__ || defined __MINGW64__ || defined _MSC_VER
-  #include "strlcpy.h"
+# include "strlcpy.h"
+#endif
+
+#if defined FORTIFY
+# include <alloc/fortify.h>
 #endif
 
 #if !defined _MAX_PATH
-  #define _MAX_PATH 260
+# define _MAX_PATH 260
 #endif
 
 #if !defined sizearray
-  #define sizearray(a)  (sizeof(a) / sizeof((a)[0]))
+# define sizearray(a)  (sizeof(a) / sizeof((a)[0]))
 #endif
 
 #if defined WIN32 || defined _WIN32
-  #define IS_OPTION(s)  ((s)[0] == '-' || (s)[0] == '/')
+# define IS_OPTION(s)  ((s)[0] == '-' || (s)[0] == '/')
 #else
-  #define IS_OPTION(s)  ((s)[0] == '-')
+# define IS_OPTION(s)  ((s)[0] == '-')
 #endif
 
 typedef struct tagFUNCDEF {

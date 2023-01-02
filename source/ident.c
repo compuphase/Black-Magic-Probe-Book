@@ -26,17 +26,21 @@
 #include <string.h>
 #include "ident.h"
 
+#if defined FORTIFY
+# include <alloc/fortify.h>
+#endif
+
 #if defined _MSC_VER
-  #define stricmp(s1,s2)    _stricmp((s1),(s2))
+# define stricmp(s1,s2)    _stricmp((s1),(s2))
 #elif defined __linux__
-  #define stricmp(s1,s2)    strcasecmp((s1),(s2))
+# define stricmp(s1,s2)    strcasecmp((s1),(s2))
 #endif
 
 #if !defined sizearray
-#  define sizearray(e)    (sizeof(e) / sizeof((e)[0]))
+# define sizearray(e)    (sizeof(e) / sizeof((e)[0]))
 #endif
 #if !defined STREQ
-#  define STREQ(s1, s2)   (stricmp((s1), (s2)) == 0)
+# define STREQ(s1, s2)   (stricmp((s1), (s2)) == 0)
 #endif
 
 enum {

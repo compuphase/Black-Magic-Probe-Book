@@ -17,14 +17,14 @@
  * limitations under the License.
  */
 #if defined _WIN32
-  #define WIN32_LEAN_AND_MEAN
-  #include <windows.h>
-  #if defined __MINGW32__ || defined __MINGW64__ || defined _MSC_VER
-    #include "strlcpy.h"
-  #endif
+# define WIN32_LEAN_AND_MEAN
+# include <windows.h>
+# if defined __MINGW32__ || defined __MINGW64__ || defined _MSC_VER
+#   include "strlcpy.h"
+# endif
 #else
-  #include <unistd.h>
-  #include <bsd/string.h>
+# include <unistd.h>
+# include <bsd/string.h>
 #endif
 #include <assert.h>
 #include <ctype.h>
@@ -43,6 +43,11 @@
 #include "picoro.h"
 #include "tcpip.h"
 #include "xmltractor.h"
+
+#if defined FORTIFY
+# include <alloc/fortify.h>
+#endif
+
 
 #if defined __linux__ || defined __FreeBSD__ || defined __APPLE__
 #  define stricmp(s1,s2)  strcasecmp((s1),(s2))
@@ -154,11 +159,11 @@ bool bmp_connect(int probe, const char *ipaddress)
         /* toggle DTR, to be sure */
         rs232_setstatus(hCom, LINESTAT_RTS, 0);
         rs232_setstatus(hCom, LINESTAT_DTR, 0);
-        #if defined _WIN32
+#       if defined _WIN32
           Sleep(200);
-        #else
+#       else
           usleep(200 * 1000);
-        #endif
+#       endif
         rs232_setstatus(hCom, LINESTAT_RTS, 0);
         rs232_setstatus(hCom, LINESTAT_DTR, 1);
         size = gdbrsp_recv(buffer, sizearray(buffer), 250);
@@ -217,11 +222,11 @@ bool bmp_connect(int probe, const char *ipaddress)
       size = gdbrsp_recv(buffer, sizearray(buffer), 1000);
       if (size == 2 && memcmp(buffer, "OK", size) == 0)
         break;
-      #if defined _WIN32
+#     if defined _WIN32
         Sleep(200);
-      #else
+#     else
         usleep(200 * 1000);
-      #endif
+#     endif
     }
     if (retry == 0) {
       notice(BMPERR_NOCONNECT, "Connect failed on %s", devname);
@@ -348,11 +353,11 @@ restart:
     if (bmp_monitor("tpwr enable")) {
       /* give the micro-controller a bit of time to start up, before issuing
          the swdp_scan command */
-      #if defined _WIN32
+#     if defined _WIN32
         Sleep(100);
-      #else
+#     else
         usleep(100 * 1000);
-      #endif
+#     endif
     } else {
       notice(BMPERR_MONITORCMD, "Power to target failed");
     }

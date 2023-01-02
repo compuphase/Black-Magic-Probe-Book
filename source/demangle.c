@@ -24,13 +24,18 @@
 #include "demangle.h"
 
 #if defined __POCC__
-  #include <stdlib.h>
+# include <stdlib.h>
 #else
-  #include <alloca.h>
+# include <alloca.h>
 #endif
 #if defined _MSC_VER
-  #define alloca(a)   _alloca(a)
+# define alloca(a)   _alloca(a)
 #endif
+
+#if defined FORTIFY
+# include <alloc/fortify.h>
+#endif
+
 
 #define sizearray(a)        (sizeof(a) / sizeof((a)[0]))
 #define MAX_SUBSTITUTIONS   32
@@ -495,14 +500,14 @@ static void add_substitution(struct mangle *mangle, const char *text, int tpl)
 
   /* duplicate substitutions are not merged (the Itanium ABI documentation
      implies that they are) */
-  #if 0
+# if 0
     if (!tpl) {
       for (int i = 0; i < mangle->subst_count; i++) {
         if (strcmp(text, mangle->substitions[i]) == 0)
           return; /* substition already exists, do not add again */
       }
     }
-  #endif
+# endif
 
   size_t length = strlen(text);
   char *str = malloc((length + 1) * sizeof(char));
@@ -601,7 +606,7 @@ static void _extended_qualifier(struct mangle *mangle)
   assert(mangle != NULL);
   if (match(mangle, "U")) {
     /* find the end of extended-qualifiers */
-    #define MAX_EXTQ  10
+#   define MAX_EXTQ  10
     char *base = current_position(mangle);
     const char *mpos_stack[MAX_EXTQ];
     int count = 0;
@@ -887,7 +892,7 @@ static void _array(struct mangle *mangle)
   assert(mangle != NULL);
   if (expect(mangle, "A")) {
     /* collect & skip the array specifications (without parsing them) */
-    #define MAX_ARRAYDIM  10
+#   define MAX_ARRAYDIM  10
     const char *mpos_stack[MAX_ARRAYDIM];
     int count = 0;
     do {

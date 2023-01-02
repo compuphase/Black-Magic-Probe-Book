@@ -1,7 +1,7 @@
 /*  tcpip - networking portability layer for Windows and Linux, limited to the
  *  functions that the GDB RSP needs
  *
- *  Copyright 2020, CompuPhase
+ *  Copyright 2020-2022, CompuPhase
  *
  *  Licensed under the Apache License, Version 2.0 (the "License"); you may not
  *  use this file except in compliance with the License. You may obtain a copy
@@ -22,20 +22,20 @@
 #include <string.h>
 #if defined WIN32 || defined _WIN32
 #else
-  #include <stdio.h>
-  #include <fcntl.h>
-  #include <ifaddrs.h>
-  #include <netdb.h>
-  #include <unistd.h>
-  #include <arpa/inet.h>
-  #define SOCKET_ERROR  (-1)
+# include <stdio.h>
+# include <fcntl.h>
+# include <ifaddrs.h>
+# include <netdb.h>
+# include <unistd.h>
+# include <arpa/inet.h>
+# define SOCKET_ERROR  (-1)
 #endif
 #include "bmp-scan.h"
 #include "tcpip.h"
 
 
 #if !defined sizearray
-  #define sizearray(a)    (sizeof(a) / sizeof((a)[0]))
+# define sizearray(a)   (sizeof(a) / sizeof((a)[0]))
 #endif
 
 
@@ -48,18 +48,18 @@ static SOCKET GdbSocket = INVALID_SOCKET;
  */
 unsigned long getlocalip(char *ip_address)
 {
-  #if defined WIN32 || defined _WIN32
+# if defined WIN32 || defined _WIN32
     char name[80];
     struct hostent *phe;
-  #else
+# else
     struct ifaddrs *ifaddr, *ifa;
-  #endif
+# endif
   int i;
 
   assert(ip_address != NULL);
   *ip_address = '\0';
 
-  #if defined WIN32 || defined _WIN32
+# if defined WIN32 || defined _WIN32
     if (gethostname(name, sizeof(name)) == SOCKET_ERROR)
       return INADDR_NONE;
     phe = gethostbyname(name);
@@ -77,7 +77,7 @@ unsigned long getlocalip(char *ip_address)
       strcpy(ip_address, ptr);
       return addr.s_addr;
     }
-  #else
+# else
     if (getifaddrs(&ifaddr)==-1)
       return INADDR_NONE;
 
@@ -98,7 +98,7 @@ unsigned long getlocalip(char *ip_address)
     }
 
     freeifaddrs(ifaddr);
-  #endif
+# endif
 
   return INADDR_NONE;
 }
@@ -109,23 +109,23 @@ int connect_timeout(SOCKET sock,const char *host,short port,int timeout)
   struct sockaddr_in address;
   fd_set fdset;
   struct timeval tv;
-  #if defined _WIN32 || defined WIN32
+# if defined _WIN32 || defined WIN32
     unsigned long mode = 1;
     typedef int socklen_t;
-  #endif
+# endif
 
   address.sin_family = AF_INET;
   address.sin_addr.s_addr = inet_addr(host);
   address.sin_port = htons(port);
 
-  #if defined _WIN32 || defined WIN32
+# if defined _WIN32 || defined WIN32
     /* FIONBIO  enables or disables the blocking mode for the socket;
        if mode == 0, blocking is enabled, if mode != 0, non-blocking mode is
        enabled */
     ioctlsocket(sock, FIONBIO, &mode);
-  #else
+# else
     fcntl(sock, F_SETFL, O_NONBLOCK);
-  #endif
+# endif
   connect(sock, (struct sockaddr*)&address, sizeof(address));
 
   FD_ZERO(&fdset);
@@ -188,26 +188,26 @@ int closesocket(SOCKET s)
 int tcpip_open(const char *ip_address)
 {
   struct sockaddr_in server;
-  #if defined _WIN32 || defined WIN32
+# if defined _WIN32 || defined WIN32
     unsigned long mode = 1;
-  #endif
+# endif
 
   if ((GdbSocket = socket(AF_INET, SOCK_STREAM, 0)) == INVALID_SOCKET) {
-    #if defined WIN32 || defined _WIN32
+#   if defined WIN32 || defined _WIN32
       return WSAGetLastError();
-    #else
+#   else
       return errno;
-    #endif
+#   endif
   }
 
-  #if defined _WIN32 || defined WIN32
+# if defined _WIN32 || defined WIN32
     /* FIONBIO  enables or disables the blocking mode for the socket;
        if mode == 0, blocking is enabled, if mode != 0, non-blocking mode is
        enabled */
     ioctlsocket(GdbSocket, FIONBIO, &mode);
-  #else
+# else
     fcntl(GdbSocket, F_SETFL, O_NONBLOCK);
-  #endif
+# endif
 
   server.sin_addr.s_addr = inet_addr(ip_address);
   server.sin_family = AF_INET;
@@ -216,11 +216,11 @@ int tcpip_open(const char *ip_address)
     return 0;
 
   /* connection failed, return an error code */
-  #if defined WIN32 || defined _WIN32
+# if defined WIN32 || defined _WIN32
     return WSAGetLastError();
-  #else
+# else
     return errno;
-  #endif
+# endif
 }
 
 int tcpip_close(void)

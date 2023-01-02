@@ -29,10 +29,14 @@
 #include <string.h>
 #include "svnrev.h"
 
+#if defined FORTIFY
+# include <alloc/fortify.h>
+#endif
+
 #if defined __linux__
-  #include <bsd/string.h>
+# include <bsd/string.h>
 #elif defined __MINGW32__ || defined __MINGW64__ || defined _MSC_VER
-  #include "strlcpy.h"
+# include "strlcpy.h"
 #endif
 
 #include "parsetsdl.h"
@@ -44,19 +48,19 @@ typedef struct tagPATHLIST {
 } PATHLIST;
 
 #if !defined _MAX_PATH
-  #define _MAX_PATH 260
+# define _MAX_PATH 260
 #endif
 
 #if !defined sizearray
-  #define sizearray(a)  (sizeof(a) / sizeof((a)[0]))
+# define sizearray(a)  (sizeof(a) / sizeof((a)[0]))
 #endif
 
 #if defined WIN32 || defined _WIN32
-  #define DIR_SEPARATOR "\\"
-  #define IS_OPTION(s)  ((s)[0] == '-' || (s)[0] == '/')
+# define DIR_SEPARATOR "\\"
+# define IS_OPTION(s)  ((s)[0] == '-' || (s)[0] == '/')
 #else
-  #define DIR_SEPARATOR "/"
-  #define IS_OPTION(s)  ((s)[0] == '-')
+# define DIR_SEPARATOR "/"
+# define IS_OPTION(s)  ((s)[0] == '-')
 #endif
 
 #define FLAG_MACRO      0x0001
@@ -613,16 +617,16 @@ int main(int argc, char *argv[])
     return EXIT_FAILURE;
   }
   if (strlen(outfile) == 0) {
-    #if defined _WIN32
+#   if defined _WIN32
       ptr = infile;
       if (strrchr(ptr, '\\') != NULL)
         ptr = strrchr(ptr, '\\') + 1;
       if (strrchr(ptr, '/') != NULL)
         ptr = strrchr(ptr, '/') + 1;
-    #else
+#   else
       ptr = strrchr(infile, '/');
       ptr = (ptr != NULL) ? ptr + 1 : infile;
-    #endif
+#   endif
     strlcat(outfile, "trace_", sizearray(outfile));
     strlcat(outfile, ptr, sizearray(outfile));
     if ((ptr = strrchr(outfile, '.')) != NULL)

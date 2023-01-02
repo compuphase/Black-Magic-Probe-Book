@@ -17,11 +17,11 @@
  */
 
 #if defined WIN32 || defined _WIN32
-  #define STRICT
-  #define WIN32_LEAN_AND_MEAN
-  #include <windows.h>
+# define STRICT
+# define WIN32_LEAN_AND_MEAN
+# include <windows.h>
 #elif defined __linux__
-  #include <GLFW/glfw3.h>
+# include <GLFW/glfw3.h>
 #endif
 
 #include <assert.h>
@@ -34,31 +34,31 @@
 
 void pointer_init(void *window)
 {
-  #if defined __linux__
+# if defined __linux__
     cursor_window = (GLFWwindow*)window;
     cursor_hresize = glfwCreateStandardCursor(GLFW_HRESIZE_CURSOR);
     cursor_vresize = glfwCreateStandardCursor(GLFW_VRESIZE_CURSOR);
-    #if defined GLFW_NOT_ALLOWED_CURSOR
+#   if defined GLFW_NOT_ALLOWED_CURSOR
       cursor_wait = glfwCreateStandardCursor(GLFW_NOT_ALLOWED_CURSOR);
-    #endif
-  #else
+#   endif
+# else
     (void)window;
-  #endif
+# endif
 }
 
 void pointer_cleanup(void)
 {
-  #if defined __linux__
+# if defined __linux__
     glfwDestroyCursor(cursor_hresize);
     glfwDestroyCursor(cursor_vresize);
     if (cursor_wait != NULL)
       glfwDestroyCursor(cursor_wait);
-  #endif
+# endif
 }
 
 void pointer_setstyle(int style)
 {
-  #if defined WIN32 || defined _WIN32
+# if defined WIN32 || defined _WIN32
     switch (style) {
     case CURSOR_UPDOWN:
       SetCursor(LoadCursor(NULL, IDC_SIZENS));
@@ -72,7 +72,7 @@ void pointer_setstyle(int style)
     default:
       SetCursor(LoadCursor(NULL, IDC_ARROW));
     }
-  #elif defined __linux__
+# elif defined __linux__
     switch (style) {
     case CURSOR_UPDOWN:
       glfwSetCursor(cursor_window, cursor_vresize);
@@ -86,6 +86,6 @@ void pointer_setstyle(int style)
     default:
       glfwSetCursor(cursor_window, NULL);  /* reset to default */
     }
-  #endif
+# endif
 }
 

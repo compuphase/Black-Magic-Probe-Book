@@ -26,33 +26,37 @@
 #include <string.h>
 #include "elf.h"
 #if defined WIN32 || defined _WIN32
-  #if defined __MINGW32__ || defined __MINGW64__ || defined _MSC_VER
-    #include "strlcpy.h"
-  #endif
+# if defined __MINGW32__ || defined __MINGW64__ || defined _MSC_VER
+#   include "strlcpy.h"
+# endif
 #elif defined __linux__
-  #include <bsd/string.h>
+# include <bsd/string.h>
+#endif
+
+#if defined FORTIFY
+# include <alloc/fortify.h>
 #endif
 
 #if defined __GNUC__
-  #define PACKED        __attribute__((packed))
+# define PACKED        __attribute__((packed))
 #else
-  #define PACKED
+# define PACKED
 #endif
 
 #if defined __linux__ || defined __FreeBSD__ || defined __APPLE__
-  #pragma pack(1)       /* structures must be packed (byte-aligned) */
+# pragma pack(1)        /* structures must be packed (byte-aligned) */
 #elif defined MACOS && defined __MWERKS__
-  #pragma options align=mac68k
+# pragma options align=mac68k
 #else
-  #pragma pack(push)
-  #pragma pack(1)       /* structures must be packed (byte-aligned) */
-  #if defined __TURBOC__
-    #pragma option -a-  /* "pack" pragma for older Borland compilers */
-  #endif
+# pragma pack(push)
+# pragma pack(1)        /* structures must be packed (byte-aligned) */
+# if defined __TURBOC__
+#   pragma option -a-   /* "pack" pragma for older Borland compilers */
+# endif
 #endif
 
 #if defined _MSC_VER
-  #define stricmp(s1,s2)    _stricmp((s1),(s2))
+# define stricmp(s1,s2)    _stricmp((s1),(s2))
 #endif
 
 
@@ -820,7 +824,7 @@ int elf_patch_vecttable(FILE *fp,const char *driver,unsigned int *checksum)
  */
 int elf_check_crp(FILE *fp,int *crp)
 {
-  #define CRP_ADDRESS 0x000002fc  /* hard-coded address for the CRP magic value */
+# define CRP_ADDRESS 0x000002fc  /* hard-coded address for the CRP magic value */
   unsigned long offset,base,address,length;
   uint32_t magic;
   int wordsize,bigendian,machine,result;

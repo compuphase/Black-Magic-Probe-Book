@@ -20,21 +20,25 @@
 #include <stdlib.h>
 #include <string.h>
 #if defined WIN32 || defined _WIN32
-  #include <direct.h>
-  #if defined __MINGW32__ || defined __MINGW64__ || defined _MSC_VER
-    #include "strlcpy.h"
-  #endif
+# include <direct.h>
+# if defined __MINGW32__ || defined __MINGW64__ || defined _MSC_VER
+#   include "strlcpy.h"
+# endif
 #elif defined __linux__
-  #include <bsd/string.h>
-  #include <sys/stat.h>
-  #include <sys/types.h>
+# include <bsd/string.h>
+# include <sys/stat.h>
+# include <sys/types.h>
 #endif
 #include "bmcommon.h"
 #include "bmp-scan.h"
 #include "specialfolder.h"
 
+#if defined FORTIFY
+# include <alloc/fortify.h>
+#endif
+
 #if !defined sizearray
-#  define sizearray(e)    (sizeof(e) / sizeof((e)[0]))
+# define sizearray(e)    (sizeof(e) / sizeof((e)[0]))
 #endif
 
 const char **get_probelist(int *probe, int *netprobe)
@@ -86,11 +90,11 @@ bool get_configfile(char *filename, size_t maxsize, const char *basename)
     return false;
 
   strlcat(filename, DIR_SEPARATOR "BlackMagic", maxsize);
-  #if defined _WIN32
+# if defined _WIN32
     mkdir(filename);
-  #else
+# else
     mkdir(filename, S_IRWXU | S_IRWXG | S_IROTH | S_IXOTH);
-  #endif
+# endif
   strlcat(filename, DIR_SEPARATOR, maxsize);
   strlcat(filename, basename, maxsize);
   return true;

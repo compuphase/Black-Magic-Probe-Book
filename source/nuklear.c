@@ -12057,6 +12057,17 @@ nk_input_end(struct nk_context *ctx)
     }
 }
 NK_API void
+nk_input_clear_mousebuttons(struct nk_context *ctx)
+{
+    int i;
+    struct nk_input *in;
+    NK_ASSERT(ctx);
+    if (!ctx) return;
+    in = &ctx->input;
+    for (i = 0; i < NK_BUTTON_MAX; ++i)
+        in->mouse.buttons[i].clicked = 0;
+}
+NK_API void
 nk_input_motion(struct nk_context *ctx, int x, int y)
 {
     struct nk_input *in;

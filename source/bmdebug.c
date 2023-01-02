@@ -18,42 +18,42 @@
  */
 
 #if defined _WIN32
-  #define STRICT
-  #define WIN32_LEAN_AND_MEAN
-  #define _WIN32_WINNT   0x0500 /* for AttachConsole() */
-  #include <windows.h>
-  #include <shellapi.h>
-  #include <direct.h>
-  #include <io.h>
-  #include <malloc.h>
-  #if defined __MINGW32__ || defined __MINGW64__
-    #include <dirent.h>
-    #include <sys/stat.h>
-    #include "strlcpy.h"
-  #elif defined _MSC_VER
-    #include "strlcpy.h"
-    #include <sys/stat.h>
-    #define stat _stat
-    #define access(p,m)       _access((p),(m))
-    #define memicmp(p1,p2,c)  _memicmp((p1),(p2),(c))
-    #define mkdir(p)          _mkdir(p)
-    #define strdup(s)         _strdup(s)
-    #define stricmp(s1,s2)    _stricmp((s1),(s2))
-    #define strnicmp(s1,s2,c) _strnicmp((s1),(s2),(c))
-    #include "c99_snprintf.h"
-    #include "dirent.h"
-  #endif
+# define STRICT
+# define WIN32_LEAN_AND_MEAN
+# define _WIN32_WINNT   0x0500 /* for AttachConsole() */
+# include <windows.h>
+# include <shellapi.h>
+# include <direct.h>
+# include <io.h>
+# include <malloc.h>
+# if defined __MINGW32__ || defined __MINGW64__
+#   include <dirent.h>
+#   include <sys/stat.h>
+#   include "strlcpy.h"
+# elif defined _MSC_VER
+#   include "strlcpy.h"
+#   include <sys/stat.h>
+#   define stat _stat
+#   define access(p,m)       _access((p),(m))
+#   define memicmp(p1,p2,c)  _memicmp((p1),(p2),(c))
+#   define mkdir(p)          _mkdir(p)
+#   define strdup(s)         _strdup(s)
+#   define stricmp(s1,s2)    _stricmp((s1),(s2))
+#   define strnicmp(s1,s2,c) _strnicmp((s1),(s2),(c))
+#   include "c99_snprintf.h"
+#   include "dirent.h"
+# endif
 #elif defined __linux__
-  #include <alloca.h>
-  #include <dirent.h>
-  #include <poll.h>
-  #include <signal.h>
-  #include <unistd.h>
-  #include <bsd/string.h>
-  #include <sys/stat.h>
-  #include <sys/time.h>
-  #include <sys/types.h>
-  #include <sys/wait.h>
+# include <alloca.h>
+# include <dirent.h>
+# include <poll.h>
+# include <signal.h>
+# include <unistd.h>
+# include <bsd/string.h>
+# include <sys/stat.h>
+# include <sys/time.h>
+# include <sys/types.h>
+# include <sys/wait.h>
 #endif
 #include <assert.h>
 #include <ctype.h>
@@ -90,29 +90,33 @@
 #include "decodectf.h"
 #include "swotrace.h"
 
+#if defined FORTIFY
+# include <alloc/fortify.h>
+#endif
+
 #if defined __linux__ || defined __unix__
-  #include "res/icon_debug_64.h"
+# include "res/icon_debug_64.h"
 #endif
 
 #if !defined _MAX_PATH
-  #define _MAX_PATH 260
+# define _MAX_PATH 260
 #endif
 
 #if defined __linux__ || defined __FreeBSD__ || defined __APPLE__
-  #define stricmp(s1,s2)    strcasecmp((s1),(s2))
-  #define strnicmp(s1,s2,n) strncasecmp((s1),(s2),(n))
-  #define min(a,b)          ( ((a) < (b)) ? (a) : (b) )
+# define stricmp(s1,s2)    strcasecmp((s1),(s2))
+# define strnicmp(s1,s2,n) strncasecmp((s1),(s2),(n))
+# define min(a,b)          ( ((a) < (b)) ? (a) : (b) )
 #endif
 #if !defined sizearray
-  #define sizearray(e)    (sizeof(e) / sizeof((e)[0]))
+# define sizearray(e)    (sizeof(e) / sizeof((e)[0]))
 #endif
 
 #if defined WIN32 || defined _WIN32
-  #define DIRSEP_CHAR '\\'
-  #define IS_OPTION(s)  ((s)[0] == '-' || (s)[0] == '/')
+# define DIRSEP_CHAR '\\'
+# define IS_OPTION(s)  ((s)[0] == '-' || (s)[0] == '/')
 #else
-  #define DIRSEP_CHAR '/'
-  #define IS_OPTION(s)  ((s)[0] == '-')
+# define DIRSEP_CHAR '/'
+# define IS_OPTION(s)  ((s)[0] == '-')
 #endif
 
 
@@ -1063,12 +1067,12 @@ static int console_autocomplete(char *text, size_t textsize, const DWARF_SYMBOLL
                 char *base;
                 DIR *dir;
                 base = strrchr(dirname, DIRSEP_CHAR);
-                #if defined _WIN32
+#               if defined _WIN32
                   if (base == NULL)
                     base = strrchr(dirname, '/');
                   else if (strchr(base, '/') != NULL)
                     base = strrchr(base, '/');
-                #endif
+#               endif
                 if (base != NULL) {
                   *base = '\0'; /* cut off directory name at the slash */
                   dir = opendir((strlen(dirname) > 0) ? dirname : dirseparator);
@@ -1081,15 +1085,15 @@ static int console_autocomplete(char *text, size_t textsize, const DWARF_SYMBOLL
                   struct dirent *entry;
                   while (!result && (entry = readdir(dir)) != NULL) {
                     if (len == 0 || strnicmp(word, entry->d_name, len) == 0) {
-                      #if defined __MINGW32__ || defined __MINGW64__
+#                     if defined __MINGW32__ || defined __MINGW64__
                         /* neither file attributes nor file type are returned by
                            MingW implementation of readdir() */
                         #define IS_DIR(e) 0
-                      #elif defined _WIN32
+#                     elif defined _WIN32
                         #define IS_DIR(e) (((e)->d_attr & _A_SUBDIR) != 0)
-                      #else
+#                     else
                         #define IS_DIR(e) ((e)->d_type == DT_DIR)
-                      #endif
+#                     endif
                       static char firstfile[_MAX_PATH];
                       char filename[_MAX_PATH];
                       assert(strlen(entry->d_name) < sizearray(filename));
@@ -1710,10 +1714,10 @@ static int source_lookup(const char *filename)
 
   if ((base = strrchr(filename, '/')) != NULL)
     filename = base + 1;
-  #if defined _WIN32
+# if defined _WIN32
     if ((base = strrchr(filename, '\\')) != NULL)
       filename = base + 1;
-  #endif
+# endif
 
   for (idx = 0; idx < sources_count; idx++)
     if (strcmp(filename, sources[idx].basename)== 0)
@@ -2190,7 +2194,7 @@ static int locals_update(const char *gdbresult)
           const char *value = fieldvalue(head, &valuelen);
           assert(value != NULL);
           /* copy the value in a temporary string */
-          #define LOCALVAR_MAX 32
+#         define LOCALVAR_MAX 32
           char valstr[LOCALVAR_MAX + 4]; /* +3 for "...", +1 for '\0' */
           int copylen = (valuelen <= LOCALVAR_MAX) ? valuelen : LOCALVAR_MAX;
           if (*value == '\\' && *(value + 1) == '"') {
@@ -2433,7 +2437,7 @@ static int watch_update(const char *gdbresult)
             watch->value = NULL;
           }
           if ((start = fieldfind(line, "value")) != NULL) {
-            #define WATCH_MAX 32
+#           define WATCH_MAX 32
             start = fieldvalue(start, &len);
             assert(start != NULL);
             if (len <= WATCH_MAX) {
@@ -2606,10 +2610,10 @@ static const char *lastdirsep(const char *path)
 
   if ((ptr = strrchr(path, DIRSEP_CHAR)) == NULL)
     ptr = path;
-  #if defined _WIN32
+# if defined _WIN32
     if (strrchr(ptr, '/') != NULL)
       ptr = strrchr(ptr, '/');
-  #endif
+# endif
 
   return (ptr == path) ? NULL : ptr;
 }
@@ -2640,11 +2644,11 @@ static int ctf_findmetadata(const char *target, char *metadata, size_t metadata_
       /* there is only a path in the metadata parameter */
       strlcpy(basename, metadata, sizearray(basename));
       if (ptr == NULL || *(ptr + 1) != '\0') {
-        #if defined _WIN32
+#       if defined _WIN32
           strlcat(basename, "\\", sizearray(basename));
-        #else
+#       else
           strlcat(basename, "/", sizearray(basename));
-        #endif
+#       endif
       }
       ptr = (char*)lastdirsep(target);
       strlcat(basename, (ptr == NULL) ? target : ptr + 1, sizearray(basename));
@@ -3881,13 +3885,13 @@ static void svd_info(const char *params, STRINGLIST *textroot)
     int result = svd_lookup(params, 0, &periph_name, &reg_name, &address, &description);
     if (result == 0) {
       /* on failure, also try with params converted to upper case */
-      #if !defined __linux__
+#     if !defined __linux__
         params_upcase = strdup(params);
         if (params_upcase != NULL) {
           strupr(params_upcase);
           result = svd_lookup(params_upcase, 0, &periph_name, &reg_name, &address, &description);
         }
-      #endif
+#     endif
     }
     if (result > 0) {
       char line[200];
@@ -5042,12 +5046,12 @@ static int handle_serial_cmd(const char *command, char *port, int *baud,
     for (len = 0; ptr[len] > ' '; len++)
       {}
     /* check that this is a port name, not a filename (TSDL metadata) */
-    #if defined _WIN32
+#   if defined _WIN32
       isport = (len > 4 && strncmp(ptr, "\\\\.\\", 4) == 0)
                || (len > 3 && strnicmp(ptr, "com", 3) == 0 && isdigit(*ptr + 3));
-    #else
+#   else
       isport = (len > 5 && strncmp(ptr, "/dev/", 5) == 0);
-    #endif
+#   endif
     if (isport) {
       int i;
       for (i = 0; ptr[i] > ' '; i++)
@@ -5097,13 +5101,13 @@ static int handle_serial_cmd(const char *command, char *port, int *baud,
 
 static void usage(const char *invalid_option)
 {
-  #if defined _WIN32  /* fix console output on Windows */
+# if defined _WIN32  /* fix console output on Windows */
     if (AttachConsole(ATTACH_PARENT_PROCESS)) {
       freopen("CONOUT$", "wb", stdout);
       freopen("CONOUT$", "wb", stderr);
     }
     printf("\n");
-  #endif
+# endif
 
   if (invalid_option != NULL)
     fprintf(stderr, "Unknown option %s; use -h for help.\n\n", invalid_option);
@@ -5119,17 +5123,30 @@ static void usage(const char *invalid_option)
 
 static void version(void)
 {
-  #if defined _WIN32  /* fix console output on Windows */
+# if defined _WIN32  /* fix console output on Windows */
     if (AttachConsole(ATTACH_PARENT_PROCESS)) {
       freopen("CONOUT$", "wb", stdout);
       freopen("CONOUT$", "wb", stderr);
     }
     printf("\n");
-  #endif
+# endif
 
   printf("BMDebug version %s.\n", SVNREV_STR);
   printf("Copyright 2019-2022 CompuPhase\nLicensed under the Apache License version 2.0\n");
 }
+
+#if defined FORTIFY
+  void Fortify_OutputFunc(const char *str, int type)
+  {
+#   if defined _WIN32  /* fix console output on Windows */
+      if (AttachConsole(ATTACH_PARENT_PROCESS)) {
+        freopen("CONOUT$", "wb", stdout);
+        freopen("CONOUT$", "wb", stderr);
+      }
+      printf("Fortify: [%d] %s\n", type, str);
+#   endif
+  }
+#endif
 
 static void config_read_tabstate(const char *key, enum nk_collapse_states *state, SIZERBAR *sizer,
                                  enum nk_collapse_states default_state, float default_height,
@@ -5712,7 +5729,7 @@ static void panel_configuration(struct nk_context *ctx, APPSTATE *state,
   assert(tab_state != NULL);
 
   if (nk_tree_state_push(ctx, NK_TREE_TAB, "Configuration", tab_state)) {
-    #define LABEL_WIDTH (2.5 * opt_fontsize)
+#   define LABEL_WIDTH (2.5 * opt_fontsize)
     struct nk_rect bounds = nk_widget_bounds(ctx);
     float edtwidth = bounds.w - LABEL_WIDTH - BROWSEBTN_WIDTH - (2 * 5);
 
@@ -5736,14 +5753,14 @@ static void panel_configuration(struct nk_context *ctx, APPSTATE *state,
         reconnect = 1;
       nk_layout_row_push(ctx, BROWSEBTN_WIDTH);
       if (button_symbol_tooltip(ctx, NK_SYMBOL_TRIPLE_DOT, NK_KEY_NONE, nk_true, "Scan network for ctxLink probes.")) {
-        #if defined WIN32 || defined _WIN32
+#       if defined WIN32 || defined _WIN32
           HCURSOR hcur = SetCursor(LoadCursor(NULL, IDC_WAIT));
-        #endif
+#       endif
         unsigned long addr;
         int count = scan_network(&addr, 1);
-        #if defined WIN32 || defined _WIN32
+#       if defined WIN32 || defined _WIN32
           SetCursor(hcur);
-        #endif
+#       endif
         if (count == 1) {
           sprintf(state->IPaddr, "%lu.%lu.%lu.%lu",
                  addr & 0xff, (addr >> 8) & 0xff, (addr >> 16) & 0xff, (addr >> 24) & 0xff);
@@ -5774,11 +5791,11 @@ static void panel_configuration(struct nk_context *ctx, APPSTATE *state,
                      basename, sizearray(basename), nk_filter_ascii, tooltip);
     nk_layout_row_push(ctx, BROWSEBTN_WIDTH);
     if (nk_button_symbol(ctx, NK_SYMBOL_TRIPLE_DOT)) {
-      #if defined _WIN32
+#     if defined _WIN32
         const char *filter = "Executables\0*.exe;*.\0All files\0*.*\0";
-      #else
+#     else
         const char *filter = "Executables\0*\0All files\0*\0";
-      #endif
+#     endif
       int res = noc_file_dialog_open(state->GDBpath, sizearray(state->GDBpath),
                                      NOC_FILE_DIALOG_OPEN, filter,
                                      NULL, state->GDBpath, "Select GDB program",
@@ -5803,11 +5820,11 @@ static void panel_configuration(struct nk_context *ctx, APPSTATE *state,
     nk_layout_row_push(ctx, BROWSEBTN_WIDTH);
     if (nk_button_symbol(ctx, NK_SYMBOL_TRIPLE_DOT)) {
       translate_path(state->ELFfile, 1);
-      #if defined _WIN32
+#     if defined _WIN32
         const char *filter = "ELF Executables\0*.elf;*.\0All files\0*.*\0";
-      #else
+#     else
         const char *filter = "ELF Executables\0*.elf\0All files\0*\0";
-      #endif
+#     endif
       int res = noc_file_dialog_open(state->ELFfile, sizearray(state->ELFfile),
                                      NOC_FILE_DIALOG_OPEN, filter,
                                      NULL, state->ELFfile, "Select ELF Executable",
@@ -6462,11 +6479,11 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
         RESETSTATE(state, STATE_SCAN_BMP); /* GDB started, now find Black Magic Probe */
       } else {
         /* dialog to select GDB */
-        #if defined _WIN32
+#       if defined _WIN32
           const char *filter = "Executables\0*.exe\0All files\0*.*\0";
-        #else
+#       else
           const char *filter = "Executables\0*\0All files\0*\0";
-        #endif
+#       endif
         int res = noc_file_dialog_open(state->GDBpath, sizearray(state->GDBpath),
                                        NOC_FILE_DIALOG_OPEN, filter,
                                        NULL, state->GDBpath, "Select GDB Executable",
@@ -7534,6 +7551,10 @@ int main(int argc, char *argv[])
   int exitcode;
   int idx;
 
+# if defined FORTIFY
+    Fortify_SetOutputFunc(Fortify_OutputFunc);
+# endif
+
   /* global defaults */
   memset(&appstate, 0, sizeof appstate);
   appstate.prev_clicked_line = -1;
@@ -7548,11 +7569,11 @@ int main(int argc, char *argv[])
   char txtConfigFile[_MAX_PATH];
   get_configfile(txtConfigFile, sizearray(txtConfigFile), "bmdebug.ini");
 
-  #if defined _WIN32
+# if defined _WIN32
     ini_gets("Settings", "gdb", "arm-none-eabi-gdb.exe", appstate.GDBpath, sizearray(appstate.GDBpath), txtConfigFile);
-  #else
+# else
     ini_gets("Settings", "gdb", "arm-none-eabi-gdb", appstate.GDBpath, sizearray(appstate.GDBpath), txtConfigFile);
-  #endif
+# endif
   ini_gets("Settings", "size", "", valstr, sizearray(valstr), txtConfigFile);
   if (sscanf(valstr, "%d %d", &canvas_width, &canvas_height) != 2 || canvas_width < 100 || canvas_height < 50) {
     canvas_width = WINDOW_WIDTH;

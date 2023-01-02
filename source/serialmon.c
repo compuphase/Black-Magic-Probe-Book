@@ -1,7 +1,7 @@
 /*
  * Simple serial monitor (receive data from a serial port).
  *
- * Copyright 2021 CompuPhase
+ * Copyright 2021-2022 CompuPhase
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -24,22 +24,22 @@
 #include <string.h>
 
 #if defined WIN32 || defined _WIN32
-  #define STRICT
-  #define WIN32_LEAN_AND_MEAN
-  #include <windows.h>
-  #include <io.h>
-  #if defined __MINGW32__ || defined __MINGW64__
-    #include "strlcpy.h"
-  #elif defined _MSC_VER
-    #include "strlcpy.h"
-    #define access(p,m)       _access((p),(m))
-  #endif
+# define STRICT
+# define WIN32_LEAN_AND_MEAN
+# include <windows.h>
+# include <io.h>
+# if defined __MINGW32__ || defined __MINGW64__
+#   include "strlcpy.h"
+# elif defined _MSC_VER
+#   include "strlcpy.h"
+#   define access(p,m)       _access((p),(m))
+# endif
 #elif defined __linux__
-  #include <errno.h>
-  #include <pthread.h>
-  #include <unistd.h>
-  #include <bsd/string.h>
-  #include <sys/stat.h>
+# include <errno.h>
+# include <pthread.h>
+# include <unistd.h>
+# include <bsd/string.h>
+# include <sys/stat.h>
 #endif
 
 #include "bmp-scan.h"
@@ -49,13 +49,17 @@
 #include "parsetsdl.h"
 #include "decodectf.h"
 
+#if defined FORTIFY
+# include <alloc/fortify.h>
+#endif
+
 
 #if !defined _MAX_PATH
-  #define _MAX_PATH 260
+# define _MAX_PATH 260
 #endif
 
 #if !defined sizearray
-  #define sizearray(e)    (sizeof(e) / sizeof((e)[0]))
+# define sizearray(e)    (sizeof(e) / sizeof((e)[0]))
 #endif
 
 typedef struct tagSERIALSTRING {
@@ -241,26 +245,26 @@ int sermon_open(const char *port, int baud)
   if (hCom == NULL)
     return 0;
 
-  #if defined WIN32 || defined _WIN32
+# if defined WIN32 || defined _WIN32
     hThread = CreateThread(NULL, 0, sermon_process, NULL, 0, NULL);
     if (hThread == NULL) {
       rs232_close(hCom);
       return 0;
     }
     SetThreadPriority(hThread, THREAD_PRIORITY_ABOVE_NORMAL);
-  #else
+# else
     if (pthread_create(&hThread, NULL, sermon_process, NULL) != 0) {
       rs232_close(hCom);
       return 0;
     }
-  #endif
+# endif
 
   rs232_flush(hCom);
-  #if defined WIN32 || defined _WIN32
+# if defined WIN32 || defined _WIN32
     Sleep(50);
-  #else
+# else
     usleep(50*1000);
-  #endif
+# endif
   sermon_clear();
 
   strcpy(comport, port);
@@ -270,23 +274,23 @@ int sermon_open(const char *port, int baud)
 
 void sermon_close(void)
 {
-  #if defined WIN32 || defined _WIN32
+# if defined WIN32 || defined _WIN32
     if (hThread != NULL) {
       TerminateThread(hThread, 0);
       hThread = NULL;
     }
-  #endif
+# endif
 
   if (hCom != NULL) {
     rs232_close(hCom);
     hCom = NULL;
   }
 
-  #if !(defined WIN32 || defined _WIN32)
+# if !(defined WIN32 || defined _WIN32)
     /* wait until the thread ends running and resets the handle */
     while (hThread != 0)
       usleep(10*1000);
-  #endif
+# endif
 
   sermon_clear();
 }

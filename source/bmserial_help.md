@@ -1,3 +1,5 @@
+#c-include svnrev.h
+-- ---------------------------------------------------------------------------
 # BlackMagic Serial Monitor
 
 A serial monitor (or terminal) with a simple user interface. It features line
@@ -148,6 +150,16 @@ contains the following settings:
   each row of the hex dump. Common values are 8 or 16, but any (non-zero) number
   may be selected.
 
+*Timestamp*
+: The time that each line or block of bytes is received, is recorded. These times
+  can be displayed on the left of the lines. Two formats are available:
+* Relative time is the time since the first block of data that is received.
+  If you clear the viewport, relative time restarts at zero.
+  The time is in seconds, but with three decimals behind the decimal point (so
+  millisecond resolution).
+* Absolute time is the local date and "wall clock" time, with the precision of a
+  second.
+
 *Scroll to last*
 : When new data arrives, the main view automatically scrolls to the bottom, in
   order to make the new data visible. If this option is turned off, automatic
@@ -211,6 +223,7 @@ serial terminal, that does not require the Black Magic Probe hardware device.
 The book is available as a free PDF file, and as a printed book.
 
 ---
+Version {{SVNREV_STR}} \
 Copyright 2022 CompuPhase \
 Licensed under the Apache License version 2.0
 

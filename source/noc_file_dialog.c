@@ -26,6 +26,10 @@
 #include <string.h>
 #include "noc_file_dialog.h"
 
+#if defined FORTIFY
+# include <alloc/fortify.h>
+#endif
+
 #ifdef NOC_FILE_DIALOG_GTK
 
 #include <gtk/gtk.h>
@@ -105,7 +109,7 @@ int noc_file_dialog_open(char *path, size_t pathsize,   /* output */
 #include <commdlg.h>
 
 #if defined _MSC_VER
-    #define strdup(s)       _strdup(s)
+# define strdup(s)       _strdup(s)
 #endif
 
 int noc_file_dialog_open(char *path, size_t pathsize,   /* output */

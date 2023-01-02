@@ -18,21 +18,21 @@
  * limitations under the License.
  */
 #if defined _WIN32
-  #define WIN32_LEAN_AND_MEAN
-  #include <windows.h>
-  #include <direct.h>
-  #if defined __MINGW32__ || defined __MINGW64__ || defined _MSC_VER
-    #include "strlcpy.h"
-  #endif
-  #if defined _MSC_VER
-    #define strdup(s)         _strdup(s)
-    #define stricmp(s1,s2)    _stricmp((s1),(s2))
-    #define strnicmp(s1,s2,n) _strnicmp((s1),(s2),(n))
-  #endif
+# define WIN32_LEAN_AND_MEAN
+# include <windows.h>
+# include <direct.h>
+# if defined __MINGW32__ || defined __MINGW64__ || defined _MSC_VER
+#   include "strlcpy.h"
+# endif
+# if defined _MSC_VER
+#   define strdup(s)         _strdup(s)
+#   define stricmp(s1,s2)    _stricmp((s1),(s2))
+#   define strnicmp(s1,s2,n) _strnicmp((s1),(s2),(n))
+# endif
 #else
-  #include <unistd.h>
-  #include <bsd/string.h>
-  #include <sys/stat.h>
+# include <unistd.h>
+# include <bsd/string.h>
+# include <sys/stat.h>
 #endif
 #include <assert.h>
 #include <ctype.h>
@@ -42,6 +42,11 @@
 
 #include "bmp-script.h"
 #include "specialfolder.h"
+
+#if defined FORTIFY
+# include <alloc/fortify.h>
+#endif
+
 
 #if defined __linux__ || defined __FreeBSD__ || defined __APPLE__
 #  define stricmp(s1,s2)    strcasecmp((s1),(s2))
@@ -490,10 +495,10 @@ static const char *parseline(const char *line, const REG_DEF *registers, size_t 
     rvalue->type = OT_ADDRESS;
     line = tail;
   }
-  #ifndef NDEBUG
+# ifndef NDEBUG
     line = skipleading(line, false);
     assert(*line == '\n' || *line == '\0');
-  #endif
+# endif
   if (*line > ' ')
     return NULL;  /* after parsing the line, should land on whitespace or \0 */
 
@@ -532,13 +537,13 @@ int bmscript_load(const char *mcu, const char *arch)
   char path[_MAX_PATH];
   if (folder_AppData(path, sizearray(path))) {
     strlcat(path, DIR_SEPARATOR "BlackMagic", sizearray(path));
-    #if defined _MSC_VER
+#   if defined _MSC_VER
       _mkdir(path);
-    #elif defined _WIN32
+#   elif defined _WIN32
       mkdir(path);
-    #else
+#   else
       mkdir(path, S_IRWXU | S_IRWXG | S_IROTH | S_IXOTH);
-    #endif
+#   endif
     strlcat(path, DIR_SEPARATOR "bmscript", sizearray(path));
   }
 

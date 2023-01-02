@@ -21,12 +21,16 @@
 #include <string.h>
 #include "mcu-info.h"
 
+#if defined FORTIFY
+# include <alloc/fortify.h>
+#endif
+
 #if defined __linux__ || defined __FreeBSD__ || defined __APPLE__
-#  define stricmp(s1,s2)    strcasecmp((s1),(s2))
-#  define strnicmp(s1,s2,n) strncasecmp((s1),(s2),(n))
+# define stricmp(s1,s2)    strcasecmp((s1),(s2))
+# define strnicmp(s1,s2,n) strncasecmp((s1),(s2),(n))
 #endif
 #if !defined sizearray
-#  define sizearray(e)    (sizeof(e) / sizeof((e)[0]))
+# define sizearray(e)    (sizeof(e) / sizeof((e)[0]))
 #endif
 
 static MCUINFO mcutable[] = {
@@ -207,7 +211,7 @@ const MCUINFO *mcuinfo_lookup(const char *family, uint32_t id)
   if (strlen(family) == 0 || id == 0)
     return NULL;
 
-  #if !defined NDEBUG
+# if !defined NDEBUG
     for (int i = 0; i < sizearray(mcutable); i++) {
       uint32_t id1 = mcutable[i].partid & mcutable[i].maskid;
       const char *name1 = mcutable[i].prefix;
@@ -217,7 +221,7 @@ const MCUINFO *mcuinfo_lookup(const char *family, uint32_t id)
         assert(id1 != id2 || stricmp(name1, name2) != 0);
       }
     }
-  #endif
+# endif
 
   for (int i = 0; i < sizearray(mcutable); i++) {
     if (mcutable[i].partid == (id & mcutable[i].maskid)

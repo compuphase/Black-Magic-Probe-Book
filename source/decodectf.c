@@ -26,22 +26,26 @@
 #include <string.h>
 
 #if defined __linux__
-  #include <bsd/string.h>
+# include <bsd/string.h>
 #elif defined __MINGW32__ || defined __MINGW64__ || defined _MSC_VER
-  #include "strlcpy.h"
+# include "strlcpy.h"
 #endif
 #if defined _MSC_VER
-  #define strdup(s)   _strdup(s)
-  #define alloca(a)   _alloca(a)
+# define strdup(s)   _strdup(s)
+# define alloca(a)   _alloca(a)
 #endif
 
 #include "demangle.h"
 #include "parsetsdl.h"
 #include "decodectf.h"
 
+#if defined FORTIFY
+# include <alloc/fortify.h>
+#endif
+
 
 #if !defined sizearray
-  #define sizearray(a)  (sizeof(a) / sizeof((a)[0]))
+# define sizearray(a)  (sizeof(a) / sizeof((a)[0]))
 #endif
 
 typedef struct tagTRACEMSG {

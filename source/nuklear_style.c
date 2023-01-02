@@ -69,7 +69,7 @@ void nuklear_style(struct nk_context *ctx)
 
 float *nk_ratio(int count, ...)
 {
-  #define MAX_ROW_FIELDS 10
+# define MAX_ROW_FIELDS 10
   static float r_array[MAX_ROW_FIELDS];
   va_list ap;
   int i;

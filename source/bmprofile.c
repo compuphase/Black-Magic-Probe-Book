@@ -19,25 +19,25 @@
  */
 
 #if defined WIN32 || defined _WIN32
-  #define STRICT
-  #define WIN32_LEAN_AND_MEAN
-  #define _WIN32_WINNT   0x0500 /* for AttachConsole() */
-  #include <windows.h>
-  #include <io.h>
-  #include <malloc.h>
-  #if defined __MINGW32__ || defined __MINGW64__
-    #include "strlcpy.h"
-  #elif defined _MSC_VER
-    #include "strlcpy.h"
-    #define access(p,m)       _access((p),(m))
-  #endif
+# define STRICT
+# define WIN32_LEAN_AND_MEAN
+# define _WIN32_WINNT   0x0500 /* for AttachConsole() */
+# include <windows.h>
+# include <io.h>
+# include <malloc.h>
+# if defined __MINGW32__ || defined __MINGW64__
+#   include "strlcpy.h"
+# elif defined _MSC_VER
+#   include "strlcpy.h"
+#   define access(p,m)       _access((p),(m))
+# endif
 #elif defined __linux__
-  #include <alloca.h>
-  #include <pthread.h>
-  #include <unistd.h>
-  #include <bsd/string.h>
-  #include <sys/stat.h>
-  #include <sys/time.h>
+# include <alloca.h>
+# include <pthread.h>
+# include <unistd.h>
+# include <bsd/string.h>
+# include <sys/stat.h>
+# include <sys/time.h>
 #endif
 #include <assert.h>
 #include <stdbool.h>
@@ -66,24 +66,28 @@
 #include "tcpip.h"
 #include "svnrev.h"
 
+#if defined FORTIFY
+# include <alloc/fortify.h>
+#endif
+
 #if defined __linux__ || defined __unix__
-  #include "res/icon_profile_64.h"
+# include "res/icon_profile_64.h"
 #endif
 
 #if !defined _MAX_PATH
-  #define _MAX_PATH 260
+# define _MAX_PATH 260
 #endif
 
 #if !defined sizearray
-  #define sizearray(e)    (sizeof(e) / sizeof((e)[0]))
+# define sizearray(e)    (sizeof(e) / sizeof((e)[0]))
 #endif
 
 #if defined WIN32 || defined _WIN32
-  #define DIRSEP_CHAR '\\'
-  #define IS_OPTION(s)  ((s)[0] == '-' || (s)[0] == '/')
+# define DIRSEP_CHAR '\\'
+# define IS_OPTION(s)  ((s)[0] == '-' || (s)[0] == '/')
 #else
-  #define DIRSEP_CHAR '/'
-  #define IS_OPTION(s)  ((s)[0] == '-')
+# define DIRSEP_CHAR '/'
+# define IS_OPTION(s)  ((s)[0] == '-')
 #endif
 
 
@@ -118,13 +122,13 @@ static int bmp_callback(int code, const char *message)
 
 static void usage(const char *invalid_option)
 {
-  #if defined _WIN32  /* fix console output on Windows */
+# if defined _WIN32  /* fix console output on Windows */
     if (AttachConsole(ATTACH_PARENT_PROCESS)) {
       freopen("CONOUT$", "wb", stdout);
       freopen("CONOUT$", "wb", stderr);
     }
     printf("\n");
-  #endif
+# endif
 
   if (invalid_option != NULL)
     fprintf(stderr, "Unknown option %s; use -h for help.\n\n", invalid_option);
@@ -140,17 +144,30 @@ static void usage(const char *invalid_option)
 
 static void version(void)
 {
-  #if defined _WIN32  /* fix console output on Windows */
+# if defined _WIN32  /* fix console output on Windows */
     if (AttachConsole(ATTACH_PARENT_PROCESS)) {
       freopen("CONOUT$", "wb", stdout);
       freopen("CONOUT$", "wb", stderr);
     }
     printf("\n");
-  #endif
+# endif
 
   printf("BMProfile version %s.\n", SVNREV_STR);
   printf("Copyright 2022 CompuPhase\nLicensed under the Apache License version 2.0\n");
 }
+
+#if defined FORTIFY
+  void Fortify_OutputFunc(const char *str, int type)
+  {
+#   if defined _WIN32  /* fix console output on Windows */
+      if (AttachConsole(ATTACH_PARENT_PROCESS)) {
+        freopen("CONOUT$", "wb", stdout);
+        freopen("CONOUT$", "wb", stderr);
+      }
+      printf("Fortify: [%d] %s\n", type, str);
+#   endif
+  }
+#endif
 
 enum {
   TAB_CONFIGURATION,
@@ -912,17 +929,16 @@ static bool collect_functions(APPSTATE *state)
 
 static void help_popup(struct nk_context *ctx, APPSTATE *state, float canvas_width, float canvas_height)
 {
-  #include "bmprofile_help.h"
-  (void)bmprofile_helpsize;
+# include "bmprofile_help.h"
 
   if (state->help_popup) {
-    #define MARGIN  10
+#   define MARGIN  10
     float w = opt_fontsize * 40;
     if (w > canvas_width - 2*MARGIN)  /* clip "ideal" help window size of canvas size */
       w = canvas_width - 2*MARGIN;
     float h = canvas_height * 0.75;
     struct nk_rect rc = nk_rect((canvas_width - w) / 2, (canvas_height - h) / 2, w, h);
-    #undef MARGIN
+#   undef MARGIN
 
     state->help_popup = nk_guide(ctx, &rc, opt_fontsize, (const char*)bmprofile_help, NULL);
   }
@@ -934,8 +950,8 @@ static void panel_options(struct nk_context *ctx, APPSTATE *state,
 {
   static const char *mode_strings[] = { "Manchester", "NRZ/async." };
 
-  #define LABEL_WIDTH (4.5 * opt_fontsize)
-  #define VALUE_WIDTH (panel_width - LABEL_WIDTH - 26)
+# define LABEL_WIDTH (4.5 * opt_fontsize)
+# define VALUE_WIDTH (panel_width - LABEL_WIDTH - 26)
 
   if (nk_tree_state_push(ctx, NK_TREE_TAB, "Configuration", &tab_states[TAB_CONFIGURATION])) {
     int result;
@@ -959,14 +975,14 @@ static void panel_options(struct nk_context *ctx, APPSTATE *state,
         reconnect = 1;
       nk_layout_row_push(ctx, BROWSEBTN_WIDTH);
       if (button_symbol_tooltip(ctx, NK_SYMBOL_TRIPLE_DOT, NK_KEY_NONE, nk_true, "Scan network for ctxLink probes.")) {
-        #if defined WIN32 || defined _WIN32
+#       if defined WIN32 || defined _WIN32
           HCURSOR hcur = SetCursor(LoadCursor(NULL, IDC_WAIT));
-        #endif
+#       endif
         unsigned long addr;
         int count = scan_network(&addr, 1);
-        #if defined WIN32 || defined _WIN32
+#       if defined WIN32 || defined _WIN32
           SetCursor(hcur);
-        #endif
+#       endif
         if (count == 1) {
           sprintf(state->IPaddr, "%lu.%lu.%lu.%lu",
                  addr & 0xff, (addr >> 8) & 0xff, (addr >> 16) & 0xff, (addr >> 24) & 0xff);
@@ -1052,11 +1068,11 @@ static void panel_options(struct nk_context *ctx, APPSTATE *state,
     }
     nk_layout_row_push(ctx, BROWSEBTN_WIDTH);
     if (nk_button_symbol(ctx, NK_SYMBOL_TRIPLE_DOT)) {
-      #if defined _WIN32
+#     if defined _WIN32
         const char *filter = "ELF Executables\0*.elf;*.\0All files\0*.*\0";
-      #else
+#     else
         const char *filter = "ELF Executables\0*.elf\0All files\0*\0";
-      #endif
+#     endif
       int res = noc_file_dialog_open(state->ELFfile, sizearray(state->ELFfile),
                                      NOC_FILE_DIALOG_OPEN, filter,
                                      NULL, state->ELFfile, "Select ELF Executable",
@@ -1069,16 +1085,16 @@ static void panel_options(struct nk_context *ctx, APPSTATE *state,
     nk_layout_row_end(ctx);
     nk_tree_state_pop(ctx);
   }
-  #undef LABEL_WIDTH
-  #undef VALUE_WIDTH
+# undef LABEL_WIDTH
+# undef VALUE_WIDTH
 }
 
 static void panel_profile(struct nk_context *ctx, APPSTATE *state,
                           enum nk_collapse_states tab_states[TAB_COUNT],
                           float panel_width)
 {
-  #define LABEL_WIDTH(n) ((n) * opt_fontsize)
-  #define VALUE_WIDTH(n) (panel_width - LABEL_WIDTH(n) - 26)
+# define LABEL_WIDTH(n) ((n) * opt_fontsize)
+# define VALUE_WIDTH(n) (panel_width - LABEL_WIDTH(n) - 26)
 
   if (nk_tree_state_push(ctx, NK_TREE_TAB, "Profile options", &tab_states[TAB_PROFILE])) {
     int result;
@@ -1115,16 +1131,16 @@ static void panel_profile(struct nk_context *ctx, APPSTATE *state,
 
     nk_tree_state_pop(ctx);
   }
-  #undef LABEL_WIDTH
-  #undef VALUE_WIDTH
+# undef LABEL_WIDTH
+# undef VALUE_WIDTH
 }
 
 static void panel_status(struct nk_context *ctx, APPSTATE *state,
                          enum nk_collapse_states tab_states[TAB_COUNT],
                          float panel_width)
 {
-  #define LABEL_WIDTH(n) ((n) * opt_fontsize)
-  #define VALUE_WIDTH(n) (panel_width - LABEL_WIDTH(n) - 26)
+# define LABEL_WIDTH(n) ((n) * opt_fontsize)
+# define VALUE_WIDTH(n) (panel_width - LABEL_WIDTH(n) - 26)
 
   if (nk_tree_state_push(ctx, NK_TREE_TAB, "Status", &tab_states[TAB_STATUS])) {
     char valuestr[20];
@@ -1160,8 +1176,8 @@ static void panel_status(struct nk_context *ctx, APPSTATE *state,
 
     nk_tree_state_pop(ctx);
   }
-  #undef LABEL_WIDTH
-  #undef VALUE_WIDTH
+# undef LABEL_WIDTH
+# undef VALUE_WIDTH
 }
 
 static void button_bar(struct nk_context *ctx, APPSTATE *state)
@@ -1402,6 +1418,10 @@ int main(int argc, char *argv[])
   appstate.connect_srst = nk_false;
   appstate.view = VIEW_TOP;
 
+# if defined FORTIFY
+    Fortify_SetOutputFunc(Fortify_OutputFunc);
+# endif
+
   char txtConfigFile[_MAX_PATH];
   get_configfile(txtConfigFile, sizearray(txtConfigFile), "bmprofile.ini");
   enum nk_collapse_states tab_states[TAB_COUNT];
@@ -1420,8 +1440,8 @@ int main(int argc, char *argv[])
     canvas_height = WINDOW_HEIGHT;
   }
 
-  #define SEPARATOR_HOR 4
-  #define SPACING       4
+# define SEPARATOR_HOR 4
+# define SPACING       4
   nk_splitter_init(&splitter_hor, canvas_width - 3 * SPACING, SEPARATOR_HOR, splitter_hor.ratio);
 
   for (int idx = 1; idx < argc; idx++) {
