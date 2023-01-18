@@ -16,7 +16,7 @@ A summary of the utilities:
 <tr>
 <td> <img src="https://www.compuphase.com/electronics/icon_debug_64.png" alt="Icon">    </td><td> bmdebug      </td><td> A front-end for GDB with specific support for the Black Magic Probe and debugging embedded targets. </td>
 </tr><tr>
-<td> <img src="https://www.compuphase.com/electronics/icon_download_64.png" alt="Icon"> </td><td> bmflash      </td><td> A utility to download firmware into the Flash memory of a microcontroller, with support for serialization. </td>
+<td> <img src="https://www.compuphase.com/electronics/icon_download_64.png" alt="Icon"> </td><td> bmflash      </td><td> A utility to download firmware into the Flash memory of a microcontroller, with support for serialization and Tcl scripting. </td>
 </tr><tr>
 <td> <img src="https://www.compuphase.com/electronics/icon_profile_64.png" alt="Icon">  </td><td> bmprofile    </td><td> A sampling profiler using the CoreSight debugging features and the TRACESWO channel. </td>
 </tr><tr>
