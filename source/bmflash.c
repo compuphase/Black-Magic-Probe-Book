@@ -65,17 +65,17 @@
 #include "bmp-scan.h"
 #include "bmp-script.h"
 #include "bmp-support.h"
+#include "c11threads.h"
 #include "cksum.h"
 #include "elf.h"
 #include "gdb-rsp.h"
 #include "ident.h"
 #include "minIni.h"
-#include "picoro.h"
 #include "rs232.h"
-#include "tcpip.h"
 #include "specialfolder.h"
 #include "svnrev.h"
 #include "tcl.h"
+#include "tcpip.h"
 
 #if defined FORTIFY
 # include <alloc/fortify.h>
@@ -120,30 +120,40 @@ static float opt_fontsize = FONT_HEIGHT;
    to return the current log string without adding new data to it */
 static char *logtext = NULL;
 static unsigned loglines = 0;
+static mtx_t logmutex;
+static bool logmtx_init = false;
+
 
 static char *log_addstring(const char *text)
 {
-  int len = 0;
-  char *buf;
+  /* initialize mutex on first call */
+  if (!logmtx_init) {
+    mtx_init(&logmutex, mtx_plain);
+    logmtx_init = true;
+  }
 
   if (text == NULL || strlen(text) == 0)
     return logtext;
 
+  /* in addition to the main thread, the bmp_download and Tcl threads also call
+     this function, which is why mutex protection is needed */
+  mtx_lock(&logmutex);
+  int len = 0;
   if (logtext != NULL)
     len += strlen(logtext);
   len += strlen(text) + 1;  /* +1 for the \0 */
-  buf = malloc(len * sizeof(char));
-  if (buf == NULL)
-    return logtext;
+  char *buf = malloc(len * sizeof(char));
+  if (buf != NULL) {
+    *buf = '\0';
+    if (logtext != NULL)
+      strcat(buf, logtext);
+    strcat(buf, text);
 
-  *buf = '\0';
-  if (logtext != NULL)
-    strcat(buf, logtext);
-  strcat(buf, text);
-
-  if (logtext != NULL)
-    free(logtext);
-  logtext = buf;
+    if (logtext != NULL)
+      free(logtext);
+    logtext = buf;
+  }
+  mtx_unlock(&logmutex);
   return logtext;
 }
 
@@ -217,7 +227,6 @@ static int log_widget(struct nk_context *ctx, const char *id, const char *conten
 static int bmp_callback(int code, const char *message)
 {
   char fullmsg[200] = "";
-
   assert(strlen(message) < sizearray(fullmsg) - 4);  /* colour code and \n may be added */
   if (code < 0)
     strcpy(fullmsg, "^1");  /* errors in red */
@@ -229,94 +238,6 @@ static int bmp_callback(int code, const char *message)
   log_addstring(fullmsg);
 
   return code >= 0;
-}
-
-static int tcl_cmd_exec(struct tcl *tcl, struct tcl_value *args, void *arg)
-{
-  (void)arg;
-  struct tcl_value *cmd = tcl_list_item(args, 1);
-  int retcode = system(tcl_data(cmd));
-  tcl_free(cmd);
-  return tcl_result(tcl, (retcode >= 0), tcl_value("", 0));
-}
-
-static int tcl_cmd_puts(struct tcl *tcl, struct tcl_value *args, void *arg)
-{
-  (void)arg;
-  struct tcl_value *text = tcl_list_item(args, 1);
-  char msg[512] = "";
-  strlcpy(msg, tcl_data(text), sizearray(msg));
-  strlcat(msg, "\n", sizearray(msg));
-  log_addstring(msg);
-  return tcl_result(tcl, true, text);
-}
-
-static int tcl_cmd_wait(struct tcl *tcl, struct tcl_value *args, void *arg)
-{
-  (void)arg;
-  struct tcl_value *text = tcl_list_item(args, 1);
-# if defined _WIN32
-    Sleep((int)tcl_number(text));
-# else
-    usleep((int)tcl_number(text) * 1000);
-# endif
-  return tcl_result(tcl, true, text);
-}
-
-static bool tcl_runscript(struct tcl *tcl, const char *scriptfile, const char *elffile, const char *serial)
-{
-  /* load the script file */
-  FILE *fp = fopen(scriptfile,"rt");
-  if (fp == NULL) {
-    log_addstring("^1Tcl script file not found.\n");
-    return false;
-  }
-  fseek(fp, 0, SEEK_END);
-  size_t sz = ftell(fp) + 2;
-  char *script = malloc((sz) * sizeof(char));
-  if (script == NULL) {
-    fclose(fp);
-    log_addstring("^1Memory allocation failure (when loading Tcl script).\n");
-    return false;
-  }
-  fseek(fp, 0, SEEK_SET);
-  memset(script, 0, sz);
-  char *line = script;
-  while (fgets(line, sz, fp) != NULL)
-    line += strlen(line);
-  assert(line - script < sz);
-  fclose(fp);
-  /* set variables */
-  tcl_var(tcl, "filename", tcl_value(elffile, strlen(elffile)));
-  tcl_var(tcl, "serial", tcl_value(serial, strlen(serial)));
-  fp = fopen(elffile, "rb");
-  if (fp != NULL) {
-    uint32_t crc = cksum(fp);
-    char key[32], value[128];
-    sprintf(value, "%u, ", crc);
-    tcl_var(tcl, "cksum", tcl_value(value, strlen(value)));
-    ident(fp, 0, key, sizearray(key), value, sizearray(value));
-    tcl_var(tcl, "ident", tcl_value(value, strlen(value)));
-    fclose(fp);
-  } else {
-    tcl_var(tcl, "cksum", tcl_value("", 0));
-    tcl_var(tcl, "ident", tcl_value("", 0));
-  }
-  /* now run it */
-  bool ok = tcl_eval(tcl, script, strlen(script) + 1);
-  if (!ok) {
-    int line;
-    char symbol[64];
-    const char *err = tcl_errorinfo(tcl, NULL, &line, symbol, sizearray(symbol));
-    char msg[256];
-    sprintf(msg, "^1Tcl script error: %s, on or after line %d", err, line);
-    if (strlen(symbol) > 0)
-      sprintf(msg + strlen(msg), ": %s", symbol);
-    strcat(msg, "\n");
-    log_addstring(msg);
-  }
-  free(script);
-  return ok;
 }
 
 static int copyfile(FILE *fdest, FILE *fsrc)
@@ -839,6 +760,138 @@ static int tools_popup(struct nk_context *ctx, const struct nk_rect *anchor_butt
   return is_active;
 }
 
+
+typedef struct tagRSPREPLY {
+  struct tagRSPREPLY *next;
+  char *text;
+} RSPREPLY;
+
+static RSPREPLY rspreply_root = { NULL };
+static mtx_t semi_mutex;
+
+static void rspreply_init(void)
+{
+  mtx_init(&semi_mutex, mtx_plain);
+}
+
+static void rspreply_clear(void)
+{
+  while (rspreply_root.next != NULL) {
+    RSPREPLY *head = rspreply_root.next;
+    rspreply_root.next = head->next;
+    free((void*)head->text);
+    free((void*)head);
+  }
+}
+
+static bool rspreply_push(const char *text)
+{
+  RSPREPLY *item = malloc(sizeof(RSPREPLY));
+  if (item == NULL)
+    return false;
+  item->next = NULL;
+  item->text = strdup(text);
+  if (item->text == NULL) {
+    free((void*)item);
+    return false;
+  }
+
+  mtx_lock(&semi_mutex);
+  RSPREPLY *tail;
+  for (tail = &rspreply_root; tail->next != NULL; tail = tail->next)
+    {}
+  tail->next = item;
+  mtx_unlock(&semi_mutex);
+  return true;
+}
+
+/* the value returned by rspreply_pop() must be freed (if not NULL) */
+static const char *rspreply_pop(void)
+{
+  char *ptr = NULL;
+  mtx_lock(&semi_mutex);
+  RSPREPLY *head = rspreply_root.next;
+  if (head != NULL) {
+    rspreply_root.next = head->next;
+    ptr = head->text;
+    free((void*)head);
+    assert(ptr != NULL);
+  }
+  mtx_unlock(&semi_mutex);
+  return ptr;
+}
+
+static bool rspreply_semihosting(char *packet)
+{
+  assert(packet != NULL);
+  if (*packet != 'F')
+    return false;
+  packet++; /* skip 'F' */
+  if (strncmp(packet, "gettimeofday,", 13) == 0) {
+    struct {              /* structure copied from Black Magic Probe firmware */
+      uint32_t ftv_sec;
+      uint64_t ftv_usec;
+    } fio_timeval;
+    fio_timeval.ftv_sec = time(NULL);
+    fio_timeval.ftv_usec = 0;
+    unsigned addr;
+    sscanf(packet + 13, "%x", &addr);
+    char buffer[100];
+    sprintf(buffer, "X%08X,%lX:", addr, sizeof(fio_timeval));
+    size_t offs = strlen(buffer);
+    memcpy(buffer + offs, &fio_timeval, sizeof(fio_timeval));
+    gdbrsp_xmit(buffer, offs + sizeof(fio_timeval));
+    gdbrsp_xmit("F0", -1);
+  } else if (strncmp(packet, "system,", 7) == 0) {
+    unsigned addr, size;
+    sscanf(packet + 7, "%x/%x", &addr, &size);
+    char *buffer = malloc((2 * size + 1) * sizeof(char));
+    if (buffer == NULL)
+      return false;
+    char cmd[30];
+    sprintf(cmd, "m%08X,%X:", addr, size);
+    gdbrsp_xmit(cmd, -1);
+    size_t len = gdbrsp_recv(buffer, 2 * size, 1000);
+    buffer[len] = '\0';
+    gdbrsp_hex2array(buffer, (unsigned char*)buffer, 2 * size);
+    buffer[size] = '\0';
+    sprintf(packet, "%s", buffer);
+    free((void*)buffer);
+    gdbrsp_xmit("F0", -1);
+  } else if (strncmp(packet, "write,", 6) == 0) {
+    packet += 6;
+    unsigned handle, addr, size;
+    sscanf(packet, "%x,%x,%x", &handle, &addr, &size);
+    char *buffer = malloc((2 * size + 1) * sizeof(char));
+    if (buffer == NULL)
+      return false;
+    char cmd[30];
+    sprintf(cmd, "m%08X,%X:", addr, size);
+    gdbrsp_xmit(cmd, -1);
+    size_t len = gdbrsp_recv(buffer, 2 * size, 1000);
+    buffer[len] = '\0';
+    gdbrsp_hex2array(buffer, (unsigned char*)buffer, 2 * size);
+    buffer[size] = '\0';
+    sprintf(packet, "%u,%s", size, buffer);
+    free((void*)buffer);
+    sprintf(cmd, "F%X:", size);
+    gdbrsp_xmit(cmd, -1);
+  }
+  return true;
+}
+
+static void rspreply_poll(void)
+{
+  char buffer[1024];
+  size_t size = gdbrsp_recv(buffer, sizearray(buffer) - 1, 50);
+  if (size > 0) {
+    buffer[size] = '\0';
+    rspreply_semihosting(buffer); /* translate semihosting packets */
+    rspreply_push(buffer);
+  }
+}
+
+
 typedef struct tagAPPSTATE {
   int curstate;                 /**< current state */
   int is_attached;              /**< is debug probe attached? */
@@ -866,12 +919,15 @@ typedef struct tagAPPSTATE {
   char ParamFile[_MAX_PATH];    /**< configuration file for the target */
   char SerialFile[_MAX_PATH];   /**< optional file for serialization settings */
   char PostProcess[_MAX_PATH];  /**< path to post-process script */
-  struct tcl tcl;               /**< Tcl context */
   FILE *fpTgt;                  /**< target file */
   FILE *fpWork;                 /**< intermediate work file */
-  coro coro_download;           /**< co-routine handle */
-  int coro_result;              /**< success/failure state of the download */
-  clock_t tstamp_start;         /**< time-stamp of start of download procedure */
+  struct tcl tcl;               /**< Tcl context */
+  char *tcl_script;             /**< Tcl script (loaded from file) */
+  thrd_t thrd_download;         /**< thread id for downloading firmware */
+  thrd_t thrd_tcl;              /**< thread id for Tcl script */
+  int isrunning_tcl;            /**< running state of the Tcl script */
+  int isrunning_download;       /**< running state of the download thread */
+  unsigned long tstamp_start;   /**< timestamp of start of download */
 } APPSTATE;
 
 enum {
@@ -882,6 +938,12 @@ enum {
   TAB_COUNT
 };
 
+enum {
+  THRD_IDLE,      /**< not started (or finished and cleaned-up) */
+  THRD_RUNNING,
+  THRD_COMPLETED, /**< completed running, but not yet cleaned up */
+  THRD_ABORT,
+};
 enum {
   SER_NONE,
   SER_ADDRESS,
@@ -905,10 +967,178 @@ enum {
   STATE_DOWNLOAD,
   STATE_VERIFY,
   STATE_FINISH,
+  STATE_POSTPROCESS,
   STATE_ERASE_OPTBYTES,
   STATE_SET_CRP,
   STATE_FULLERASE,
 };
+
+static int tcl_cmd_exec(struct tcl *tcl, struct tcl_value *args, void *arg)
+{
+  (void)arg;
+  struct tcl_value *cmd = tcl_list_item(args, 1);
+  int retcode = system(tcl_data(cmd));
+  tcl_free(cmd);
+  return tcl_result(tcl, (retcode >= 0), tcl_value("", 0));
+}
+
+static int tcl_cmd_syscmd(struct tcl *tcl, struct tcl_value *args, void *arg)
+{
+  (void)arg;
+  struct tcl_value *cmd = tcl_list_item(args, 1);
+  int result = gdbrsp_xmit(tcl_data(cmd), tcl_length(cmd));
+  tcl_free(cmd);
+  return tcl_result(tcl, (result >= 0), tcl_value("", 0));
+}
+
+static int tcl_cmd_puts(struct tcl *tcl, struct tcl_value *args, void *arg)
+{
+  (void)arg;
+  struct tcl_value *text = tcl_list_item(args, 1);
+  char msg[512] = "";
+  strlcpy(msg, tcl_data(text), sizearray(msg));
+  strlcat(msg, "\n", sizearray(msg));
+  log_addstring(msg);
+  return tcl_result(tcl, true, text);
+}
+
+static int tcl_cmd_wait(struct tcl *tcl, struct tcl_value *args, void *arg)
+{
+  volatile APPSTATE *state = (APPSTATE*)arg;
+  assert(state != NULL);
+  int nargs = tcl_list_length(args);
+  struct tcl_value *arg1 = tcl_list_item(args, 1);
+  struct tcl_value *arg2 = (nargs >= 3) ? tcl_list_item(args, 2) : NULL;
+  unsigned long timeout_ms = ULONG_MAX;
+  const char *varname = NULL;
+  int body_arg = 0;
+  if (tcl_isnumber(arg1)) {
+    /* scenario 1: wait <timeout> [body] */
+    timeout_ms = (unsigned long)tcl_number(arg1);
+    body_arg = (nargs == 3) ? 2 : 0;
+  } else {
+    /* scenario 2: wait <var> [timeout] [body] */
+    varname = strdup(tcl_data(arg1));
+    if (arg2 != NULL && tcl_isnumber(arg2))
+      timeout_ms = (unsigned long)tcl_number(arg2);
+    body_arg = (nargs == 4 && tcl_isnumber(arg2)) ? 3 : 0;
+  }
+  unsigned long tstamp_start = timestamp();
+  tcl_free(arg1);
+  if (arg2 != NULL)
+    tcl_free(arg2);
+  /* check for data and timeout */
+  unsigned long tstamp = timestamp();
+  while (state->isrunning_tcl == THRD_RUNNING) {
+    tstamp = timestamp();
+    if (tstamp - tstamp_start >= timeout_ms)
+      break;    /* wait timed out */
+    const char *ptr = rspreply_pop();
+    if (ptr != NULL) {
+      if (varname != NULL && strcmp(varname, "sysreply") == 0) {
+        tcl_var(tcl, varname, tcl_value(ptr, strlen(ptr)));
+        free((void*)ptr);
+        break;  /* variable changed, exit loop */
+      }
+      free((void*)ptr);
+    }
+    thrd_yield();
+  }
+  /* done waiting */
+  if (varname != NULL)
+    free((void*)varname);
+  /* check whether to run the block on timeout */
+  bool is_timeout = (tstamp - tstamp_start >= timeout_ms);
+  long result;
+  if (is_timeout && body_arg > 0 && state->isrunning_tcl == THRD_RUNNING) {
+    struct tcl_value *body = tcl_list_item(args, body_arg);
+    result = tcl_eval(tcl, tcl_data(body), tcl_length(body) + 1);
+    tcl_free(body);
+  } else {
+    result = tcl_result(tcl, state->isrunning_tcl == THRD_RUNNING, tcl_value(is_timeout ? "0" : "1", 1));
+  }
+  return result;
+}
+
+static int tcl_thread(void *arg)
+{
+  pointer_setstyle(CURSOR_WAIT);
+  APPSTATE *state = (APPSTATE*)arg;
+  assert(state != NULL);
+  assert(state->tcl_script != NULL);
+  int ok = tcl_eval(&state->tcl, state->tcl_script, strlen(state->tcl_script) + 1);
+  if (!ok) {
+    int line;
+    char symbol[64];
+    const char *err = tcl_errorinfo(&state->tcl, NULL, &line, symbol, sizearray(symbol));
+    char msg[256];
+    sprintf(msg, "^1Tcl script error: %s, on or after line %d", err, line);
+    if (strlen(symbol) > 0)
+      sprintf(msg + strlen(msg), ": %s", symbol);
+    strcat(msg, "\n");
+    log_addstring(msg);
+  }
+  free(state->tcl_script);
+  state->tcl_script = NULL;
+  pointer_setstyle(CURSOR_NORMAL);
+  if (state->isrunning_tcl != THRD_ABORT)
+    state->isrunning_tcl = THRD_COMPLETED;
+  return ok;
+}
+
+static bool tcl_preparescript(APPSTATE *state)
+{
+  /* load the script file */
+  FILE *fp = fopen(state->PostProcess,"rt");
+  if (fp == NULL) {
+    log_addstring("^1Tcl script file not found.\n");
+    return false;
+  }
+  fseek(fp, 0, SEEK_END);
+  size_t sz = ftell(fp) + 2;
+  state->tcl_script = malloc((sz) * sizeof(char));
+  if (state->tcl_script == NULL) {
+    fclose(fp);
+    log_addstring("^1Memory allocation failure (when loading Tcl script).\n");
+    return false;
+  }
+  fseek(fp, 0, SEEK_SET);
+  memset(state->tcl_script, 0, sz);
+  char *line = state->tcl_script;
+  while (fgets(line, sz, fp) != NULL)
+    line += strlen(line);
+  assert(line - state->tcl_script < sz);
+  fclose(fp);
+  /* set variables */
+  tcl_var(&state->tcl, "filename", tcl_value(state->ELFfile, strlen(state->ELFfile)));
+  const char *serial = (state->serialize != SER_NONE) ? state->Serial : "";
+  tcl_var(&state->tcl, "serial", tcl_value(serial, strlen(serial)));
+  fp = fopen(state->ELFfile, "rb");
+  if (fp != NULL) {
+    uint32_t crc = cksum(fp);
+    char key[32], value[128];
+    sprintf(value, "%u, ", crc);
+    tcl_var(&state->tcl, "cksum", tcl_value(value, strlen(value)));
+    ident(fp, 0, key, sizearray(key), value, sizearray(value));
+    tcl_var(&state->tcl, "ident", tcl_value(value, strlen(value)));
+    fclose(fp);
+  } else {
+    tcl_var(&state->tcl, "cksum", tcl_value("", 0));
+    tcl_var(&state->tcl, "ident", tcl_value("", 0));
+  }
+  tcl_var(&state->tcl, "sysreply", tcl_value("", 0));
+  return true;
+}
+
+static int download_thread(void *arg)
+{
+  pointer_setstyle(CURSOR_WAIT);
+  APPSTATE *state = (APPSTATE*)arg;
+  assert(state != NULL);
+  bool result = bmp_download((state->fpWork != NULL) ? state->fpWork : state->fpTgt);
+  state->isrunning_download = THRD_COMPLETED;
+  return result;
+}
 
 static char *getpath(char *path, size_t pathlength, const char *basename, const char *basepath)
 {
@@ -1169,11 +1399,11 @@ static void panel_serialize(struct nk_context *ctx, APPSTATE *state,
   }
 }
 
-static int handle_stateaction(APPSTATE *state, enum nk_collapse_states tab_states[TAB_COUNT])
+static bool handle_stateaction(APPSTATE *state, enum nk_collapse_states tab_states[TAB_COUNT])
 {
   assert(state != NULL);
 
-  int waitidle = 1;
+  bool waitidle = true;
   int result;
 
   switch (state->curstate) {
@@ -1185,7 +1415,7 @@ static int handle_stateaction(APPSTATE *state, enum nk_collapse_states tab_state
     bmp_connect(state->probe, (state->probe == state->netprobe) ? state->IPaddr : NULL);
     bmp_progress_reset(0);
     state->curstate = STATE_IDLE;
-    waitidle = 0;
+    waitidle = false;
     break;
 
   case STATE_IDLE:
@@ -1215,12 +1445,12 @@ static int handle_stateaction(APPSTATE *state, enum nk_collapse_states tab_state
       strlcat(state->ParamFile, ".bmcfg", sizearray(state->ParamFile));
       save_targetparams(state->ParamFile, state);
       state->curstate = STATE_ATTACH;
-      state->tstamp_start = clock();
+      state->tstamp_start = timestamp();
     } else {
       log_addstring("^1Failed to open the ELF file\n");
       state->curstate = STATE_IDLE;
     }
-    waitidle = 0;
+    waitidle = false;
     break;
 
   case STATE_ATTACH:
@@ -1258,7 +1488,7 @@ static int handle_stateaction(APPSTATE *state, enum nk_collapse_states tab_state
         result = 0; /* no use downloading firmware to a chip that has no Flash */
     }
     state->curstate = (result && state->is_attached) ? STATE_PRE_DOWNLOAD : STATE_IDLE;
-    waitidle = 0;
+    waitidle = false;
     break;
 
   case STATE_PRE_DOWNLOAD:
@@ -1270,7 +1500,7 @@ static int handle_stateaction(APPSTATE *state, enum nk_collapse_states tab_state
     } else {
       state->curstate = STATE_PATCH_ELF;
     }
-    waitidle = 0;
+    waitidle = false;
     break;
 
   case STATE_PATCH_ELF:
@@ -1281,7 +1511,7 @@ static int handle_stateaction(APPSTATE *state, enum nk_collapse_states tab_state
       if (state->fpWork == NULL) {
         log_addstring("^1Failed to process the target file\n");
         state->curstate = STATE_IDLE;
-        waitidle = 0;
+        waitidle = false;
         break;
       }
       result = copyfile(state->fpWork, state->fpTgt);
@@ -1307,7 +1537,7 @@ static int handle_stateaction(APPSTATE *state, enum nk_collapse_states tab_state
     } else {
       state->curstate = STATE_CLEARFLASH;
     }
-    waitidle = 0;
+    waitidle = false;
     break;
 
   case STATE_CLEARFLASH:
@@ -1319,38 +1549,37 @@ static int handle_stateaction(APPSTATE *state, enum nk_collapse_states tab_state
     } else {
       state->curstate = STATE_DOWNLOAD;
     }
-    waitidle = 0;
+    waitidle = false;
     break;
 
   case STATE_DOWNLOAD:
     /* download to target */
     if (!state->skip_download) {
-      if (state->architecture > 0 && state->coro_download == NULL)
-        bmp_runscript("memremap", architectures[state->architecture], NULL, NULL, 0);
-      /* create a coroutine for the function that does the download, so that
-         this loop continues with updating the message log, while the download
-         is in progress */
-      if (state->coro_download == NULL) {
-        state->coro_download = coroutine((coro_proc)bmp_download);
-        state->coro_result = 0; /* preset for the case that the resumable() fails */
-      }
-      if (state->coro_download != NULL && resumable(state->coro_download)) {
-        pointer_setstyle(CURSOR_WAIT);
-        state->coro_result = (intptr_t)resume(state->coro_download,
-                                              (state->fpWork != NULL) ? state->fpWork : state->fpTgt);
-        if (state->coro_result == 0) {
-          state->coro_download = NULL;
-          state->curstate = STATE_IDLE;
+      bool ok = true;
+      if (state->isrunning_download == THRD_IDLE) {
+        if (state->architecture > 0)
+          bmp_runscript("memremap", architectures[state->architecture], NULL, NULL, 0);
+        /* create a thread to do the download, so that this loop continues with
+           updating the message log, while the download is in progress */
+        state->isrunning_download = THRD_RUNNING;
+        if (thrd_create(&state->thrd_download, download_thread, state) != thrd_success) {
+          ok = false;
+          state->isrunning_download = THRD_IDLE;
         }
-      } else {
-        pointer_setstyle(CURSOR_NORMAL);
-        state->coro_download = NULL;
-        state->curstate = state->coro_result ? STATE_VERIFY : STATE_IDLE;
+      } else if (state->isrunning_download == THRD_COMPLETED || state->isrunning_download == THRD_ABORT) {
+        if (state->isrunning_download == THRD_ABORT)
+          log_addstring("^1Aborted\n");
+        int retcode;
+        thrd_join(state->thrd_download, &retcode);
+        ok = (retcode > 0 && state->isrunning_download == THRD_COMPLETED);
+        state->isrunning_download = THRD_IDLE;
       }
+      if (state->isrunning_download == THRD_IDLE)
+        state->curstate = ok ? STATE_VERIFY : STATE_IDLE;
     } else {
       state->curstate = STATE_VERIFY;
     }
-    waitidle = 0;
+    waitidle = false;
     break;
 
   case STATE_VERIFY:
@@ -1376,21 +1605,16 @@ static int handle_stateaction(APPSTATE *state, enum nk_collapse_states tab_state
     if (result && state->print_time) {
       char msg[100];
       clock_t tstamp_stop = clock();
-      sprintf(msg, "Completed in %.1f seconds\n", (double)(tstamp_stop - state->tstamp_start) / CLOCKS_PER_SEC);
+      sprintf(msg, "Completed in %.1f seconds\n", (tstamp_stop - state->tstamp_start) / 1000.0);
       log_addstring(msg);
     }
-    waitidle = 0;
+    waitidle = false;
     break;
 
   case STATE_FINISH:
     /* optionally log the download */
     if (state->write_log && !writelog(state->ELFfile, (state->serialize != SER_NONE) ? state->Serial : NULL))
       log_addstring("^3Failed to write to log file\n");
-    /* optionally perform a post-processing step */
-    if (strlen(state->PostProcess) > 0) {
-      tcl_runscript(&state->tcl, state->PostProcess, state->ELFfile,
-                    (state->serialize != SER_NONE) ? state->Serial : "");
-    }
     /* optionally increment the serial number */
     if (state->serialize != SER_NONE && !state->skip_download) {
       int incr = (int)strtol(state->SerialIncr, NULL, 10);
@@ -1407,8 +1631,49 @@ static int handle_stateaction(APPSTATE *state, enum nk_collapse_states tab_state
         getpath(serialfile, sizearray(serialfile), state->SerialFile, state->ParamFile);
       ini_puts("Serialize", "serial", field, serialfile);
     }
-    state->curstate = STATE_IDLE;
-    waitidle = 0;
+    state->curstate = STATE_POSTPROCESS;
+    waitidle = false;
+    break;
+
+  case STATE_POSTPROCESS:
+    /* optionally perform a post-processing step */
+    if (strlen(state->PostProcess) > 0) {
+      if (state->isrunning_tcl == THRD_IDLE) {
+        char *basename = strrchr(state->PostProcess, DIRSEP_CHAR);
+        if (basename != NULL)
+          basename += 1;
+        else
+          basename = state->PostProcess;
+        if (tcl_preparescript(state)) {
+          char msg[280];
+          sprintf(msg, "Running: %s\n", basename);
+          log_addstring(msg);
+          gdbrsp_clear();
+          /* start a thread to run the script (it is resumed in the main loop) */
+          state->isrunning_tcl = THRD_RUNNING;
+          if (thrd_create(&state->thrd_tcl, tcl_thread, state) != thrd_success)
+            state->isrunning_tcl = THRD_IDLE;
+        } else {
+          char msg[280];
+          sprintf(msg, "^1Failed running: %s\n", basename);
+          log_addstring(msg);
+          gdbrsp_clear();
+        }
+      } else if (state->isrunning_tcl == THRD_COMPLETED || state->isrunning_tcl == THRD_ABORT) {
+        log_addstring(state->isrunning_tcl == THRD_COMPLETED ? "^2Done\n" : "^1Aborted\n");
+        thrd_join(state->thrd_tcl, &state->isrunning_tcl);
+        state->isrunning_tcl = THRD_IDLE;
+      } else if (state->isrunning_tcl == THRD_RUNNING) {
+        rspreply_poll();
+      }
+      if (state->isrunning_tcl == THRD_IDLE) {
+        state->curstate = STATE_IDLE;
+        waitidle = false;
+      }
+    } else {
+      state->curstate = STATE_IDLE;
+      waitidle = false;
+    }
     break;
 
   case STATE_ERASE_OPTBYTES:
@@ -1422,7 +1687,7 @@ static int handle_stateaction(APPSTATE *state, enum nk_collapse_states tab_state
         log_addstring("^1Failed to erase the option bytes\n");
     }
     state->curstate = STATE_IDLE;
-    waitidle = 0;
+    waitidle = false;
     break;
 
   case STATE_SET_CRP:
@@ -1436,7 +1701,7 @@ static int handle_stateaction(APPSTATE *state, enum nk_collapse_states tab_state
         log_addstring("^1Failed to set the option byte for CRP\n");
     }
     state->curstate = STATE_IDLE;
-    waitidle = 0;
+    waitidle = false;
     break;
 
   case STATE_FULLERASE:
@@ -1450,7 +1715,7 @@ static int handle_stateaction(APPSTATE *state, enum nk_collapse_states tab_state
       bmp_fullerase();
     }
     state->curstate = STATE_IDLE;
-    waitidle = 0;
+    waitidle = false;
     break;
   }
 
@@ -1478,6 +1743,8 @@ int main(int argc, char *argv[])
   appstate.curstate = STATE_INIT;
   appstate.serialize = SER_NONE;
   appstate.SerialFmt = FMT_BIN;
+  appstate.isrunning_tcl = THRD_IDLE;
+  appstate.isrunning_download = THRD_IDLE;
   strcpy(appstate.Section, ".text");
   strcpy(appstate.Address, "0");
   strcpy(appstate.Serial, "1");
@@ -1547,7 +1814,9 @@ int main(int argc, char *argv[])
   tcl_init(&appstate.tcl);
   tcl_register(&appstate.tcl, "exec", tcl_cmd_exec, 2, 2, NULL);
   tcl_register(&appstate.tcl, "puts", tcl_cmd_puts, 2, 2, NULL);
-  tcl_register(&appstate.tcl, "wait", tcl_cmd_wait, 2, 2, &appstate);
+  tcl_register(&appstate.tcl, "syscmd", tcl_cmd_syscmd, 2, 2, NULL);
+  tcl_register(&appstate.tcl, "wait", tcl_cmd_wait, 2, 4, &appstate);
+  rspreply_init();
 
   ctx = guidriver_init("BlackMagic Flash Programmer", WINDOW_WIDTH, WINDOW_HEIGHT,
                        GUIDRV_CENTER | GUIDRV_TIMER, opt_fontstd, opt_fontmono, opt_fontsize);
@@ -1560,7 +1829,7 @@ int main(int argc, char *argv[])
   int running = 1;
   while (running) {
     /* handle state */
-    int waitidle = handle_stateaction(&appstate, tab_states);
+    bool waitidle = handle_stateaction(&appstate, tab_states);
 
     /* handle user input */
     nk_input_begin(ctx);
@@ -1659,9 +1928,18 @@ int main(int argc, char *argv[])
       }
 
       nk_layout_row(ctx, NK_DYNAMIC, ROW_HEIGHT, 5, nk_ratio(5, 0.4, 0.025, 0.30, 0.025, 0.25));
-      if (button_tooltip(ctx, "Download", NK_KEY_F5, appstate.curstate == STATE_IDLE, "Download ELF file into target (F5)")) {
-        appstate.skip_download = 0;      /* should already be 0 */
-        appstate.curstate = STATE_SAVE;  /* start the real download sequence */
+      if (appstate.isrunning_download != THRD_RUNNING && appstate.isrunning_tcl != THRD_RUNNING) {
+        if (button_tooltip(ctx, "Download", NK_KEY_F5, appstate.curstate == STATE_IDLE, "Download ELF file into target (F5)")) {
+          appstate.skip_download = 0;      /* should already be 0 */
+          appstate.curstate = STATE_SAVE;  /* start the download sequence */
+        }
+      } else {
+        if (button_tooltip(ctx, "Abort", NK_KEY_COPY, nk_true, "Abort download / post-processing (Ctrl+C)")) {
+          if (appstate.isrunning_download == THRD_RUNNING)
+            appstate.isrunning_download = THRD_ABORT;
+          if (appstate.isrunning_tcl == THRD_RUNNING)
+            appstate.isrunning_tcl = THRD_ABORT;
+        }
       }
       nk_spacing(ctx, 1);
       rc_toolbutton = nk_widget_bounds(ctx);
@@ -1722,6 +2000,7 @@ int main(int argc, char *argv[])
 
   clear_probelist(appstate.probelist, appstate.netprobe);
   tcl_destroy(&appstate.tcl);
+  rspreply_clear();
   guidriver_close();
   bmscript_clear();
   gdbrsp_packetsize(0);

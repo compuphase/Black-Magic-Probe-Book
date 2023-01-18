@@ -4,7 +4,7 @@
  * it scans the registry for the Black Magic Probe device, under Linux, it
  * browses through sysfs.
  *
- * Copyright 2019-2022 CompuPhase
+ * Copyright 2019-2023 CompuPhase
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -41,6 +41,7 @@
 #endif
 
 #include "bmp-scan.h"
+#include "c11threads.h"
 #include "tcpip.h"
 
 #if defined FORTIFY
@@ -453,16 +454,10 @@ typedef struct tagPORTRANGE {
   unsigned long mask;
 } PORTRANGE;
 
-#if !(defined WIN32 || defined _WIN32)
-  static volatile int running_threads = 0;
-  static pthread_mutex_t running_mutex = PTHREAD_MUTEX_INITIALIZER;
-#endif
+static volatile int running_threads = 0;
+static mtx_t running_mutex;
 
-#if defined WIN32 || defined _WIN32
-static DWORD __stdcall scan_range(LPVOID arg)
-#else
-static void *scan_range(void *arg)
-#endif
+static int scan_range(void *arg)
 {
   short idx, start, end;
   const char *base;
@@ -488,35 +483,26 @@ static void *scan_range(void *arg)
 
   ((PORTRANGE*)arg)->mask = mask;
 
-# if !(defined WIN32 || defined _WIN32)
-    pthread_mutex_lock(&running_mutex);
-    running_threads--;
-    pthread_mutex_unlock(&running_mutex);
-# endif
+  mtx_lock(&running_mutex);
+  running_threads--;
+  mtx_unlock(&running_mutex);
   return 0;
 }
 
 int scan_network(unsigned long *addresses, int address_count)
 {
 # define NUM_THREADS 32
-  PORTRANGE pr[NUM_THREADS];
-# if defined WIN32 || defined _WIN32
-    HANDLE hThread[NUM_THREADS];
-# else
-    pthread_t hThread[NUM_THREADS];
-# endif
-  char local_ip[30], *ptr;
-  unsigned long local_ip_addr;
-  int idx, range, count;
 
   /* check local IP address, replace the last number by a wildcard (i.e., assume
      that the netmask is 255.255.255.0) */
-  local_ip_addr = getlocalip(local_ip);
+  char local_ip[30], *ptr;
+  unsigned long local_ip_addr = getlocalip(local_ip);
   if ((ptr = strrchr(local_ip, '.')) != NULL)
     *(ptr + 1) = '\0';
 
-  range = (254-1+NUM_THREADS/2) / NUM_THREADS;
-  for (idx=0; idx<NUM_THREADS; idx++) {
+  int range = (254-1+NUM_THREADS/2) / NUM_THREADS;
+  PORTRANGE pr[NUM_THREADS];
+  for (int idx=0; idx<NUM_THREADS; idx++) {
     pr[idx].base = local_ip;
     pr[idx].start = (short)(1 + (idx*range));
     pr[idx].end = (short)(1 + (idx*range) + (range-1));
@@ -525,29 +511,25 @@ int scan_network(unsigned long *addresses, int address_count)
 
   /* create threads to scan the network and wait for all these threads to
      finish */
-# if defined WIN32 || defined _WIN32
-    for (idx=0; idx<NUM_THREADS; idx++)
-      hThread[idx] = CreateThread(NULL, 0, scan_range, &pr[idx], 0, NULL);
-    WaitForMultipleObjects(NUM_THREADS, hThread, TRUE, INFINITE);
-# else
-    for (idx=0; idx<NUM_THREADS; idx++) {
-      if (pthread_create(&hThread[idx], NULL, scan_range, NULL) == 0) {
-        pthread_mutex_lock(&running_mutex);
-        running_threads++;
-        pthread_mutex_unlock(&running_mutex);
-      }
+  mtx_init(&running_mutex, mtx_plain);
+  thrd_t hThread[NUM_THREADS];
+  for (int idx=0; idx<NUM_THREADS; idx++) {
+    if (thrd_create(&hThread[idx], scan_range, &pr[idx]) == thrd_success) {
+      mtx_lock(&running_mutex);
+      running_threads++;
+      mtx_unlock(&running_mutex);
+      thrd_detach(hThread[idx]);
     }
-    while (running_threads > 0)
-      usleep(50000);
-# endif
+  }
+  while (running_threads > 0)
+    thrd_yield();
 
   /* construct the list of matching addresses */
   assert(addresses != NULL && address_count > 0);
-  count = 0;
-  for (idx=0; idx<NUM_THREADS; idx++) {
+  int count = 0;
+  for (int idx=0; idx<NUM_THREADS; idx++) {
     unsigned long bit = 1;
-    short j;
-    for (j = pr[idx].start; j <= pr[idx].end; j++) {
+    for (short j = pr[idx].start; j <= pr[idx].end; j++) {
       if (count < address_count && (pr[idx].mask & bit) != 0)
         addresses[count++] = (local_ip_addr & 0xffffff) | (j << 24);
       bit <<= 1;

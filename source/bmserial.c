@@ -152,6 +152,7 @@ static void version(void)
 
 #define DFLAG_LOCAL   0x01    /* this data block is local input (transmitted text) */
 #define DFLAG_SCRIPT  0x02    /* this data block is script output */
+#define DFLAG_APPEND  0x04    /* force append, because a script was waiting for the data */
 
 typedef struct tagDATALIST {
   struct tagDATALIST *next;
@@ -208,23 +209,28 @@ static DATALIST *datalist_append(const unsigned char *buffer, size_t size, bool 
   while (last->next != NULL)
     last = last->next;
 
-  /* never append a local echo, and obviously don't append if the list is empty,
-     but also don't append *to* a local echo */
-  bool append = flags == 0 && datalist_root.next != NULL && !datalist_root.next->flags == 0;
-  if (append) {
-    /* if there is significant delay between the reception of the two blocks,
-       assume separate receptions; but "significant" is different for blocks
-       with ASCII text that end on an EOL character, than for blocks with non-ASCII
-       text or that end at some other character */
-    assert(last->datasize > 0);
-    unsigned char final = last->data[last->datasize - 1];
-    unsigned long max_gap = (isascii && (final == '\r' || final == '\n')) ? 5 : 50;
-    if (tstamp - last->timestamp > max_gap)
+  bool append;
+  if (flags & DFLAG_APPEND) {
+    append = true;
+  } else {
+    /* never append a local echo, and obviously don't append if the list is empty,
+       but also don't append *to* a local echo */
+    append = (flags == 0 && datalist_root.next != NULL && !datalist_root.next->flags == 0);
+    if (append) {
+      /* if there is significant delay between the reception of the two blocks,
+         assume separate receptions; but "significant" is different for blocks
+         with ASCII text that end on an EOL character, than for blocks with non-ASCII
+         text or that end at some other character */
+      assert(last->datasize > 0);
+      unsigned char final = last->data[last->datasize - 1];
+      unsigned long max_gap = (isascii && (final == '\r' || final == '\n')) ? 5 : 50;
+      if (tstamp - last->timestamp > max_gap)
+        append = false;
+    }
+    if (append && last->datasize + size > 512) {
+      /* when blocks grow too large, assume a separate reception */
       append = false;
-  }
-  if (append && last->datasize + size > 512) {
-    /* when blocks grow too large, assume a separate reception */
-    append = false;
+    }
   }
 
   DATALIST *item;
@@ -428,8 +434,10 @@ typedef struct tagAPPSTATE {
   bool script_block_run;        /**< block running the script (because errors were found) */
   bool script_cache;            /**< whether data from a previous reception must be kept */
   unsigned char *script_recv;   /**< data buffer for the script */
-  size_t script_recv_size;      /**< size of the memory buffer */
+  size_t script_recv_length;    /**< size of the data in the data buffer */
+  size_t script_recv_size;      /**< size of the memory block for the data buffer */
   struct tcl tcl;               /**< Tcl context (for running the script) */
+  bool tcl_running;             /**< whether a Tcl script is active */
   bool help_popup;              /**< whether "help" popup is active */
   int viewport_width;           /**< width of the viewport in characters (excluding the width of a timestamp field) */
 } APPSTATE;
@@ -568,7 +576,7 @@ static bool load_settings(const char *filename, APPSTATE *state,
     if (strlen(data) == 0)
       break;
     int enabled = nk_true;
-    int r = 255, g = 255, b = 255;
+    unsigned int r = 255, g = 255, b = 255;
     char flttext[sizeof(state->filter_root.text)] = "";
     if (sscanf(data, "%d,#%2x%2x%2x,%s", &enabled, &r, &g, &b, flttext) == 5 && strlen(flttext) > 0)
       filter_add(&state->filter_root, flttext, nk_rgb(r, g, b), enabled);
@@ -579,12 +587,49 @@ static bool load_settings(const char *filename, APPSTATE *state,
   return true;
 }
 
+static int process_data(APPSTATE *state);
 static void reformat_data(APPSTATE *state, DATALIST *item);
+
 static void tcl_add_message(APPSTATE *state, const char *text, size_t length, bool isascii)
 {
   DATALIST *item = datalist_append((const unsigned char*)text, length, isascii, DFLAG_SCRIPT);
   if (item != NULL)
     reformat_data(state, item); /* format the block of data */
+}
+
+static bool tcl_set_recv(APPSTATE *state, const unsigned char *data, size_t size)
+{
+  assert(state != NULL);
+  assert(data != NULL || size == 0);
+  /* grow the buffer, if needed */
+  size_t total = state->script_recv_length + size;
+  if (total > state->script_recv_size) {
+    size_t newsize = state->script_recv_size;
+    if (newsize < 16)
+      newsize = 16;
+    while (total > newsize)
+      newsize *= 2;
+    unsigned char *buffer = malloc(newsize * sizeof(unsigned char));
+    if (buffer != NULL) {
+      if (state->script_recv_length > 0) {
+        assert(state->script_recv != NULL);
+        memcpy(buffer, state->script_recv, state->script_recv_length);
+      }
+      if (state->script_recv != NULL)
+        free((void*)state->script_recv);
+      state->script_recv = buffer;
+      state->script_recv_size = newsize;
+    }
+  }
+  /* concatenate the data to the buffer (if there is new data) */
+  if (total <= state->script_recv_size && size > 0) {
+    memcpy(state->script_recv + state->script_recv_length, data, size);
+    state->script_recv_length = total;
+  }
+  if (state->script_recv == NULL)
+    return false;
+  tcl_var(&state->tcl, "serialrecv", tcl_value((const char*)state->script_recv, state->script_recv_length));
+  return true;
 }
 
 static int tcl_cmd_exec(struct tcl *tcl, struct tcl_value *args, void *arg)
@@ -598,9 +643,8 @@ static int tcl_cmd_exec(struct tcl *tcl, struct tcl_value *args, void *arg)
 
 static int tcl_cmd_puts(struct tcl *tcl, struct tcl_value *args, void *arg)
 {
-  (void)arg;
   APPSTATE *state = (APPSTATE*)arg;
-  assert(state);
+  assert(state != NULL);
   struct tcl_value *text = tcl_list_item(args, 1);
   tcl_add_message(state, tcl_data(text), tcl_length(text), false);
   return tcl_result(tcl, true, text);
@@ -608,14 +652,68 @@ static int tcl_cmd_puts(struct tcl *tcl, struct tcl_value *args, void *arg)
 
 static int tcl_cmd_wait(struct tcl *tcl, struct tcl_value *args, void *arg)
 {
-  (void)arg;
-  struct tcl_value *text = tcl_list_item(args, 1);
-# if defined _WIN32
-    Sleep((int)tcl_number(text));
-# else
-    usleep((int)tcl_number(text) * 1000);
-# endif
-  return tcl_result(tcl, true, text);
+  APPSTATE *state = (APPSTATE*)arg;
+  assert(state != NULL);
+  assert(tcl == &state->tcl);
+  int nargs = tcl_list_length(args);
+  struct tcl_value *arg1 = tcl_list_item(args, 1);
+  struct tcl_value *arg2 = (nargs >= 3) ? tcl_list_item(args, 2) : NULL;
+  bool timeout = false;
+  int body_arg = (nargs == 4 && tcl_isnumber(arg2)) ? 3 : 0;  /* common case, may be overruled */
+  if (tcl_isnumber(arg1)) {
+    /* scenario 1: wait <timeout> [body] -> simply delay */
+#   if defined _WIN32
+      Sleep((int)tcl_number(arg1));
+#   else
+      usleep((int)tcl_number(arg1));
+#   endif
+    timeout = true;
+    body_arg = (nargs == 3) ? 2 : 0;
+  } else if (strcmp(tcl_data(arg1), "serialrecv") != 0) {
+    /* scenario 2: wait <var> [timeout] [body]  where var is not "serialrecv" -> the
+                   variable will never change, so always timeout -> simply delay */
+    if (tcl_isnumber(arg2)) {
+#     if defined _WIN32
+        Sleep((int)tcl_number(arg2));
+#     else
+        usleep((int)tcl_number(arg2) * 1000);
+#     endif
+    }
+    timeout = true;
+  } else {
+    /* scenario 3: wait serialrecv [timeout] [body] */
+    unsigned long timeout_ms = ULONG_MAX;
+    if (nargs >= 3 && tcl_isnumber(arg2))
+      timeout_ms = tcl_number(arg2);
+    state->tcl_running = true;
+    unsigned long tstamp_start = timestamp();
+    while (!timeout) {
+#     if defined _WIN32
+        Sleep(10);
+#     else
+        usleep(10 * 1000);
+#     endif
+      int count = process_data(state);
+      if (count > 0)
+        break;  /* the "serialrecv" variable is adjusted inside process_data() */
+      unsigned long tstamp = timestamp();
+      timeout = (tstamp - tstamp_start >= timeout_ms) ;
+    }
+  }
+  tcl_free(arg1);
+  if (arg2 != NULL)
+    tcl_free(arg2);
+  /* check whether to run the block on timeout */
+  long result;
+  if (timeout && body_arg > 0) {
+    struct tcl_value *body = tcl_list_item(args, body_arg);
+    result = tcl_eval(tcl, tcl_data(body), tcl_length(body) + 1);
+    tcl_free(body);
+  } else {
+    result = tcl_result(tcl, true, tcl_value(timeout ? "0" : "1", 1));
+  }
+  state->tcl_running = false;
+  return result;
 }
 
 static int tcl_cmd_serial(struct tcl *tcl, struct tcl_value *args, void *arg)
@@ -636,14 +734,14 @@ static int tcl_cmd_serial(struct tcl *tcl, struct tcl_value *args, void *arg)
       gobble = tcl_number(v_gobble);
       tcl_free(v_gobble);
     }
-    if (gobble > 0 && gobble < state->script_recv_size) {
-      state->script_recv_size -= gobble;
-      memmove(state->script_recv, state->script_recv + gobble, state->script_recv_size);
+    if (gobble > 0 && gobble < state->script_recv_length) {
+      state->script_recv_length -= gobble;
+      memmove(state->script_recv, state->script_recv + gobble, state->script_recv_length);
     } else if (gobble != 0) {
-      state->script_recv_size = 0;  /* gobble more than there is data -> nothing left */
+      state->script_recv_length = 0;  /* gobble more than there is data -> nothing left */
     }
     if (gobble != 0)
-      tcl_var(&state->tcl, "recv", tcl_value((const char*)state->script_recv, state->script_recv_size));
+      tcl_var(&state->tcl, "serialrecv", tcl_value((const char*)state->script_recv, state->script_recv_length));
   } else if (strcmp(tcl_data(subcmd), "send") == 0) {
     if (nargs >= 3 && rs232_isopen(state->hCom)) {
       struct tcl_value *data = tcl_list_item(args, 1);
@@ -701,23 +799,8 @@ static bool tcl_runscript(APPSTATE *state, const unsigned char *data, size_t siz
   }
   if (state->script == NULL || state->script_block_run)
     return false;
-  /* set variables, but first build the memory buffer (together with cached data) */
-  size_t total = state->script_recv_size + size;
-  unsigned char *buffer = malloc(total * sizeof(unsigned char));
-  if (buffer != NULL) {
-    if (state->script_recv_size > 0) {
-      assert(state->script_recv != NULL);
-      memcpy(buffer, state->script_recv, state->script_recv_size);
-    }
-    memcpy(buffer + state->script_recv_size, data, size);
-    if (state->script_recv != NULL)
-      free((void*)state->script_recv);
-    state->script_recv = buffer;
-    state->script_recv_size = total;
-  }
-  if (state->script_recv == NULL)
-    return false; /* these are small allocations, if these go wrong, there is more trouble */
-  tcl_var(&state->tcl, "recv", tcl_value((const char*)state->script_recv, state->script_recv_size));
+  if (!tcl_set_recv(state, data, size))
+    return false;
   /* now run it */
   state->script_cache = false;
   bool ok = tcl_eval(&state->tcl, state->script, strlen(state->script) + 1);
@@ -734,10 +817,10 @@ static bool tcl_runscript(APPSTATE *state, const unsigned char *data, size_t siz
   }
   /* if data was marked to be cached, leave it in the buffer; otherwise, free it
      (and always delete a buffer if every data has been gobbled) */
-  if ((!state->script_cache || state->script_recv_size == 0) && state->script_recv != NULL) {
+  if ((!state->script_cache || state->script_recv_length == 0) && state->script_recv != NULL) {
     free((void*)state->script_recv);
     state->script_recv = NULL;
-    state->script_recv_size = 0;
+    state->script_recv_length = 0;
     state->script_cache = false;
   }
   return ok;
@@ -954,6 +1037,8 @@ static int process_data(APPSTATE *state)
     if (buffer[idx] >= '\x80')
       isascii = false;
 
+  int flags = state->tcl_running ? DFLAG_APPEND : 0;
+
   /* for ASCII text, add lines (ending with \r and or \n) if possible */
   size_t start = 0;
   while (start < count) {
@@ -970,18 +1055,23 @@ static int process_data(APPSTATE *state)
       stop = count;
     }
 
-    DATALIST *item = datalist_append(buffer + start, stop - start, isascii, 0);
+    DATALIST *item = datalist_append(buffer + start, stop - start, isascii, flags);
     if (item != NULL)
       reformat_data(state, item); /* format (or re-format) the block of data */
 
     start = stop;
   }
 
-  /* run script after handling raw data */
-  tcl_runscript(state, buffer, count);
+  /* run script after handling raw data, except that if the script is already
+     running, update the variable (this reentry happens when the script called
+     "wait" for more data) */
+  if (state->tcl_running)
+    tcl_set_recv(state, buffer, count);
+  else
+    tcl_runscript(state, buffer, count);
 
   if (state->linelimit_val > 0) {
-    /* count number of blocks in the datalist, then decide home many lines to
+    /* count number of blocks in the datalist, then decide how many lines to
        drop */
     int numlines = 0;
     for (DATALIST *item = datalist_root.next; item != NULL; item = item->next)
@@ -1819,12 +1909,10 @@ static void button_bar(struct nk_context *ctx, APPSTATE *state)
 
   const char* ptr = rs232_isopen(state->hCom) ? "Disconnect" : "Connect";
   if (nk_button_label(ctx, ptr)) {
-    if (rs232_isopen(state->hCom)) {
-      rs232_close(state->hCom);
-      state->hCom = NULL;
-    } else {
+    if (rs232_isopen(state->hCom))
+      state->hCom = rs232_close(state->hCom);
+    else
       state->reconnect = true;
-    }
   }
 
   if (nk_button_label(ctx, "Clear")) {
@@ -1851,10 +1939,8 @@ static void button_bar(struct nk_context *ctx, APPSTATE *state)
 static void handle_stateaction(APPSTATE *state)
 {
   if (state->reconnect) {
-    if (rs232_isopen(state->hCom)) {
-      rs232_close(state->hCom);
-      state->hCom = NULL;
-    }
+    if (rs232_isopen(state->hCom))
+      state->hCom = rs232_close(state->hCom);
     if (state->curport >= 0 && state->curport < state->numports) {
       const char* port = state->portlist[state->curport];
       state->hCom = rs232_open(port, state->baudrate, state->databits,
@@ -1947,7 +2033,7 @@ int main(int argc, char *argv[])
   tcl_register(&appstate.tcl, "exec", tcl_cmd_exec, 2, 2, &appstate);
   tcl_register(&appstate.tcl, "puts", tcl_cmd_puts, 2, 2, &appstate);
   tcl_register(&appstate.tcl, "serial", tcl_cmd_serial, 2, 3, &appstate);
-  tcl_register(&appstate.tcl, "wait", tcl_cmd_wait, 2, 2, &appstate);
+  tcl_register(&appstate.tcl, "wait", tcl_cmd_wait, 2, 4, &appstate);
 
   struct nk_context *ctx = guidriver_init("BlackMagic Serial Monitor", canvas_width, canvas_height,
                                           GUIDRV_RESIZEABLE | GUIDRV_TIMER,

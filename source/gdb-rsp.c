@@ -1,7 +1,7 @@
 /*
  * The GDB "Remote Serial Protocol" support.
  *
- * Copyright 2019-2021 CompuPhase
+ * Copyright 2019-2023 CompuPhase
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -48,7 +48,7 @@ static size_t cache_size = 0;       /* maximum size of the cache */
 static size_t cache_idx = 0;        /* index to the free area of the cache */
 
 
-static int hex2int(char ch)
+static inline int hex2int(char ch)
 {
   if (ch >= '0' && ch <= '9')
     return ch - '0';
@@ -59,7 +59,7 @@ static int hex2int(char ch)
   return -1;
 }
 
-static char int2hex(int v)
+static inline char int2hex(int v)
 {
   static const char digits[] = { '0', '1', '2', '3', '4', '5', '6', '7', '8',
                                  '9', 'a', 'b', 'c', 'd', 'e', 'f' };
@@ -67,6 +67,34 @@ static char int2hex(int v)
   return digits[v];
 }
 
+/** gdbrsp_hex2array() converts an ASCIIZ string encoded with hexadecimal values
+ *  to an array with byte values.
+ *
+ *  \param hex    [in] An ASCIIZ string with the hex digits.
+ *  \param byte   [out] The array filled with the decoded values. The required
+ *                size is strlen(hex) / 2.
+ *  \param size   The size of the "byte" parameter.
+ *
+ *  \return true on success, false on failure (reasons for failure: 1) the input
+ *          string has non-hex charactes, 2) the "size" parameter is too small).
+ *
+ *  \note In-place conversion is allowed (parameters "hex" and "byte" may point
+ *        to the same buffer).
+ */
+bool gdbrsp_hex2array(const char *hex, unsigned char *byte, size_t size)
+{
+  assert(hex != NULL && byte != NULL);
+  while (hex[0] != '\0' && hex[1] != '\0' && size > 0) {
+    int h = hex2int(hex[0]);
+    int l = hex2int(hex[1]);
+    if (h == -1 || l == -1)
+      return false;
+    *byte++ = (unsigned char)((h << 4) | l);
+    hex += 2;
+    size -= 1;
+  }
+  return *hex == '\0';
+}
 
 /** gdbrsp_packetsize() sets the maximum size of incoming packets. It uses
  *  this to allocate a buffer for incoming data. If the size is set to 0, the
@@ -125,7 +153,7 @@ size_t gdbrsp_recv(char *buffer, size_t size, int timeout)
       return 0;
   }
 
-  int cycles = (timeout < 0) ? -1 : timeout / POLL_INTERVAL;
+  int cycles = (timeout < 0) ? -1 : (timeout + POLL_INTERVAL - 1) / POLL_INTERVAL;
   int chk_cache = (cache_idx > 0);  /* analyse data in the cache even if no new data is received */
   size_t head = 0;
   while (cache_idx < cache_size) {
@@ -238,42 +266,43 @@ size_t gdbrsp_recv(char *buffer, size_t size, int timeout)
  *  \param size     The number of characters/bytes in the buffer. If set to -1,
  *                  the buffer is assumed to contain a zero-terminated string.
  *
- *  \return 1 on success, 0 on timeout or error.
+ *  \return true on success, false on timeout or error.
  */
-int gdbrsp_xmit(const char *buffer, int size)
+bool gdbrsp_xmit(const char *buffer, int size)
 {
-  size_t buflen, count, idx;
-  int retry, cycle, sum;
-  unsigned char buf[10], *fullbuffer;
-
   assert(buffer != NULL);
   if (!bmp_isopen())
-    return 0;
+    return false;
 
-  buflen = (size == -1) ? strlen(buffer) : size;
+  size_t buflen = (size == -1) ? strlen(buffer) : size;
+  size_t payload_offs = 0;
   if (buflen > 6 && memcmp(buffer, "qRcmd,", 6) == 0) {
-    size = ((buflen - 6) * 2) + 6;  /* payload is hex-encoded */
+    payload_offs = 6;
+  } else if (buflen > 5 && memcmp(buffer, "vRun;", 5) == 0) {
+    payload_offs = 5;
   } else {
     size = 0;
-    for (idx = 0; idx < buflen; idx++) {
+    for (size_t idx = 0; idx < buflen; idx++) {
       size += 1;
       if (buffer[idx] == '$' || buffer[idx] == '#' || buffer[idx] == '}')
         size += 1;      /* these characters must be escaped */
     }
   }
+  if (payload_offs > 0)
+    size = ((buflen - payload_offs) * 2) + payload_offs;  /* payload is hex-encoded */
   size += 4;            /* add '$' prefix and '#nn' suffix */
 
-  fullbuffer = malloc(size);
+  unsigned char *fullbuffer = malloc(size);
   if (fullbuffer == NULL)
-    return 0;
+    return false;
 
   /* add prefix, handle payload */
   *fullbuffer = '$';
-  if (buflen > 6 && memcmp(buffer, "qRcmd,", 6) == 0) {
-    const char *src = buffer + 6;
-    unsigned char *dest = fullbuffer + 6 + 1;
-    count = buflen - 6;
-    memcpy(fullbuffer + 1, buffer, 6);
+  if (payload_offs > 0) {
+    const char *src = buffer + payload_offs;
+    unsigned char *dest = fullbuffer + payload_offs + 1;
+    size_t count = buflen - payload_offs;
+    memcpy(fullbuffer + 1, buffer, payload_offs); /* copy qRcmd or vRun */
     while (count > 0) {
       *dest++ = int2hex((*src >> 4) & 0x0f);
       *dest++ = int2hex(*src & 0x0f);
@@ -283,7 +312,7 @@ int gdbrsp_xmit(const char *buffer, int size)
   } else {
     const char *src = buffer;
     unsigned char *dest = fullbuffer + 1;
-    for (idx = 0; idx < buflen; idx++) {
+    for (size_t idx = 0; idx < buflen; idx++) {
       for (idx = 0; idx < buflen; idx++) {
         if (*src == '$' || *src == '#' || *src == '}') {
           *dest++ = '}';        /* these characters must be escaped */
@@ -295,20 +324,22 @@ int gdbrsp_xmit(const char *buffer, int size)
     }
   }
   /* add checksum */
-  sum = 0;
-  for (idx = 1; idx < (unsigned)size - 3; idx++)
+  int sum = 0;
+  for (int idx = 1; idx < size - 3; idx++)
     sum += fullbuffer[idx];     /* run over fullbuffer, so that the checksum is over the translated buffer */
   *(fullbuffer + size - 3) = '#';
   *(fullbuffer + size - 2) = int2hex((sum >> 4) & 0x0f);
   *(fullbuffer + size - 1) = int2hex(sum & 0x0f);
 
-  for (retry = 0; retry < RETRIES; retry++) {
+  for (int retry = 0; retry < RETRIES; retry++) {
     if (bmp_comport() != NULL)
       rs232_xmit(bmp_comport(), fullbuffer, size);
     else
       tcpip_xmit(fullbuffer, size);
-    for (cycle = 0; cycle < TIMEOUT / POLL_INTERVAL; cycle++) {
+    for (int cycle = 0; cycle < TIMEOUT / POLL_INTERVAL; cycle++) {
+      size_t count;
       do {
+        unsigned char buf[10];
         if (bmp_comport() != NULL)
           count = rs232_recv(bmp_comport(), buf, 1);
         else
@@ -316,7 +347,7 @@ int gdbrsp_xmit(const char *buffer, int size)
         if (count == 1) {
           if (buf[0] == '+') {
             free(fullbuffer);
-            return 1;
+            return true;
           }
           if (buf[0] == '-') {
             cycle = TIMEOUT / POLL_INTERVAL;  /* retransmit without timeout */
@@ -333,7 +364,7 @@ int gdbrsp_xmit(const char *buffer, int size)
   }
 
   free(fullbuffer);
-  return 0;
+  return false;
 }
 
 /** gdbrsp_clear() clears the cache, to remove any superfluous OK or error

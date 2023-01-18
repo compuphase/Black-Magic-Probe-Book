@@ -1,7 +1,7 @@
 /*
  *  rs232 - RS232 support, limited to the functions that the GDB RSP needs.
  *
- *  Copyright 2012-2022, CompuPhase
+ *  Copyright 2012-2023, CompuPhase
  *
  *  Licensed under the Apache License, Version 2.0 (the "License"); you may not
  *  use this file except in compliance with the License. You may obtain a copy
@@ -241,7 +241,7 @@ HCOM* rs232_open(const char *port, unsigned baud, int databits, int stopbits, in
   return hCom;
 }
 
-void rs232_close(HCOM *hCom)
+HCOM *rs232_close(HCOM *hCom)
 {
   if (rs232_isopen(hCom)) {
 #   if defined _WIN32
@@ -256,20 +256,19 @@ void rs232_close(HCOM *hCom)
 #   endif /* _WIN32 */
     *hCom = INVALID_HANDLE_VALUE;
   }
+  return NULL;
 }
 
-int rs232_isopen(const HCOM *hCom)
+bool rs232_isopen(const HCOM *hCom)
 {
-  int i;
-
   if (hCom == NULL)
-    return 0;
+    return false;
 
   check_init();
-  for (i = 0; i < MAX_COMPORTS; i++)
+  for (int i = 0; i < MAX_COMPORTS; i++)
     if (&comport[i] == hCom && comport[i] != INVALID_HANDLE_VALUE)
-      return 1;
-  return 0;
+      return true;
+  return false;
 }
 
 size_t rs232_xmit(HCOM *hCom, const unsigned char *buffer, size_t size)
@@ -331,6 +330,23 @@ void rs232_flush(HCOM *hCom)
       tcflush(*hCom, TCIFLUSH);
 #   endif
   }
+}
+
+size_t rs232_peek(HCOM *hCom)
+{
+  if (rs232_isopen(hCom)) {
+#   if defined _WIN32
+      DWORD errflags = 0;
+      COMSTAT comstat;
+      ClearCommError(*hCom, &errflags, &comstat);
+      return comstat.cbInQue;
+#   else
+      int bytes;
+      ioctl(*hCom, FIONREAD, &bytes);
+      return bytes;
+#   endif
+  }
+  return 0;
 }
 
 /** rs232_setstatus() sets a line status.

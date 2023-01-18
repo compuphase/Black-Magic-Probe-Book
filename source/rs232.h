@@ -1,7 +1,7 @@
 /*
  *  rs232 - RS232 support, limited to the functions that the GDB RSP needs.
  *
- *  Copyright 2012-2022, CompuPhase
+ *  Copyright 2012-2023, CompuPhase
  *
  *  Licensed under the Apache License, Version 2.0 (the "License"); you may not
  *  use this file except in compliance with the License. You may obtain a copy
@@ -17,6 +17,8 @@
  */
 #ifndef _RS232_H
 #define _RS232_H
+
+#include <stdbool.h>
 
 #if defined __cplusplus
   extern "C" {
@@ -53,11 +55,12 @@ enum {
 #define LINESTAT_LBREAK 0x0100  /* local host sent break */
 
 HCOM*    rs232_open(const char *port, unsigned baud, int databits, int stopbits, int parity, int flowctrl);
-void     rs232_close(HCOM *hCom);
-int      rs232_isopen(const HCOM *hCom);
+HCOM*    rs232_close(HCOM *hCom);
+bool     rs232_isopen(const HCOM *hCom);
 size_t   rs232_xmit(HCOM *hCom, const unsigned char *buffer, size_t size);
 size_t   rs232_recv(HCOM *hCom, unsigned char *buffer, size_t size);
 void     rs232_flush(HCOM *hCom);
+size_t   rs232_peek(HCOM *hCom);
 void     rs232_setstatus(HCOM *hCom, int code, int status);
 unsigned rs232_getstatus(HCOM *hCom);
 void     rs232_framecheck(HCOM *hCom, int enable);

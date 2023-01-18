@@ -18,9 +18,9 @@
 #ifndef _SERIALMON_H
 #define _SERIALMON_H
 
-int    sermon_open(const char *port, int baud);
+bool   sermon_open(const char *port, int baud);
 void   sermon_close(void);
-int    sermon_isopen(void);
+bool   sermon_isopen(void);
 
 void   sermon_clear(void);
 int    sermon_countlines(void);

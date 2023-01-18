@@ -1,7 +1,7 @@
 /*
  * Simple serial monitor (receive data from a serial port).
  *
- * Copyright 2021-2022 CompuPhase
+ * Copyright 2021-2023 CompuPhase
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -43,6 +43,7 @@
 #endif
 
 #include "bmp-scan.h"
+#include "c11threads.h"
 #include "guidriver.h"
 #include "rs232.h"
 #include "serialmon.h"
@@ -79,12 +80,7 @@ static char comport[64] = "";
 static int baudrate = 0;
 static int bmp_seqnr = -1;
 static char tdsl_metadata[_MAX_PATH];
-
-#if defined WIN32 || defined _WIN32
-  static HANDLE hThread = NULL;
-#else
-  static pthread_t hThread;
-#endif
+static thrd_t serial_thread;
 
 
 static void sermon_addstring(const unsigned char *buffer, size_t length)
@@ -174,55 +170,31 @@ static void sermon_addstring(const unsigned char *buffer, size_t length)
   }
 }
 
-#if defined WIN32 || defined _WIN32
-
-static DWORD __stdcall sermon_process(LPVOID arg)
+static int sermon_process(void *arg)
 {
-  unsigned char buffer[256];
-
   (void)arg;
   while (rs232_isopen(hCom)) {
+    unsigned char buffer[256];
     size_t count = rs232_recv(hCom, buffer, sizearray(buffer));
     if (count > 0) {
       sermon_addstring(buffer, count);
-      PostMessage((HWND)guidriver_apphandle(), WM_USER, 0, 0L); /* just a flag to wake up the GUI */
+#     if defined WIN32 || defined _WIN32
+        PostMessage((HWND)guidriver_apphandle(), WM_USER, 0, 0L); /* just a flag to wake up the GUI */
+#     endif
     } else {
-      Sleep(10);
+      thrd_yield();
     }
   }
-  hThread = NULL;
-
   return 0;
 }
 
-#else
-
-static void *sermon_process(void *arg)
-{
-  unsigned char buffer[256];
-
-  (void)arg;
-  while (rs232_isopen(hCom)) {
-    size_t count = rs232_recv(hCom, buffer, sizearray(buffer));
-    if (count > 0)
-      sermon_addstring(buffer, count);
-    else
-      usleep(10*1000);
-  }
-  hThread = 0;
-
-  return 0;
-}
-
-#endif
-
-int sermon_open(const char *port, int baud)
+bool sermon_open(const char *port, int baud)
 {
   char defaultport[64];
 
-  if (hThread) {
+  if (serial_thread) {
     assert(rs232_isopen(hCom));
-    return 1;   /* double initialization */
+    return true;  /* double initialization */
   }
 
   /* if a previous initialization did not succeed completely, clean up before
@@ -243,21 +215,12 @@ int sermon_open(const char *port, int baud)
 
   hCom = rs232_open(port, baud, 8, 1, PAR_NONE, FLOWCTRL_NONE);
   if (hCom == NULL)
-    return 0;
+    return false;
 
-# if defined WIN32 || defined _WIN32
-    hThread = CreateThread(NULL, 0, sermon_process, NULL, 0, NULL);
-    if (hThread == NULL) {
-      rs232_close(hCom);
-      return 0;
-    }
-    SetThreadPriority(hThread, THREAD_PRIORITY_ABOVE_NORMAL);
-# else
-    if (pthread_create(&hThread, NULL, sermon_process, NULL) != 0) {
-      rs232_close(hCom);
-      return 0;
-    }
-# endif
+  if (thrd_create(&serial_thread, sermon_process, NULL) != thrd_success) {
+    hCom = rs232_close(hCom);
+    return false;
+  }
 
   rs232_flush(hCom);
 # if defined WIN32 || defined _WIN32
@@ -269,36 +232,21 @@ int sermon_open(const char *port, int baud)
 
   strcpy(comport, port);
   baudrate = baud;
-  return 1;
+  return true;
 }
 
 void sermon_close(void)
 {
-# if defined WIN32 || defined _WIN32
-    if (hThread != NULL) {
-      TerminateThread(hThread, 0);
-      hThread = NULL;
-    }
-# endif
-
   if (hCom != NULL) {
-    rs232_close(hCom);
-    hCom = NULL;
+    hCom = rs232_close(hCom);
   }
-
-# if !(defined WIN32 || defined _WIN32)
-    /* wait until the thread ends running and resets the handle */
-    while (hThread != 0)
-      usleep(10*1000);
-# endif
-
+  thrd_join(serial_thread, NULL);
   sermon_clear();
 }
 
-int sermon_isopen(void)
+bool sermon_isopen(void)
 {
-  assert(!hThread || hCom);  /* if the thread is valid, the serial device handle should be too */
-  return hThread && hCom;
+  return rs232_isopen(hCom);
 }
 
 void sermon_clear(void)

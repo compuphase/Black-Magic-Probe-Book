@@ -2,7 +2,7 @@
  * GDB front-end with specific support for the Black Magic Probe.
  * This utility is built with Nuklear for a cross-platform GUI.
  *
- * Copyright 2019-2022 CompuPhase
+ * Copyright 2019-2023 CompuPhase
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -616,7 +616,7 @@ static const char *gdbmi_isresult(void)
   return (item != NULL) ? item->text : NULL;
 }
 
-static void gdbmi_sethandled(nk_bool all)
+static void gdbmi_sethandled(bool all)
 {
   STRINGLIST *item;
   do {
@@ -790,7 +790,7 @@ static bool console_add(const char *text, int flags)
 
 static void console_input(const char *text)
 {
-  gdbmi_sethandled(nk_false); /* clear result on new input */
+  gdbmi_sethandled(false); /* clear result on new input */
   assert(text != NULL);
   console_add(text, STRFLG_INPUT);
 }
@@ -833,6 +833,7 @@ static int console_autocomplete(char *text, size_t textsize, const DWARF_SYMBOLL
     { "quit", NULL, NULL },
     { "reset", NULL, "hard load" },
     { "run", NULL, NULL },
+    { "semihosting", NULL, "clear" },
     { "serial", NULL, "clear disable enable info plain save %path" },
     { "set", NULL, "%var" },
     { "start", NULL, NULL },
@@ -4068,6 +4069,7 @@ static bool handle_help_cmd(char *command, STRINGLIST *textroot, int *active,
       stringlist_append(textroot, "find -- search text in the source view.", 0);
       stringlist_append(textroot, "keyboard -- list special keys.", 0);
       stringlist_append(textroot, "mouse -- mouse actions.", 0);
+      stringlist_append(textroot, "semihosting -- options for the semihosting view.", 0);
       stringlist_append(textroot, "serial -- configure the serial monitor.", 0);
       stringlist_append(textroot, "svd -- show or list peripherals and registers.", 0);
       stringlist_append(textroot, "trace -- configure SWO tracing.", 0);
@@ -4102,12 +4104,12 @@ static bool handle_help_cmd(char *command, STRINGLIST *textroot, int *active,
       stringlist_append(textroot, "F11 -- Step single line (step into functions), same as \"step\".", 0);
       stringlist_append(textroot, "TAB -- auto-complete command or parameter.", 0);
       stringlist_append(textroot, "Shift-F11 -- Step out of functions, same as \"finish\".", 0);
-      stringlist_append(textroot, "Ctrl-F -- find text (\"find\" command).", 0);
-      stringlist_append(textroot, "Ctrl-G -- go to file or line in source view, (\"list\" command).", 0);
-      stringlist_append(textroot, "Ctrl-R -- scroll backward through the command history. You can also use"
-                               " Ctrl-ArrowUp and Ctrl-ArrowDown to scroll through the command history.", 0);
-      stringlist_append(textroot, "Ctrl-F2 -- reset program, same as \"start\".", 0);
-      stringlist_append(textroot, "Ctrl-F5 -- interrupt program (stop).", 0);
+      stringlist_append(textroot, "Ctrl+F -- find text (\"find\" command).", 0);
+      stringlist_append(textroot, "Ctrl+G -- go to file or line in source view, (\"list\" command).", 0);
+      stringlist_append(textroot, "Ctrl+R -- scroll backward through the command history. You can also use"
+                                  " Ctrl+ArrowUp and Ctrl+ArrowDown to scroll through the command history.", 0);
+      stringlist_append(textroot, "Ctrl+F2 -- reset program, same as \"start\".", 0);
+      stringlist_append(textroot, "Ctrl+F5 -- interrupt program (stop).", 0);
       return true;
     } else if (TERM_EQU(cmdptr, "mouse", 5)) {
       stringlist_append(textroot, "Mouse actions.", 0);
@@ -4133,6 +4135,10 @@ static bool handle_help_cmd(char *command, STRINGLIST *textroot, int *active,
       stringlist_append(textroot, "reset hard -- restart both the debugger and the target program.", 0);
       stringlist_append(textroot, "reset load -- restart the debugger and reload the target program.", 0);
       return true;
+    } else if (TERM_EQU(cmdptr, "semihosting", 11)) {
+      stringlist_append(textroot, "Semihosting options.", 0);
+      stringlist_append(textroot, "", 0);
+      stringlist_append(textroot, "semimosting clear -- clear the semihosting monitor view (delete contents).", 0);
     } else if (TERM_EQU(cmdptr, "serial", 6)) {
       stringlist_append(textroot, "Configure the serial monitor.", 0);
       stringlist_append(textroot, "", 0);
@@ -4990,6 +4996,25 @@ static void serial_info_mode(STRINGLIST *textroot)
   }
 }
 
+/** handle_semihosting_cmd()
+ *  \param command    [in] command string.
+ *
+ *  \return 0=not "semihosting" command, 1=ok
+ */
+static int handle_semihosting_cmd(const char *command)
+{
+  assert(command != NULL);
+  command = skipwhite(command);
+  if (!TERM_EQU(command, "semihosting", 11))
+    return 0;
+  const char *ptr = (char*)skipwhite(command + 11);
+  if (TERM_EQU(ptr, "clear", 5)) {
+    stringlist_clear(&semihosting_root);
+  }
+
+  return 1;
+}
+
 /** handle_serial_cmd()
  *  \param command    [in] command string.
  *  \param port       [out] the name of the serial port to open/monitor.
@@ -5210,7 +5235,8 @@ typedef struct tagAPPSTATE {
   nk_bool force_download;       /**< temporary option: download ELF file */
   nk_bool allmsg;               /**< option: show all GDB output (instead of filtered) */
   nk_bool atprompt;             /**< whether GDB has displayed the prompt (and waits for input) */
-  nk_bool monitor_cmd_active;   /**< to silence output of scripts */
+  bool monitor_cmd_active;      /**< to silence output of scripts */
+  bool monitor_cmd_finish;      /**< automatically set the command as handled when the monitor command completes */
   nk_bool waitidle;             /**< whether to yield while waiting for GUI input */
   nk_bool is_attached;          /**< BMP is attached */
   nk_bool cont_is_run;          /**< "cont" command must be interpreted as "run" command */
@@ -5222,6 +5248,7 @@ typedef struct tagAPPSTATE {
   const STRINGLIST *console_mark;/**< marker to help parsing GDB output */
   STRINGLIST consoleedit_root;  /**< edit history */
   const STRINGLIST *consoleedit_next; /**< start point in history to search backward from */
+  unsigned long ctrl_c_tstamp;  /**< timestamp of Ctrl+C being pressed, to force a break */
   char ELFfile[_MAX_PATH];      /**< ELF file being debugged */
   char ParamFile[_MAX_PATH];    /**< debug parameters for the ELF file */
   char SVDfile[_MAX_PATH];      /**< target MCU definitions */
@@ -5312,7 +5339,7 @@ static void help_popup(struct nk_context *ctx, APPSTATE *state, float canvas_wid
       {
         strlcat(state->help_edit, "\n", sizearray(state->help_edit));
         if (task_stdin(&state->task, state->help_edit))
-          gdbmi_sethandled(nk_false); /* clear result on new input */
+          gdbmi_sethandled(false); /* clear result on new input */
       }
       state->help_edit[0] = '\0';
     }
@@ -5380,11 +5407,21 @@ static void button_bar(struct nk_context *ctx, APPSTATE *state, float panel_widt
   }
   nk_layout_row_push(ctx, BUTTON_WIDTH);
   if (state->curstate == STATE_RUNNING) {
-    if (button_tooltip(ctx, "stop", NK_KEY_CTRL_F5, nk_true, "Interrupt the program (Ctrl+F5)")
-        || nk_input_is_key_pressed(&ctx->input, NK_KEY_COPY)) /* Ctrl+C = break (plus "copy to clipboard") */
-    {
+    if (button_tooltip(ctx, "stop", NK_KEY_CTRL_F5, nk_true, "Interrupt the program (Ctrl+F5)")) {
       RESETSTATE(state, STATE_EXEC_CMD);
       state->stateparam[0] = STATEPARAM_EXEC_STOP;
+    } else if (nk_input_is_key_pressed(&ctx->input, NK_KEY_COPY)) { /* Ctrl+C = break (plus "copy to clipboard") */
+      unsigned long tstamp = timestamp();
+      if (tstamp - state->ctrl_c_tstamp < 3000) {
+        /* when Ctrl+C is pressed twice within a 3-second period (whilst the firmware
+           did not stop on the first Ctrl+C within these 3 seconds), go for a hard-reset */
+        RESETSTATE(state, STATE_HARDRESET);
+        state->ctrl_c_tstamp = 0;
+      } else {
+        RESETSTATE(state, STATE_EXEC_CMD);
+        state->stateparam[0] = STATEPARAM_EXEC_STOP;
+        state->ctrl_c_tstamp = tstamp;
+      }
     }
   } else {
     if (button_tooltip(ctx, "cont", NK_KEY_F5, (state->curstate != STATE_RUNNING), "Continue running (F5)"))
@@ -5647,13 +5684,13 @@ static void console_view(struct nk_context *ctx, APPSTATE *state,
           }
         } else if ((result = handle_trace_cmd(state->console_edit, &state->swo)) != 0) {
           if (result == 1) {
-            state->monitor_cmd_active = nk_true; /* to silence output of scripts */
+            state->monitor_cmd_active = true;   /* to silence output of scripts */
             if (state->swo.enabled)
               RESETSTATE(state, STATE_SWOTRACE);
             else
               RESETSTATE(state, STATE_SWOCHANNELS);  /* special case: disabling SWO tracing disables all channels */
           } else if (result == 2) {
-            state->monitor_cmd_active = nk_true; /* to silence output of scripts */
+            state->monitor_cmd_active = true;   /* to silence output of scripts */
             RESETSTATE(state, STATE_SWOCHANNELS);
           } else if (result == 3) {
             trace_info_mode(&state->swo, 1, NULL);
@@ -5672,7 +5709,8 @@ static void console_view(struct nk_context *ctx, APPSTATE *state,
         } else if (!handle_list_cmd(state->console_edit, &dwarf_symboltable, &dwarf_filetable)
                    && !handle_find_cmd(state->console_edit)
                    && !handle_info_cmd(state->console_edit, &helptext_root, &state->popup_active, &state->reformat_help, &state->swo)
-                   && !handle_disasm_cmd(state->console_edit, &state->disassemble_mode))
+                   && !handle_disasm_cmd(state->console_edit, &state->disassemble_mode)
+                   && !handle_semihosting_cmd(state->console_edit))
         {
           char translated[sizearray(state->console_edit)];
           /* check monitor command, to avoid that the output should goes
@@ -5707,6 +5745,44 @@ static void console_view(struct nk_context *ctx, APPSTATE *state,
 
     nk_group_end(ctx);
   }
+}
+
+static void widget_stringlist(struct nk_context *ctx, const char *id,
+                              const STRINGLIST *root, unsigned *count)
+{
+  assert(ctx != NULL);
+  struct nk_rect rcwidget = nk_layout_widget_bounds(ctx);
+  struct nk_style_window const *stwin = &ctx->style.window;
+  nk_style_push_color(ctx, &ctx->style.window.fixed_background.data.color, COLOUR_BG0);
+  if (nk_group_begin(ctx, id, 0)) {
+    float lineheight = 0;
+    assert(count != NULL);
+    unsigned count_prev = *count;
+    *count = 0;
+    for (STRINGLIST *item = root->next; item != NULL; item = item->next) {
+      nk_layout_row_dynamic(ctx, opt_fontsize, 1);
+      if (lineheight <= 0.1) {
+        struct nk_rect rcline = nk_layout_widget_bounds(ctx);
+        lineheight = rcline.h;
+      }
+      nk_label(ctx, item->text, NK_TEXT_LEFT);
+      *count += 1;
+    }
+    nk_group_end(ctx);
+    if (*count != count_prev) {
+      /* number of lines changed -> scroll to the last line */
+      int ypos = 0;
+      if (*count > 0) {
+        assert(lineheight>0.1);
+        int widgetlines = (int)((rcwidget.h - 2 * stwin->padding.y) / lineheight);
+        ypos = (int)((*count - widgetlines + 1) * lineheight);
+        if (ypos < 0)
+          ypos = 0;
+      }
+      nk_group_set_scroll(ctx, id, 0, ypos);
+    }
+  }
+  nk_style_pop_color(ctx);
 }
 
 static void refresh_panel_contents(APPSTATE *state, int new_state, int refreshflag)
@@ -5884,17 +5960,21 @@ static void panel_configuration(struct nk_context *ctx, APPSTATE *state,
     /* TPWR option */
     nk_layout_row_dynamic(ctx, ROW_HEIGHT, 1);
     if (checkbox_tooltip(ctx, "Power Target (3.3V)", &state->tpwr, NK_TEXT_LEFT, "Let the debug probe provide power to the target")) {
+      state->monitor_cmd_active = true;
       if (!state->tpwr)
         task_stdin(&state->task, "monitor tpwr disable\n");
       if (state->tpwr && state->curstate != STATE_MON_SCAN)
         task_stdin(&state->task, "monitor tpwr enable\n");
       if (state->curstate == STATE_MON_SCAN)
-         RESETSTATE(state, STATE_MON_TPWR);
+        RESETSTATE(state, STATE_MON_TPWR);
+      else
+        state->monitor_cmd_finish = true;
     }
 
     /* reset during connect */
     nk_layout_row_dynamic(ctx, ROW_HEIGHT, 1);
     if (checkbox_tooltip(ctx, "Reset target during connect", &state->connect_srst, NK_TEXT_LEFT, "Keep target MCU reset while debug probe attaches")) {
+      state->monitor_cmd_active = true;
       if (state->connect_srst)
         task_stdin(&state->task, "monitor connect_srst enable\n");
       else
@@ -6298,18 +6378,7 @@ static void panel_semihosting(struct nk_context *ctx, APPSTATE *state,
   nk_sizer_refresh(&state->sizerbar_semihosting);
   if (result) {
     nk_layout_row_dynamic(ctx, state->sizerbar_semihosting.size, 1);
-    nk_style_push_color(ctx, &ctx->style.window.fixed_background.data.color, COLOUR_BG0);
-    if (nk_group_begin(ctx, "semihosting", 0)) {
-      STRINGLIST *item;
-      state->semihosting_lines = 0;
-      for (item = semihosting_root.next; item != NULL; item = item->next) {
-        nk_layout_row_dynamic(ctx, opt_fontsize, 1);
-        nk_label(ctx, item->text, NK_TEXT_LEFT);
-        state->semihosting_lines += 1;
-      }
-      nk_group_end(ctx);
-    }
-    nk_style_pop_color(ctx);
+    widget_stringlist(ctx, "semihosting", &semihosting_root, &state->semihosting_lines);
     nk_sizer(ctx, &state->sizerbar_semihosting);
     nk_tree_state_pop(ctx);
   }
@@ -6524,7 +6593,7 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
         }
         set_idle_time(1000); /* repeat scan on timeout (but don't sleep the GUI thread) */
       }
-      gdbmi_sethandled(nk_false);
+      gdbmi_sethandled(false);
       break;
     case STATE_GDBVERSION:
       if (state->atprompt) {
@@ -6556,7 +6625,7 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
           }
         }
         MOVESTATE(state, STATE_FILE);
-        gdbmi_sethandled(nk_true);
+        gdbmi_sethandled(true);
       }
       break;
     case STATE_FILE:
@@ -6618,7 +6687,7 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
           }
           set_idle_time(1000); /* stay in file state */
         }
-        gdbmi_sethandled(nk_false);
+        gdbmi_sethandled(false);
       }
       break;
     case STATE_TARGET_EXT:
@@ -6641,7 +6710,7 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
             set_idle_time(1000); /* drop back to scan (after on timeout) */
           }
         }
-        gdbmi_sethandled(nk_false);
+        gdbmi_sethandled(false);
       }
       break;
     case STATE_MON_VERSION:
@@ -6673,7 +6742,7 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
           MOVESTATE(state, STATE_MON_TPWR);
           state->console_mark = NULL;
         }
-        gdbmi_sethandled(nk_false);
+        gdbmi_sethandled(false);
       }
       break;
     case STATE_MON_TPWR:
@@ -6691,7 +6760,7 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
             MOVESTATE(state, STATE_MON_SCAN);
           else
             set_idle_time(500); /* stay in current state, TPWR may take a little time */
-          gdbmi_sethandled(nk_false);
+          gdbmi_sethandled(false);
         }
       }
       break;
@@ -6740,7 +6809,7 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
         } else {
           set_idle_time(500);   /* stay in scan state, wait for more data */
         }
-        gdbmi_sethandled(nk_false);
+        gdbmi_sethandled(false);
       }
       break;
     case STATE_ASYNC_MODE:
@@ -6754,7 +6823,7 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
         MARKSTATE(state);
       } else if (gdbmi_isresult() != NULL) {
         MOVESTATE(state, STATE_ATTACH);
-        gdbmi_sethandled(nk_false);
+        gdbmi_sethandled(false);
       }
       break;
     case STATE_ATTACH:
@@ -6781,7 +6850,7 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
         } else {
           MOVESTATE(state, STATE_STOPPED);
         }
-        gdbmi_sethandled(nk_false);
+        gdbmi_sethandled(false);
       }
       break;
     case STATE_GET_SOURCES:
@@ -6816,7 +6885,7 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
           }
           set_idle_time(1000); /* stay in attach state */
         }
-        gdbmi_sethandled(nk_false);
+        gdbmi_sethandled(false);
       }
       break;
     case STATE_MEMACCESS_1:
@@ -6832,7 +6901,7 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
            script for the state */
         MOVESTATE(state, (state->nextstate > 0) ? state->nextstate : STATE_MEMACCESS_2);
         state->nextstate = -1;
-        gdbmi_sethandled(nk_false);
+        gdbmi_sethandled(false);
       }
       break;
     case STATE_MEMACCESS_2:
@@ -6859,7 +6928,7 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
           console_replaceflags = console_xlateflags = 0;
           MOVESTATE(state, STATE_PARTID);
         }
-        gdbmi_sethandled(nk_false);
+        gdbmi_sethandled(false);
       }
       break;
     case STATE_PARTID:
@@ -6899,7 +6968,7 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
           console_replaceflags = console_xlateflags = 0;
           MOVESTATE(state, state->force_download ? STATE_DOWNLOAD : STATE_VERIFY);
         }
-        gdbmi_sethandled(nk_false);
+        gdbmi_sethandled(false);
       }
       break;
     case STATE_VERIFY:
@@ -6911,21 +6980,22 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
         state->atprompt = nk_false;
         MARKSTATE(state);
       } else if (gdbmi_isresult() != NULL) {
-        STRINGLIST *item1, *item2 = NULL;
-        gdbmi_sethandled(nk_false); /* first flag the result message as handled, to find the line preceding it */
-        item1 = stringlist_getlast(&consolestring_root, 0, STRFLG_HANDLED);
-        assert(item1 != NULL && item1->text != NULL);
-        if (strncmp(item1->text, "the loaded file", 15) == 0) {
-          item1->flags |= STRFLG_HANDLED;
-          item2 = stringlist_getlast(&consolestring_root, 0, STRFLG_HANDLED);
-          assert(item2 != NULL && item2->text != NULL);
+        gdbmi_sethandled(false); /* first flag the result message as handled, to find the line preceding it */
+        STRINGLIST *item;
+        for (;;) {
+          item = stringlist_getlast(&consolestring_root,0,STRFLG_HANDLED);
+          if (item == NULL || strncmp(item->text, "warning:", 8) == 0)
+            break;
+          item->flags |= STRFLG_HANDLED;
         }
-        if (item2 != NULL && strncmp(item2->text, "warning:", 8) == 0) {
+        if (item != NULL && strncmp(item->text, "warning:", 8) == 0) {
           MOVESTATE(state, STATE_DOWNLOAD);
           if (!state->autodownload) {
             /* make the mismatch stand out */
-            item1->flags =(item1->flags & ~STRFLG_LOG) | STRFLG_ERROR;
-            item2->flags =(item2->flags & ~STRFLG_LOG) | STRFLG_ERROR;
+            while (item != NULL && (item->flags & STRFLG_RESULT) == 0) {
+              item->flags = (item->flags & ~STRFLG_LOG) | STRFLG_ERROR;
+              item = item->next;
+            }
           }
         } else {
           MOVESTATE(state, STATE_CHECK_MAIN);
@@ -6947,7 +7017,7 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
       } else if (gdbmi_isresult() != NULL) {
         STRINGLIST *item = stringlist_getlast(&consolestring_root, STRFLG_RESULT, STRFLG_HANDLED);
         assert(item != NULL);
-        gdbmi_sethandled(nk_false);
+        gdbmi_sethandled(false);
         if (strncmp(item->text, "error", 5) == 0)
           item->flags = (item->flags & ~STRFLG_RESULT) | STRFLG_ERROR;
         MOVESTATE(state, STATE_CHECK_MAIN);
@@ -6977,7 +7047,7 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
       } else if (gdbmi_isresult() != NULL) {
         STRINGLIST *item;
         const char *ptr;
-        gdbmi_sethandled(nk_false); /* first flag the result message as handled, to find the line preceding it */
+        gdbmi_sethandled(false); /* first flag the result message as handled, to find the line preceding it */
         item = stringlist_getlast(&consolestring_root, 0, STRFLG_HANDLED);
         assert(item != NULL && item->text != NULL);
         ptr = strstr(item->text, state->EntryPoint);
@@ -7007,7 +7077,7 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
       } else if (gdbmi_isresult() != NULL) {
         MOVESTATE(state, STATE_EXEC_CMD);
         state->stateparam[0] = STATEPARAM_EXEC_RESTART;
-        gdbmi_sethandled(nk_false);
+        gdbmi_sethandled(false);
         if (sermon_isopen())
           sermon_clear(); /* erase any serial input that was received while starting up */
       }
@@ -7055,13 +7125,14 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
         if ((state->stateparam[0] == STATEPARAM_EXEC_STOP && strncmp(gdbmi_isresult(), "done", 4) == 0)
             || strncmp(gdbmi_isresult(), "running", 7) == 0)
           MOVESTATE(state, STATE_RUNNING);
-        gdbmi_sethandled(nk_false);
+        gdbmi_sethandled(false);
       }
       break;
     case STATE_HARDRESET:
       if (!state->atprompt)
         break;
       if (STATESWITCH(state)) {
+        state->monitor_cmd_active = true;
         if (state->tpwr)
           task_stdin(&state->task, "monitor tpwr disable\n");  /* will be enabled before re-attach */
         else
@@ -7072,7 +7143,7 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
         MOVESTATE(state, STATE_INIT);  /* regardless of the result, we restart */
         if (state->tpwr)
           set_idle_time(200);   /* make sure power is off for a minimum duration */
-        gdbmi_sethandled(nk_false);
+        gdbmi_sethandled(false);
       }
       break;
     case STATE_RUNNING:
@@ -7099,11 +7170,11 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
       break;
     case STATE_STOPPED:
       if (STATESWITCH(state)) {
-        gdbmi_sethandled(nk_true);
+        gdbmi_sethandled(true);
         MARKSTATE(state);
       }
       if (state->swo.enabled && state->swo.mode != SWOMODE_NONE && !state->swo.init_status) {
-        state->monitor_cmd_active = nk_true; /* to silence output of scripts */
+        state->monitor_cmd_active = true;   /* to silence output of scripts */
         RESETSTATE(state, STATE_SWOTRACE);
       } else if (state->refreshflags & REFRESH_BREAKPOINTS) {
         RESETSTATE(state, STATE_LIST_BREAKPOINTS);
@@ -7122,6 +7193,7 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
         console_add("Sources have more recent date/time stamps than the target\n", STRFLG_ERROR);
         state->warn_source_tstamps = nk_false;  /* do it only once */
       }
+      state->ctrl_c_tstamp = 0; /* when execution stops, forget any Ctrl+C press */
       break;
     case STATE_LIST_BREAKPOINTS:
       if (!state->atprompt)
@@ -7134,11 +7206,11 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
         const char *ptr = gdbmi_isresult();
         if (state->refreshflags & IGNORE_DOUBLE_DONE && strncmp(ptr, "done", 4) == 0 && ptr[4] != ',') {
           state->refreshflags &= ~IGNORE_DOUBLE_DONE;
-          gdbmi_sethandled(nk_false);
+          gdbmi_sethandled(false);
         } else if (breakpoint_parse(ptr)) {
           state->refreshflags &= ~(REFRESH_BREAKPOINTS | IGNORE_DOUBLE_DONE);
           MOVESTATE(state, STATE_STOPPED);
-          gdbmi_sethandled(nk_true);
+          gdbmi_sethandled(true);
         }
       }
       break;
@@ -7153,7 +7225,7 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
         state->refreshflags &= ~REFRESH_LOCALS;
         MOVESTATE(state, STATE_STOPPED);
         locals_update(gdbmi_isresult());
-        gdbmi_sethandled(nk_false);
+        gdbmi_sethandled(false);
       }
       break;
     case STATE_LIST_WATCHES:
@@ -7167,7 +7239,7 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
         state->refreshflags &= ~REFRESH_WATCHES;
         MOVESTATE(state, STATE_STOPPED);
         watch_update(gdbmi_isresult());
-        gdbmi_sethandled(nk_false);
+        gdbmi_sethandled(false);
       }
       break;
     case STATE_LIST_REGISTERS:
@@ -7181,7 +7253,7 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
         state->refreshflags &= ~REFRESH_REGISTERS;
         MOVESTATE(state, STATE_STOPPED);
         registers_update(gdbmi_isresult());
-        gdbmi_sethandled(nk_false);
+        gdbmi_sethandled(false);
       }
       break;
     case STATE_VIEWMEMORY:
@@ -7202,9 +7274,9 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
         if (memdump_parse(gdbmi_isresult(), &state->memdump)) {
           state->refreshflags &= ~REFRESH_MEMORY;
           MOVESTATE(state, STATE_STOPPED);
-          gdbmi_sethandled(nk_true);
+          gdbmi_sethandled(true);
         } else {
-          gdbmi_sethandled(nk_false);
+          gdbmi_sethandled(false);
         }
       }
       break;
@@ -7236,7 +7308,7 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
       } else if (gdbmi_isresult() != NULL) {
         state->refreshflags |= REFRESH_BREAKPOINTS;
         MOVESTATE(state, STATE_STOPPED);
-        gdbmi_sethandled(nk_false);
+        gdbmi_sethandled(false);
       }
       break;
     case STATE_WATCH_TOGGLE:
@@ -7281,7 +7353,7 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
           state->refreshflags |= REFRESH_WATCHES;
         }
         MOVESTATE(state, next_state);
-        gdbmi_sethandled(nk_false);
+        gdbmi_sethandled(false);
       }
       break;
     case STATE_WATCH_FORMAT:
@@ -7312,7 +7384,7 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
         /* GDB reply holds the new format for the watch -> update */
         watch_update_format((unsigned)state->stateparam[0], gdbmi_isresult());
         MOVESTATE(state, STATE_STOPPED);
-        gdbmi_sethandled(nk_false);
+        gdbmi_sethandled(false);
       }
       break;
     case STATE_SWOTRACE:
@@ -7379,7 +7451,7 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
            that follows this is the one to run the SWO script */
         state->nextstate = STATE_SWODEVICE;
         MOVESTATE(state, STATE_MEMACCESS_1);
-        gdbmi_sethandled(nk_false);
+        gdbmi_sethandled(false);
       }
       break;
     case STATE_SWODEVICE:
@@ -7410,7 +7482,7 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
           console_replaceflags = console_xlateflags = 0;
           MOVESTATE(state, STATE_SWOGENERIC);
         }
-        gdbmi_sethandled(nk_false);
+        gdbmi_sethandled(false);
       }
       break;
     case STATE_SWOGENERIC:
@@ -7448,7 +7520,7 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
           console_replaceflags = console_xlateflags = 0;
           MOVESTATE(state, STATE_SWOCHANNELS);
         }
-        gdbmi_sethandled(nk_false);
+        gdbmi_sethandled(false);
       }
       break;
     case STATE_SWOCHANNELS:
@@ -7487,7 +7559,7 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
           bmscript_clearcache();
           MOVESTATE(state, STATE_STOPPED);
         }
-        gdbmi_sethandled(nk_false);
+        gdbmi_sethandled(false);
       }
       break;
     case STATE_HOVER_SYMBOL:
@@ -7500,7 +7572,7 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
       }
       if (STATESWITCH(state)) {
         char regalias[128];
-        gdbmi_sethandled(nk_true);
+        gdbmi_sethandled(true);
         if (svd_xlate_name(state->statesymbol, regalias, sizearray(regalias)) != 0)
           snprintf(state->cmdline, CMD_BUFSIZE, "-data-evaluate-expression %s\n", regalias);
         else
@@ -7529,7 +7601,7 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
           format_value(state->ttipvalue, sizearray(state->ttipvalue));
         }
         MOVESTATE(state, STATE_STOPPED);
-        gdbmi_sethandled(nk_false);
+        gdbmi_sethandled(false);
       }
       break;
     } /* switch (curstate) */
@@ -7743,7 +7815,13 @@ int main(int argc, char *argv[])
       if (appstate.popup_active == POPUP_NONE && console_add(appstate.cmdline, flags)) {
         appstate.atprompt = nk_true;
         appstate.console_activate = 1;
-        appstate.monitor_cmd_active = nk_false;
+        if (appstate.monitor_cmd_active) {
+          appstate.monitor_cmd_active = false;
+          if (appstate.monitor_cmd_finish) {
+            appstate.monitor_cmd_finish = false;
+            gdbmi_sethandled(false);
+          }
+        }
       }
       appstate.waitidle = nk_false;
     }

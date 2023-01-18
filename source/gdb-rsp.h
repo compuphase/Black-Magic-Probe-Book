@@ -1,7 +1,7 @@
 /*
  * The GDB "Remote Serial Protocol" support.
  *
- * Copyright 2019 CompuPhase
+ * Copyright 2019-2023 CompuPhase
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -22,9 +22,10 @@
   extern "C" {
 #endif
 
+bool   gdbrsp_hex2array(const char *hex, unsigned char *byte, size_t size);
 void   gdbrsp_packetsize(size_t size);
 size_t gdbrsp_recv(char *buffer, size_t size, int timeout);
-int    gdbrsp_xmit(const char *buffer, int size);
+bool   gdbrsp_xmit(const char *buffer, int size);
 void   gdbrsp_clear(void);
 
 #if defined __cplusplus

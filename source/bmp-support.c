@@ -2,7 +2,7 @@
  * General purpose Black Magic Probe support routines, based on the GDB-RSP
  * serial interface. The "script" support can also be used with GDB.
  *
- * Copyright 2019-2022 CompuPhase
+ * Copyright 2019-2023 CompuPhase
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -40,7 +40,6 @@
 #include "crc32.h"
 #include "elf.h"
 #include "gdb-rsp.h"
-#include "picoro.h"
 #include "tcpip.h"
 #include "xmltractor.h"
 
@@ -178,8 +177,7 @@ bool bmp_connect(int probe, const char *ipaddress)
         } while (size > 0 && size != 2);
         if (size != 2 || memcmp(buffer, "OK", size)!= 0) {
           notice(BMPERR_NORESPONSE, "No response on %s", devname);
-          rs232_close(hCom);
-          hCom = NULL;
+          hCom = rs232_close(hCom);
           return false;
         }
       }
@@ -251,8 +249,7 @@ bool bmp_disconnect(void)
   if (rs232_isopen(hCom)) {
     rs232_setstatus(hCom, LINESTAT_RTS, 0);
     rs232_setstatus(hCom, LINESTAT_DTR, 0);
-    rs232_close(hCom);
-    hCom = NULL;
+    hCom = rs232_close(hCom);
     result = true;
   }
   if (tcpip_isopen()) {
@@ -620,22 +617,22 @@ void bmp_progress_get(unsigned long *step, unsigned long *range)
     *range = download_numsteps;
 }
 
-int bmp_download(FILE *fp)
+bool bmp_download(FILE *fp)
 {
   bmp_progress_reset(0);
   if (!bmp_isopen()) {
     notice(BMPERR_NOCONNECT, "Not connected to Black Magic Probe");
-    return 0;
+    return false;
   }
   if (FlashRgnCount == 0) {
     notice(BMPERR_NOFLASH, "No Flash memory record");
-    return 0;
+    return false;
   }
   int pktsize = (PacketSize > 0) ? PacketSize : 64;
   char *cmd = malloc((pktsize + 16) * sizeof(char));
   if (cmd == NULL) {
     notice(BMPERR_MEMALLOC, "Memory allocation error");
-    return 0;
+    return false;
   }
 
   assert(fp != NULL);
@@ -660,14 +657,13 @@ int bmp_download(FILE *fp)
     assert(flashsectors * FlashRgn[rgn].blocksize <= FlashRgn[rgn].address + FlashRgn[rgn].size);
     notice(BMPSTAT_NOTICE, "Erase Flash at 0x%x length 0x%x",
            (unsigned)FlashRgn[rgn].address, (unsigned)(flashsectors * FlashRgn[rgn].blocksize));
-    yield((void*)(intptr_t)1);
     sprintf(cmd, "vFlashErase:%x,%x", (unsigned)FlashRgn[rgn].address, (unsigned)(flashsectors * FlashRgn[rgn].blocksize));
     gdbrsp_xmit(cmd, -1);
     rcvd = gdbrsp_recv(cmd, pktsize, 500);
     if (rcvd != 2 || memcmp(cmd, "OK", rcvd)!= 0) {
       notice(BMPERR_FLASHERASE, "Flash erase failed");
       free(cmd);
-      return 0;
+      return false;
     }
     bmp_progress_step(1);
     /* walk through all segments again, to download the payload */
@@ -681,9 +677,8 @@ int bmp_download(FILE *fp)
       if (data == NULL) {
         notice(BMPERR_MEMALLOC, "Memory allocation failure");
         free(cmd);
-        return 0;
+        return false;
       }
-      yield((void*)(intptr_t)1);
       fseek(fp, fileoffs, SEEK_SET);
       fread(data, 1, filesize, fp);
       for (pos = numbytes = 0; pos < filesize; pos += numbytes) {
@@ -715,10 +710,9 @@ int bmp_download(FILE *fp)
           notice(BMPERR_FLASHWRITE, "Flash write failed");
           free(data);
           free(cmd);
-          return 0;
+          return false;
         }
         bmp_progress_step(numbytes);
-        yield((void*)(intptr_t)1);
       }
       free(data);
     }
@@ -727,18 +721,18 @@ int bmp_download(FILE *fp)
     if (rcvd != 2 || memcmp(cmd, "OK", rcvd)!= 0) {
       notice(BMPERR_FLASHDONE, "Flash completion failed");
       free(cmd);
-      return 0;
+      return false;
     }
   }
 
   free(cmd);
-  return 1;
+  return true;
 }
 
-int bmp_verify(FILE *fp)
+bool bmp_verify(FILE *fp)
 {
   char cmd[100];
-  int segment, sector, type, allmatch;
+  int segment, sector, type;
   unsigned long offset, filesize, paddr;
 
   if (!bmp_isopen()) {
@@ -747,7 +741,7 @@ int bmp_verify(FILE *fp)
   }
 
   /* run over all segments in the ELF file */
-  allmatch = 1;
+  bool allmatch = true;
   assert(fp != NULL);
   for (segment = 0;
        elf_segment_by_index(fp, segment, &type, NULL, &offset, &filesize, NULL, &paddr, NULL) == ELFERR_NONE;
@@ -769,7 +763,7 @@ int bmp_verify(FILE *fp)
     data = malloc((size_t)filesize * sizeof (unsigned char));
     if (data == NULL) {
       notice(BMPERR_MEMALLOC, "Memory allocation failure");
-      return 0;
+      return false;
     }
     fseek(fp, offset, SEEK_SET);
     fread(data, 1, filesize, fp);
@@ -783,7 +777,7 @@ int bmp_verify(FILE *fp)
     crc_tgt = (rcvd >= 2 && cmd[0] == 'C') ? strtoul(cmd + 1, NULL, 16) : 0;
     if (crc_tgt != crc_src) {
       notice(BMPERR_FLASHCRC, "Segment %d data mismatch", segment);
-      allmatch = 0;
+      allmatch = false;
     }
   }
   if (allmatch)
@@ -863,33 +857,6 @@ int bmp_restart(void)
  it will return with the "stop code" T02 (including header and checksum).
 */
 
-static int hex2byte_array(const char *hex, unsigned char *byte)
-{
-  assert(hex != NULL && byte != NULL);
-  while (hex[0] != '\0' && hex[1] != '\0') {
-    unsigned char h, l;
-    if (hex[0] >= '0' && hex[0] <= '9')
-      h = hex[0] - '0';
-    else if (hex[0] >= 'a' && hex[0] <= 'f')
-      h = hex[0] - 'a' + 10;
-    else if (hex[0] >= 'A' && hex[0] <= 'F')
-      h = hex[0] - 'A' + 10;
-    else
-      return 0;
-    if (hex[1] >= '0' && hex[1] <= '9')
-      l = hex[1] - '0';
-    else if (hex[1] >= 'a' && hex[1] <= 'f')
-      l = hex[1] - 'a' + 10;
-    else if (hex[1] >= 'A' && hex[1] <= 'F')
-      l = hex[1] - 'A' + 10;
-    else
-      return 0;
-    *byte++ = (h << 4) | l;
-    hex += 2;
-  }
-  return *hex == '\0';
-}
-
 /** bmp_runscript() executes a script with memory/register assignments, e.g.
  *  for device-specific initialization.
  *
@@ -936,7 +903,7 @@ bool bmp_runscript(const char *name, const char *mcu, const char *arch, unsigned
       gdbrsp_xmit(cmd, -1);
       len = gdbrsp_recv(cmd, sizearray(cmd), 1000);
       cmd[len] = '\0';
-      hex2byte_array(cmd, bytes);
+      gdbrsp_hex2array(cmd, bytes, sizearray(bytes));
       memmove(&cur, bytes, lvalue.size);
       if (oper == OP_ORR)
         rvalue.data |= cur;
@@ -959,7 +926,7 @@ bool bmp_runscript(const char *name, const char *mcu, const char *arch, unsigned
       gdbrsp_xmit(cmd, -1);
       len = gdbrsp_recv(cmd, sizearray(cmd), 1000);
       cmd[len] = '\0';
-      hex2byte_array(cmd, bytes);
+      gdbrsp_hex2array(cmd, bytes, sizearray(bytes));
       memmove(&rvalue.data, bytes, rvalue.size);
     }
     if (copyresult) {

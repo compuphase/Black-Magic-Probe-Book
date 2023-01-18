@@ -30,6 +30,7 @@ SOFTWARE.
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "svnrev.h"
 #include "tcl.h"
 
 #if defined FORTIFY
@@ -709,7 +710,7 @@ static int tcl_subst(struct tcl *tcl, const char *string, size_t len) {
   }
   switch (string[0]) {
   case '{':
-    if (len <= 1) {
+    if (len < 2 || *(string + len - 1) != '}') {
       return tcl_error_result(tcl, MARKERROR(TCLERR_BRACES), NULL);
     }
     return tcl_result(tcl, FNORMAL, tcl_value(string + 1, len - 2));
@@ -1408,7 +1409,7 @@ static int tcl_cmd_info(struct tcl *tcl, struct tcl_value *args, void *arg) {
       tcl_free(name);
     }
   } else if (SUBCMD(subcmd, "tclversion")) {
-    r = tcl_result(tcl, FNORMAL, tcl_value("1.0", 3));
+    r = tcl_result(tcl, FNORMAL, tcl_value(SVNREV_STR, strlen(SVNREV_STR)));
   }
   tcl_free(subcmd);
   if (ISERROR(r)) {
@@ -1444,7 +1445,7 @@ static int tcl_cmd_array(struct tcl *tcl, struct tcl_value *args, void *arg) {
       return tcl_error_result(tcl, MARKERROR(TCLERR_PARAM), NULL);
     }
     struct tcl_value *blob = tcl_list_item(args, 3);
-    const unsigned char *bptr = tcl_data(blob);
+    const unsigned char *bptr = (const unsigned char*)tcl_data(blob);
     size_t blen = tcl_length(blob);
     struct tcl_value *wsize = (nargs > 4) ? tcl_list_item(args, 4) : NULL;
     int step = wsize ? tcl_number(wsize) : 1;
@@ -1463,12 +1464,12 @@ static int tcl_cmd_array(struct tcl *tcl, struct tcl_value *args, void *arg) {
     struct tcl_var *var = NULL;
     while (blen > 0) {
       /* make value (depending on step size) and convert to string */
-      long value = 0;
+      tcl_int value = 0;
       for (int i = 0; i < step && i < blen; i++) {
         if (bigendian) {
-          value |= (long)*(bptr + i) << 8 * (step - 1 - i);
+          value |= (tcl_int)*(bptr + i) << 8 * (step - 1 - i);
         } else {
-          value |= (long)*(bptr + i) << 8 * i;
+          value |= (tcl_int)*(bptr + i) << 8 * i;
         }
       }
       char buf[64];
@@ -1506,6 +1507,39 @@ static int tcl_cmd_array(struct tcl *tcl, struct tcl_value *args, void *arg) {
     }
     tcl_free(blob);
     r = tcl_numeric_result(tcl, (count > 0) ? FNORMAL : FERROR, count);
+  } else if (SUBCMD(subcmd, "split")) {
+    if (nargs < 4) {  /* need at least "array slice var string" */
+      tcl_free(subcmd);
+      tcl_free(name);
+      return tcl_error_result(tcl, MARKERROR(TCLERR_PARAM), NULL);
+    }
+    char varname[MAX_VAR_LENGTH];
+    struct tcl_value *v_string = tcl_list_item(args, 3);
+    const char *string = tcl_data(v_string);
+    size_t string_len = tcl_length(v_string);
+    struct tcl_value *v_sep = (tcl_list_length(args) > 4) ? tcl_list_item(args, 4) : NULL;
+    const char *chars = v_sep ? tcl_data(v_sep) : " \t\r\n";
+    const char *start = string;
+    const char *end = start;
+    int index = 0;
+    while (end - string < string_len) {
+      assert(*end);
+      if (strchr(chars, *end)) {
+        sprintf(varname, "%s(%d)", tcl_data(name), index);
+        tcl_var(tcl, varname, tcl_value(start, end - start));
+        start = end + 1;
+        index += 1;
+      }
+      end++;
+    }
+    /* append last item */
+    sprintf(varname, "%s(%d)", tcl_data(name), index++);
+    tcl_var(tcl, varname, tcl_value(start, end - start));
+    tcl_free(v_string);
+    if (v_sep) {
+      tcl_free(v_sep);
+    }
+    r = tcl_numeric_result(tcl, (index > 0) ? FNORMAL : FERROR, index);
   } else {
     r = tcl_error_result(tcl, MARKERROR(TCLERR_PARAM), NULL);
   }
@@ -1682,6 +1716,43 @@ static int tcl_cmd_join(struct tcl *tcl, struct tcl_value *args, void *arg) {
   return tcl_result(tcl, FNORMAL, string);
 }
 
+#ifndef TCL_DISABLE_CLOCK
+#include <time.h>
+
+static int tcl_cmd_clock(struct tcl *tcl, struct tcl_value *args, void *arg) {
+  (void)arg;
+  int r = FERROR;
+  struct tcl_value *cmd = tcl_list_item(args, 1);
+  if (SUBCMD(cmd, "seconds")) {
+    char buffer[20];
+    sprintf(buffer, "%lu", (long)time(NULL));
+    r = tcl_result(tcl, FNORMAL, tcl_value(buffer, strlen(buffer)));
+  } else if (SUBCMD(cmd, "format")) {
+    int argcount = tcl_list_length(args);
+    if (argcount < 3) {
+      r = tcl_error_result(tcl, MARKERROR(TCLERR_PARAM), NULL);
+    } else {
+      struct tcl_value *v_tstamp = tcl_list_item(args, 2);
+      time_t tstamp = (time_t)tcl_number(v_tstamp);
+      tcl_free(v_tstamp);
+      struct tm *timeinfo = localtime(&tstamp);
+      struct tcl_value *v_format = (tcl_list_length(args) > 3) ? tcl_list_item(args, 3) : NULL;
+      const char *format = v_format ? tcl_data(v_format) : "%Y-%m-%d %H:%M:%S";
+      char buffer[50];
+      strftime(buffer, sizeof buffer, format, timeinfo);
+      r = tcl_result(tcl, FNORMAL, tcl_value(buffer, strlen(buffer)));
+      if (v_format) {
+        tcl_free(v_format);
+      }
+    }
+  } else {
+    r = tcl_error_result(tcl, MARKERROR(TCLERR_PARAM), NULL);
+  }
+  tcl_free(cmd);
+  return r;
+}
+#endif
+
 #ifndef TCL_DISABLE_PUTS
 static int tcl_cmd_puts(struct tcl *tcl, struct tcl_value *args, void *arg) {
   (void)arg;
@@ -1741,10 +1812,43 @@ static int tcl_cmd_proc(struct tcl *tcl, struct tcl_value *args, void *arg) {
 }
 
 static struct tcl_value *tcl_make_condition_list(struct tcl_value *cond) {
+  assert(cond);
+  /* add the implied "expr" in front of the condition, except if either:
+     - the condition is enveloped between [...] (so it is already evaluated)
+     - the condition is a number (so there is nothing to evaluate) */
+  if (tcl_isnumber(cond)) {
+    return cond;
+  } else {
+    const char *data = tcl_data(cond);
+    size_t len = tcl_length(cond);
+    if (len >= 2 && *data == '[' && *(data + len - 1) == ']') {
+      size_t i;
+      for (i = 1; i < len - 1 && data[i] != '[' && data[i] != ']' && data[i] != '\\'; i++)
+        {}
+      if (i == len - 1) {
+        return cond;  /* expression between [...] and no nested [...] or escapes */
+      }
+    }
+  }
   struct tcl_value *list = tcl_list_new();
   tcl_list_append(list, tcl_value("expr", 4));
   tcl_list_append(list, cond);
   return list;
+}
+
+int tcl_eval_condition(struct tcl *tcl, struct tcl_value *cond) {
+  assert(cond);
+  const char *data = tcl_data(cond);
+  size_t len = tcl_length(cond);
+  int r = FNORMAL;
+  if ((len >= 2 && *data == '[' && *(data + len - 1) == ']')) {
+    r = tcl_subst(tcl, data, len);
+  } else if (tcl_isnumber(cond)) {
+    r = tcl_numeric_result(tcl, FNORMAL, tcl_number(cond));
+  } else {
+    r = tcl_eval(tcl, tcl_data(cond), tcl_length(cond) + 1);
+  }
+  return r;
 }
 
 static int tcl_cmd_if(struct tcl *tcl, struct tcl_value *args, void *arg) {
@@ -1759,7 +1863,7 @@ static int tcl_cmd_if(struct tcl *tcl, struct tcl_value *args, void *arg) {
       tcl_free(branch); /* ignore optional keyword "then", get next branch */
       branch = (i < n) ? tcl_list_item(args, i++) : NULL;
     }
-    r = tcl_eval(tcl, tcl_data(cond), tcl_length(cond) + 1);
+    r = tcl_eval_condition(tcl, cond);
     tcl_free(cond);
     if (r != FNORMAL) {
       tcl_free(branch);   /* error in condition expression, abort */
@@ -1866,7 +1970,7 @@ static int tcl_cmd_while(struct tcl *tcl, struct tcl_value *args, void *arg) {
   struct tcl_value *body = tcl_list_item(args, 2);
   int r = FNORMAL;
   for (;;) {
-    r = tcl_eval(tcl, tcl_data(cond), tcl_length(cond) + 1);
+    r = tcl_eval_condition(tcl, cond);
     if (r != FNORMAL) {
       break;
     }
@@ -1901,7 +2005,7 @@ static int tcl_cmd_for(struct tcl *tcl, struct tcl_value *args, void *arg) {
   struct tcl_value *post = tcl_list_item(args, 3);
   struct tcl_value *body = tcl_list_item(args, 4);
   for (;;) {
-    r = tcl_eval(tcl, tcl_data(cond), tcl_length(cond) + 1);
+    r = tcl_eval_condition(tcl, cond);
     if (r != FNORMAL) {
       break;
     }
@@ -2490,9 +2594,12 @@ void tcl_init(struct tcl *tcl) {
   tcl_register(tcl, "switch", tcl_cmd_switch, 3, 0, NULL);
   tcl_register(tcl, "unset", tcl_cmd_unset, 2, 0, NULL);
   tcl_register(tcl, "while", tcl_cmd_while, 3, 3, NULL);
-#ifndef TCL_DISABLE_PUTS
-  tcl_register(tcl, "puts", tcl_cmd_puts, 2, 2, NULL);
-#endif
+# ifndef TCL_DISABLE_CLOCK
+    tcl_register(tcl, "clock", tcl_cmd_clock, 2, 4, NULL);
+# endif
+# ifndef TCL_DISABLE_PUTS
+    tcl_register(tcl, "puts", tcl_cmd_puts, 2, 2, NULL);
+#  endif
 }
 
 void tcl_destroy(struct tcl *tcl) {
@@ -2553,11 +2660,9 @@ const char *tcl_errorinfo(struct tcl *tcl, int *code, int *line, char *symbol, s
   const char *script = global_env->errinfo.codebase;
   if (line && script) {
     *line = 1;
-    const char *linebase = script;
     while (script < global_env->errinfo.currentpos) {
       if (*script == '\r' || *script == '\n') {
         *line += 1;
-        linebase = script + 1;
         if (*script == '\r' && *(script + 1) == '\n') {
           script++; /* handle \r\n as a single line feed */
         }

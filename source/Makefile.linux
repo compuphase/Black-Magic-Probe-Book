@@ -85,13 +85,13 @@ OBJLIST_BMDEBUG = bmdebug.o armdisasm.o bmcommon.o bmp-scan.o bmp-script.o \
 OBJLIST_BMFLASH = bmflash.o bmcommon.o bmp-scan.o bmp-script.o bmp-support.o \
                   cksum.o crc32.o elf.o gdb-rsp.o guidriver.o ident.o minIni.o \
                   nuklear_guide.o nuklear_mousepointer.o nuklear_style.o nuklear_tooltip.o \
-                  picoro.o rs232.o specialfolder.o tcl.o tcpip.o xmltractor.o \
+                  rs232.o specialfolder.o tcl.o tcpip.o xmltractor.o \
                   findfont.o lodepng.o nuklear.o nuklear_glfw_gl2.o noc_file_dialog.o
 
 OBJLIST_BMPROFILE = bmprofile.o bmcommon.o bmp-scan.o bmp-script.o \
                     bmp-support.o crc32.o decodectf.o demangle.o dwarf.o \
                     elf.o gdb-rsp.o guidriver.o mcu-info.o minIni.o \
-                    parsetsdl.o picoro.o rs232.o specialfolder.o swotrace.o \
+                    parsetsdl.o rs232.o specialfolder.o swotrace.o \
                     tcpip.o xmltractor.o nuklear_guide.o nuklear_mousepointer.o \
                     nuklear_splitter.o nuklear_style.o nuklear_tooltip.o \
                     findfont.o lodepng.o nuklear.o nuklear_glfw_gl2.o noc_file_dialog.o
@@ -105,12 +105,12 @@ OBJLIST_BMSERIAL = bmserial.o guidriver.o minIni.o rs232.o \
 OBJLIST_BMTRACE = bmtrace.o bmcommon.o bmp-scan.o bmp-script.o bmp-support.o \
                   crc32.o demangle.o dwarf.o elf.o gdb-rsp.o guidriver.o mcu-info.o \
                   minIni.o nuklear_guide.o nuklear_mousepointer.o nuklear_splitter.o \
-                  nuklear_style.o nuklear_tooltip.o picoro.o rs232.o specialfolder.o \
+                  nuklear_style.o nuklear_tooltip.o rs232.o specialfolder.o \
                   swotrace.o tcpip.o xmltractor.o decodectf.o parsetsdl.o \
                   findfont.o lodepng.o nuklear.o nuklear_glfw_gl2.o noc_file_dialog.o
 
 OBJLIST_BMSCAN = bmscan.o bmp-scan.o bmp-script.o bmp-support.o crc32.o elf.o \
-                 gdb-rsp.o picoro.o rs232.o specialfolder.o tcpip.o xmltractor.o
+                 gdb-rsp.o rs232.o specialfolder.o tcpip.o xmltractor.o
 
 OBJLIST_CALLTREE = calltree.o
 
@@ -200,8 +200,6 @@ nuklear_style.o : nuklear_style.c
 nuklear_tooltip.o : nuklear_tooltip.c
 
 parsetsdl.o : parsetsdl.c
-
-picoro.o : picoro.c
 
 rs232.o : rs232.c
 

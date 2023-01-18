@@ -2,7 +2,7 @@
  * General purpose Black Magic Probe support routines, based on the GDB-RSP
  * serial interface.
  *
- * Copyright 2019-2022 CompuPhase
+ * Copyright 2019-2023 CompuPhase
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -65,8 +65,8 @@ int bmp_detach(int powerdown);
 
 int bmp_monitor(const char *command);
 int bmp_fullerase(void);
-int bmp_download(FILE *fp);
-int bmp_verify(FILE *fp);
+bool bmp_download(FILE *fp);
+bool bmp_verify(FILE *fp);
 
 void bmp_progress_reset(unsigned long numsteps);
 void bmp_progress_step(unsigned long step);
