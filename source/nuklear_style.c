@@ -82,3 +82,22 @@ float *nk_ratio(int count, ...)
   return r_array;
 }
 
+bool editctrl_cond_color(struct nk_context *ctx, bool condition, struct nk_color color)
+{
+  if (condition) {
+    nk_style_push_color(ctx, &ctx->style.edit.normal.data.color, color);
+    nk_style_push_color(ctx, &ctx->style.edit.hover.data.color, color);
+    nk_style_push_color(ctx, &ctx->style.edit.active.data.color, color);
+  }
+  return condition;
+}
+
+void editctrl_reset_color(struct nk_context *ctx, bool condition)
+{
+  if (condition) {
+    nk_style_pop_color(ctx);
+    nk_style_pop_color(ctx);
+    nk_style_pop_color(ctx);
+  }
+}
+

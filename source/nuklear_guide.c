@@ -468,11 +468,11 @@ static bool getpage(struct nk_context *ctx, float pagewidth, const char *content
       }
     }
 
-    int indent = 0;
     char* segment = NULL;
     if (type != TYPE_COMMENT)
       segment = strdup2(block, sentinel);
     if (segment != NULL) {
+      int indent = 0;
       /* clean the string from some mark-up */
       char *ptr;
       while ((ptr = strchr(segment, '\t')) != NULL)
@@ -580,13 +580,12 @@ static bool getpage(struct nk_context *ctx, float pagewidth, const char *content
       do {
         char *breakpos = head;
         if (type != TYPE_PREFMT && type != TYPE_TABLE) {
-          char *pos = breakpos;
-          float textwidth = 0;
           /* find next potential break point */
           while (*breakpos != '\0') {
-            for (pos = breakpos + 1; *pos > ' '; pos++)
-              {}
-            textwidth = font->width(font->userdata, font->height, head, (int)(pos - head));
+            char *pos = breakpos + 1;
+            while (*pos > ' ')
+              pos++;
+            float textwidth = font->width(font->userdata, font->height, head, (int)(pos - head));
             if (*pos == SOFTHYPHEN || *pos == HYPHEN)
               textwidth += hyphenwidth;
             if (textwidth > pagewidth - indent * INDENTSIZE)
@@ -622,8 +621,8 @@ static bool getpage(struct nk_context *ctx, float pagewidth, const char *content
           last->next = item;
         }
         /* for table type, get the (minimal) column widths */
-        int columns;
-        if (is_table(item->text, &columns)) {
+        int columns = 0;
+        if (item != NULL && is_table(item->text, &columns)) {
           assert(columns >= 1);
           item->columns = malloc(columns * sizeof(float));
           if (item ->columns != NULL) {
@@ -706,7 +705,6 @@ static bool getpage(struct nk_context *ctx, float pagewidth, const char *content
 static float guide_widget(struct nk_context *ctx, const char *id, float fontsize,
                           const char *content)
 {
-  float pagewidth = 0.0;
   float pagebottom = 0.0;
   float pagetop = 0.0;
   int cur_fonttype = FONT_STD;
@@ -715,7 +713,7 @@ static float guide_widget(struct nk_context *ctx, const char *id, float fontsize
   nk_style_push_color(ctx, &ctx->style.window.fixed_background.data.color, COLOUR_BG0);
   if (nk_group_begin(ctx, id, NK_WINDOW_BORDER)) {
     struct nk_rect rcline = nk_layout_widget_bounds(ctx); /* get the line width and y-start (to calculate page height) */
-    pagewidth = rcline.w - 2*NK_SPACING;
+    float pagewidth = rcline.w - 2*NK_SPACING;
     pagetop = rcline.y;
     if (linelist_root.next == NULL)
       getpage(ctx, pagewidth, content, cur_topic());

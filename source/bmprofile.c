@@ -3,7 +3,7 @@
  * DWT/ITM modules of the Cortex debug architecture. This utility is built with
  * Nuklear for a cross-platform GUI.
  *
- * Copyright 2022 CompuPhase
+ * Copyright 2022-2023 CompuPhase
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -153,7 +153,7 @@ static void version(void)
 # endif
 
   printf("BMProfile version %s.\n", SVNREV_STR);
-  printf("Copyright 2022 CompuPhase\nLicensed under the Apache License version 2.0\n");
+  printf("Copyright 2022-2023 CompuPhase\nLicensed under the Apache License version 2.0\n");
 }
 
 #if defined FORTIFY
@@ -213,12 +213,13 @@ typedef struct tagAPPSTATE {
   char mcu_family[64];          /**< detected MCU family (on attach), also the "driver" name of BMP */
   char mcu_architecture[32];    /**< detected ARM architecture (on attach) */
   unsigned long mcu_partid;     /**< specific ID code (0 if unknown) */
+  const char *monitor_cmds;     /**< list of "monitor" commands (target & probe dependent) */
   char IPaddr[64];              /**< IP address for network probe */
   unsigned char trace_endpoint; /**< standard USB endpoint for tracing */
   int probe_type;               /**< BMP or ctxLink (needed to select manchester/async mode) */
   int swomode;                  /**< manchester or async */
   int init_target;              /**< whether to configure the target MCU for tracing */
-  int init_bmp;                 /**< whether to configure the debug probe for tracing */
+  nk_bool init_bmp;             /**< whether to configure the debug probe for tracing */
   int connect_srst;             /**< whether to force reset while attaching */
   char mcuclock_str[16];        /**< edit buffer for CPU clock frequency */
   unsigned long mcuclock;       /**< active CPU clock frequency */
@@ -310,7 +311,7 @@ static bool load_settings(const char *filename, APPSTATE *state,
   assert(splitter_hor != NULL);
 
   state->init_target = (int)ini_getl("Settings", "init-target", 1, filename);
-  state->init_bmp = (int)ini_getl("Settings", "init-bmp", 1, filename);
+  state->init_bmp = (nk_bool)ini_getl("Settings", "init-bmp", 1, filename);
   state->probe = (int)ini_getl("Settings", "probe", 0, filename);
   ini_gets("Settings", "ip-address", "127.0.0.1", state->IPaddr, sizearray(state->IPaddr), filename);
 
@@ -377,6 +378,19 @@ static bool load_targetoptions(const char *filename, APPSTATE *state)
   sprintf(state->samplingfreq_str, "%lu", state->samplingfreq);
   sprintf(state->refreshrate_str, "%.1f", state->refreshrate);
   return true;
+}
+
+static void probe_set_options(APPSTATE *state)
+{
+  if (bmp_isopen()) {
+    char cmd[100];
+    if (bmp_expand_monitor_cmd(cmd, sizearray(cmd), "connect", state->monitor_cmds)) {
+      strlcat(cmd, " ", sizearray(cmd));
+      strlcat(cmd, state->connect_srst ? "enable" : "disable", sizearray(cmd));
+      if (!bmp_monitor(cmd))
+        bmp_callback(BMPERR_MONITORCMD, "Setting connect-with-reset option failed");
+    }
+  }
 }
 
 static void profile_graph(struct nk_context *ctx, const char *id, APPSTATE *state, float rowheight, nk_flags widget_flags)
@@ -1055,19 +1069,18 @@ static void panel_options(struct nk_context *ctx, APPSTATE *state,
     nk_layout_row_push(ctx, LABEL_WIDTH);
     nk_label(ctx, "ELF file", NK_TEXT_ALIGN_LEFT | NK_TEXT_ALIGN_MIDDLE);
     nk_layout_row_push(ctx, VALUE_WIDTH - BROWSEBTN_WIDTH - 5);
-    if (!state->dwarf_loaded)
-      nk_style_push_color(ctx,&ctx->style.edit.text_normal, COLOUR_FG_RED);
+    bool error = editctrl_cond_color(ctx, !state->dwarf_loaded, COLOUR_BG_DARKRED);
     result = editctrl_tooltip(ctx, NK_EDIT_FIELD|NK_EDIT_SIG_ENTER|NK_EDIT_CLIPBOARD,
                               state->ELFfile, sizearray(state->ELFfile), nk_filter_ascii,
                               "ELF file for symbol lookup");
-    if (!state->dwarf_loaded)
-      nk_style_pop_color(ctx);
+    editctrl_reset_color(ctx, error);
     if (result & (NK_EDIT_COMMITED | NK_EDIT_DEACTIVATED)) {
       state->dwarf_loaded = false;
       state->curstate = STATE_LOAD_DWARF;
     }
     nk_layout_row_push(ctx, BROWSEBTN_WIDTH);
     if (nk_button_symbol(ctx, NK_SYMBOL_TRIPLE_DOT)) {
+      nk_input_clear_mousebuttons(ctx);
 #     if defined _WIN32
         const char *filter = "ELF Executables\0*.elf;*.\0All files\0*.*\0";
 #     else
@@ -1236,11 +1249,13 @@ static void handle_stateaction(APPSTATE *state)
     state->dwarf_loaded = false;
     state->attached = false;
     state->curstate = (state->connected) ? STATE_ATTACH : STATE_IDLE;
+    if (state->connected && state->monitor_cmds == NULL)
+      state->monitor_cmds = bmp_get_monitor_cmds();
     break;
   case STATE_ATTACH:
     if (state->init_bmp) {
-      state->attached = bmp_attach(2, state->connect_srst,
-                                   state->mcu_family, sizearray(state->mcu_family),
+      probe_set_options(state);
+      state->attached = bmp_attach(true, state->mcu_family, sizearray(state->mcu_family),
                                    state->mcu_architecture, sizearray(state->mcu_architecture));
       if (state->attached) {
         /* overrule any default protocol setting, if the debug probe can be
@@ -1609,6 +1624,8 @@ int main(int argc, char *argv[])
 
   clear_functions(&appstate);
   clear_probelist(appstate.probelist, appstate.netprobe);
+  if (appstate.monitor_cmds != NULL)
+    free((void*)appstate.monitor_cmds);
   trace_close();
   guidriver_close();
   tracestring_clear();

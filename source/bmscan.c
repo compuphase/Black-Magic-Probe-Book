@@ -4,7 +4,7 @@
  * it scans the registry for the Black Magic Probe device, under Linux, it
  * browses through sysfs.
  *
- * Copyright 2019-2022 CompuPhase
+ * Copyright 2019-2023 CompuPhase
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -95,7 +95,7 @@ static bool check_probe(HCOM *hCom, char *versionstring, size_t maxlength)
   rs232_setstatus(hCom, LINESTAT_DTR, 1); /* required by GDB RSP */
 
   /* check for reception of the handshake */
-  char buffer[256];
+  char buffer[512];
   size_t size = gdbrsp_recv(buffer, sizearray(buffer), 250);
   if (size == 0) {
     /* toggle DTR, to be sure */
@@ -122,8 +122,7 @@ static bool check_probe(HCOM *hCom, char *versionstring, size_t maxlength)
   gdbrsp_xmit("qRcmd,version", -1);
   *versionstring = '\0';
   for ( ;; ) {
-    char buffer[512];
-    size_t size = gdbrsp_recv(buffer, sizearray(buffer) - 1, 250);
+    size = gdbrsp_recv(buffer, sizearray(buffer) - 1, 250);
     if (size > 0) {
       assert(size < sizearray(buffer));
       buffer[size] = '\0';
@@ -192,7 +191,7 @@ int main(int argc, char *argv[])
            "                               for the second device\n"
            "          bmscan ip          - list all IP addresses on which a ctxLink probe\n"
            "                               is detected.\n\n"
-           "Version %s, Copyright 2019-2022 CompuPhase.\nLicensed under the Apache License version 2.0.\n",
+           "Version %s, Copyright 2019-2023 CompuPhase.\nLicensed under the Apache License version 2.0.\n",
            SVNREV_STR);
     return EXIT_SUCCESS;
   }

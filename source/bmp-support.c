@@ -307,11 +307,9 @@ int bmp_break(void)
  *  The name of the driver for the MCU (that the Black Magic Probe uses) is
  *  returned.
  *
- *  \param tpwr         Set to 1 to power up the voltage-sense pin, 0 to
- *                      power-down, or 2 to optionally power this pin if the
- *                      initial scan returns a power of 0.0V.
- *  \param connect_srst Set to 1 to let the Black Magic Probe keep the target
- *                      MCU in reset while scanning and attaching.
+ *  \param autopower    If set, and if the swdp_scan command returns 0V power,
+ *                      the "tpwr" command is given, before the swdp_scan
+ *                      command is retried.
  *  \param name         Will be set to the name of the driver for the MCU (the
  *                      MCU series name) on output. This parameter may be NULL.
  *  \param namelength   The maximum length of the name, including the \0 byte.
@@ -322,10 +320,10 @@ int bmp_break(void)
  *  \param archlength   The maximum length of the architecture name, including
  *                      the \0 byte.
  *
- *  \return 1 on success, 0 on failure. Status and error messages are passed via
- *          the callback.
+ *  \return true on success, false on failure. Status and error messages are
+ *          passed via the callback.
  */
-int bmp_attach(int tpwr, int connect_srst, char *name, size_t namelength, char *arch, size_t archlength)
+bool bmp_attach(bool autopower, char *name, size_t namelength, char *arch, size_t archlength)
 {
   char buffer[512];
   size_t size;
@@ -338,27 +336,10 @@ int bmp_attach(int tpwr, int connect_srst, char *name, size_t namelength, char *
 
   if (!bmp_isopen()) {
     notice(BMPERR_ATTACHFAIL, "No connection to debug probe");
-    return 0;
+    return false;
   }
 
 restart:
-  if (connect_srst != 0) {
-    if (!bmp_monitor("connect_srst enable"))
-      notice(BMPERR_MONITORCMD, "Setting connect-with-reset option failed");
-  }
-  if (tpwr == 1) {
-    if (bmp_monitor("tpwr enable")) {
-      /* give the micro-controller a bit of time to start up, before issuing
-         the swdp_scan command */
-#     if defined _WIN32
-        Sleep(100);
-#     else
-        usleep(100 * 1000);
-#     endif
-    } else {
-      notice(BMPERR_MONITORCMD, "Power to target failed");
-    }
-  }
   gdbrsp_xmit("qRcmd,swdp_scan", -1);
   for ( ;; ) {
     size = gdbrsp_recv(buffer, sizearray(buffer), 1000);
@@ -366,11 +347,22 @@ restart:
       const char *ptr;
       buffer[size] = '\0';
       /* parse the string */
-      if (tpwr == 2 && strchr(buffer, '\n') != NULL && (ptr = strstr(buffer + 1, "voltage:")) != NULL) {
+      if (autopower && strchr(buffer, '\n') != NULL && (ptr = strstr(buffer + 1, "voltage:")) != NULL) {
         double voltage = strtod(ptr + 8, (char**)&ptr);
         if (*ptr == 'V' && voltage < 0.1) {
           notice(BMPSTAT_NOTICE, "Note: powering target");
-          tpwr = 1;
+          if (bmp_monitor("tpwr enable")) {
+            /* give the micro-controller a bit of time to start up, before issuing
+               the swdp_scan command */
+#           if defined _WIN32
+              Sleep(100);
+#           else
+              usleep(100 * 1000);
+#           endif
+          } else {
+            notice(BMPERR_MONITORCMD, "Power to target failed");
+          }
+          autopower = false;  /* do not drop in this case again */
           goto restart;
         }
       }
@@ -394,7 +386,7 @@ restart:
       notice(BMPSTAT_NOTICE, buffer + 1);  /* skip the 'o' at the start */
     } else if (size != 2 || memcmp(buffer, "OK", size) != 0) {
       /* error message was already given by an "output"-response */
-      return 0;
+      return false;
     } else {
       break;  /* OK was received */
     }
@@ -407,7 +399,7 @@ restart:
        || (size >= 3 && buffer[0] == 'T' && isxdigit(buffer[1]) && isxdigit(buffer[2]));
   if (!ok) {
     notice(BMPERR_ATTACHFAIL, "Attach failed");
-    return 0;
+    return false;
   }
   notice(BMPSTAT_NOTICE, "Attached to target 1");
 
@@ -443,26 +435,26 @@ restart:
   if (FlashRgnCount == 0)
     notice(BMPERR_NOFLASH, "No Flash memory record");
 
-  return 1;
+  return true;
 }
 
-int bmp_detach(int powerdown)
+bool bmp_detach(bool powerdown)
 {
-  int result = 0;
+  bool result = false;
 
   if (bmp_isopen()) {
     char buffer[100];
     size_t size;
-    result = 1;
+    result = true;
     /* detach */
     gdbrsp_xmit("D", -1);
     size = gdbrsp_recv(buffer, sizearray(buffer), 1000);
     if (size != 2 || memcmp(buffer, "OK", size) != 0)
-      result = 0;
+      result = false;
     /* optionally disable power */
     if (powerdown) {
       if (!bmp_monitor("tpwr disable"))
-        result = 0;
+        result = false;
     }
   }
 
@@ -514,6 +506,163 @@ int bmp_checkversionstring(void)
     }
   }
   return probe;
+}
+
+/** bmp_get_monitor_cmds() collects the list of "monitor" commands. These are
+ *  probe-dependent and target-dependent (plus probe firmware version
+ *  dependent).
+ *
+ *  When this function is called after connecting to the probe (but before
+ *  attaching to the target), it returns only the probe-dependent commands.
+ *
+ *  \return A pointer to a dynamically allocated string, which contains the
+ *          commands separated by a space. The returned list must be freed with
+ *          free().
+ */
+const char *bmp_get_monitor_cmds(void)
+{
+  if (!bmp_isopen())
+    return NULL;
+
+  int count = 0;
+  int listsize = 4;
+  char **list = malloc(listsize * sizeof(char*));
+  if (list == NULL)
+    return NULL;
+  memset(list, 0, listsize * sizeof(char*));
+
+  char line[512];
+  memset(line, 0, sizeof line);
+
+  gdbrsp_xmit("qRcmd,help",-1);
+  for (;;) {
+    char buffer[512];
+    size_t size = gdbrsp_recv(buffer, sizearray(buffer) - 1, 1000);
+    if (size > 0) {
+      assert(size < sizearray(buffer));
+      buffer[size] = '\0';
+      char *ptr;
+      if (buffer[0] == 'o') {
+        if (line[0] == 'o')
+          strlcat(line, buffer + 1, sizearray(line));
+        else
+          strlcpy(line, buffer, sizearray(line));
+        if (strchr(line, '\n') != NULL) {
+          /* get only the command (strip summary) */
+          char *ptr = strstr(line, "--");
+          if (ptr != NULL) {
+            while (ptr > line && *(ptr - 1) <= ' ')
+              ptr -= 1;
+            *ptr = '\0';
+            /* check whether to grow the list */
+            if (count + 1 >= listsize) {
+              int newsize = 2 * listsize;
+              char **newlist = malloc(newsize * sizeof(char*));
+              if (newlist != NULL) {
+                memset(newlist, 0, newsize * sizeof(char*));
+                memcpy(newlist, list, count * sizeof(char*));
+                free((void*)list);
+                list = newlist;
+                listsize = newsize;
+              }
+            }
+            if (count + 1 < listsize) {
+              ptr = line + 1; /* skip 'o' that starts the line of the reply */
+              while (*ptr != '\0' && *ptr <= ' ')
+                ptr++;        /* skip whitespace too */
+              list[count]=strdup(ptr);
+              count++;
+            }
+          }
+          memset(line, 0, sizeof line);
+        }
+      } else if ((ptr = strchr(buffer, 'o')) != NULL) {
+        strlcpy(line, ptr, sizearray(line));
+      } else if (size == 2 && memcmp(buffer, "OK", size) == 0) {
+        /* end response found -> done */
+        break;
+      }
+    } else {
+      /* no new data arrived within the time-out, assume failure */
+      break;
+    }
+  }
+
+  /* sort the retrieved list (insertion sort) */
+  for (int i = 1; i < count; i++) {
+    char *key = list[i];
+    int j;
+    for (j = i; j > 0 && strcmp(list[j - 1], key) > 0; j--)
+      list[j] = list[j - 1];
+    list[j] = key;
+  }
+
+  /* build a string from the list */
+  size_t total_length = 0;
+  for (int idx = 0; idx < count; idx++) {
+    assert(list[idx] != NULL);
+    total_length += strlen(list[idx]) + 1;  /* +1 for space between words, or for final '\0' */
+  }
+  char *buffer = malloc(total_length * sizeof(char));
+  if (buffer != NULL) {
+    *buffer = '\0';
+    for (int idx = 0; idx < count; idx++) {
+      assert(list[idx] != NULL);
+      strcat(buffer, list[idx]);
+      if (idx + 1 < count)
+        strcat(buffer, " ");
+    }
+  }
+
+  /* clean up */
+  for (int idx = 0; idx < count; idx++) {
+    assert(list[idx] != NULL);
+    free((void*)list[idx]);
+  }
+  free(list);
+
+  return (const char*)buffer;
+}
+
+/** bmp_expand_monitor_cmd() finds the complete command from a prefix.
+ *  \param buffer   [out] Will contain the complete command.
+ *  \param bufsize  The size of the output buffer.
+ *  \param name     [in] The prefix to complete.
+ *  \param list     [in] A string with all commands (separated by spaces).
+ *  \return true on success, false if the prefix does not match any command.
+ */
+bool bmp_expand_monitor_cmd(char *buffer, size_t bufsize, const char *name, const char *list)
+{
+  assert(buffer != NULL && bufsize != 0);
+  assert(name != NULL);
+  assert(list != NULL);
+  size_t name_len = strlen(name);
+
+  buffer[0] = '\0';
+  const char *head = list;
+  while (*head != '\0') {
+    /* the assumption is that the list of commands is "wekk-formed": no leading
+       or trailing spaces and the tokens separated by a single space */
+    assert(*head > ' ');
+    const char *tail = strchr(head, ' ');
+    if (tail == NULL)
+      tail = head + strlen(head);
+    size_t token_len = tail - head;
+    if (token_len >= name_len && strncmp(name, head, name_len) == 0) {
+      /* match, copy the token */
+      assert(token_len < bufsize);
+      if (bufsize <= token_len)
+        token_len = bufsize - 1;
+      strncpy(buffer, head, token_len);
+      buffer[token_len] = '\0';
+      return true;
+    }
+    head = tail;
+    while (*head != '\0' && *head <= ' ')
+      head++;
+  }
+
+  return false;
 }
 
 /** bmp_monitor() executes a "monitor" command and returns whether the reply

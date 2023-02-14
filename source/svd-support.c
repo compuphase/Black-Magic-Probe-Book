@@ -2,7 +2,7 @@
  * Functions for reading and parsing CMSIS SVD files with MCU-specific register
  * definitions.
  *
- * Copyright 2020-2021 CompuPhase
+ * Copyright 2020-2023 CompuPhase
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -591,8 +591,6 @@ const char *svd_bitfield(const char *peripheral, const char *regname, unsigned i
 
 static const REGISTER *register_parse(const char *symbol, const char **suffix)
 {
-  int len;
-  char periph_name[100] = "";
   char reg_name[100] = "";
   const char *p;
   const PERIPHERAL *per;
@@ -601,7 +599,7 @@ static const REGISTER *register_parse(const char *symbol, const char **suffix)
   assert(symbol != NULL);
 
   /* check whether the symbol starts with the prefix, if so, skip the prefix */
-  len = strlen(svd_prefix);
+  size_t len = strlen(svd_prefix);
   if (len > 0 && len < strlen(symbol) && strncmp(symbol, svd_prefix, len) == 0)
     symbol += len;
 
@@ -612,6 +610,7 @@ static const REGISTER *register_parse(const char *symbol, const char **suffix)
       || (p = strchr(symbol, '.')) != NULL
       || (p = strchr(symbol, '_')) != NULL)
   {
+    char periph_name[100] = "";
     if ((len = p - symbol) < sizearray(periph_name)) {
       strncpy(periph_name, symbol, len);
       periph_name[len] = '\0';

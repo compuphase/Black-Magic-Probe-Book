@@ -5,7 +5,7 @@
  * Build this file with the macro STANDALONE defined on the command line to
  * create a self-contained executable.
  *
- * Copyright 2022 CompuPhase
+ * Copyright 2022-2023 CompuPhase
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -279,7 +279,7 @@ static void usage(int status)
 static void version(int status)
 {
   printf("calltree version %s.\n", SVNREV_STR);
-  printf("Copyright 2022 CompuPhase\nLicensed under the Apache License version 2.0\n");
+  printf("Copyright 2022-2023 CompuPhase\nLicensed under the Apache License version 2.0\n");
   exit(status);
 }
 

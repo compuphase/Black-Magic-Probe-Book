@@ -428,6 +428,19 @@ int get_bmp_count(void)
   return idx;
 }
 
+/** check_versionstring() returns the hardware version of the debug probe.
+ *
+ *  \param string     [in] The string with the (purported) version information,
+ *                    as returned by the "monitor version" command.
+ *
+ *  \return The probe type/hardware version.
+ *
+ *  \note Firmware version is ambiguous: the format has changed a few times, and
+ *        for firmware built from mainline (as well as firmware release 1.7),
+ *        the "version number" is the git hash. A more reiable way to determine
+ *        the firmware version is to parse the result of "monitor help" for
+ *        commands introduced at a specific version.
+ */
 int check_versionstring(const char *string)
 {
   if (strncmp(string, "Black Magic Probe", 17) == 0) {

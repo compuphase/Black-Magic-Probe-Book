@@ -155,6 +155,9 @@ nk_bool button_symbol_tooltip(struct nk_context *ctx, enum nk_symbol_type symbol
   return result;
 }
 
+/** checkbox_tooltip() is nk_checkbox_label() plus a tooltip.
+ *  \return true if the option was toggled, false if no change.
+ */
 nk_bool checkbox_tooltip(struct nk_context *ctx, const char *label, nk_bool *active, nk_flags align,
                          const char *tiptext)
 {

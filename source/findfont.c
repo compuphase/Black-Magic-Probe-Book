@@ -107,6 +107,8 @@ int font_locate(char *path, size_t maxlength, const char *family, const char *st
   free(style_copy);
   if (fs)
     FcFontSetDestroy(fs);
+  FcObjectSetDestroy(os);
+  FcPatternDestroy(pat);
 
   return match;
 }

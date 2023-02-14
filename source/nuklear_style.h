@@ -19,10 +19,13 @@
 #ifndef _NUKLEAR_STYLE_H
 #define _NUKLEAR_STYLE_H
 
+#include <stdbool.h>
 #include "nuklear.h"
 
 void nuklear_style(struct nk_context *ctx);
 float *nk_ratio(int count, ...);
+bool editctrl_cond_color(struct nk_context *ctx, bool condition, struct nk_color color);
+void editctrl_reset_color(struct nk_context *ctx, bool condition);
 
 #define COLOUR_BG0_S      nk_rgb_hex("#32302f") /* window background colour */
 #define COLOUR_BG0        nk_rgb_hex("#1d2021") /* background colour for controls near black) */

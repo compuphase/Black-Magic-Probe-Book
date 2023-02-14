@@ -78,8 +78,8 @@ endif
 OBJLIST_BMDEBUG = bmdebug.o armdisasm.o bmcommon.o bmp-scan.o bmp-script.o \
                   demangle.o dwarf.o elf.o guidriver.o mcu-info.o memdump.o \
                   minIni.o nuklear_mousepointer.o nuklear_splitter.o nuklear_style.o \
-                  nuklear_tooltip.o rs232.o serialmon.o specialfolder.o svd-support.o \
-                  swotrace.o tcpip.o xmltractor.o decodectf.o parsetsdl.o \
+                  nuklear_tooltip.o pathsearch.o rs232.o serialmon.o specialfolder.o \
+                  svd-support.o swotrace.o tcpip.o xmltractor.o decodectf.o parsetsdl.o \
                   findfont.o lodepng.o nuklear.o nuklear_glfw_gl2.o noc_file_dialog.o
 
 OBJLIST_BMFLASH = bmflash.o bmcommon.o bmp-scan.o bmp-script.o bmp-support.o \
@@ -200,6 +200,8 @@ nuklear_style.o : nuklear_style.c
 nuklear_tooltip.o : nuklear_tooltip.c
 
 parsetsdl.o : parsetsdl.c
+
+pathsearch.o : pathsearch.c
 
 rs232.o : rs232.c
 

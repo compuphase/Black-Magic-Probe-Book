@@ -553,15 +553,15 @@ static int writelog(const char *filename, const char *serial)
   char txtLogFile[_MAX_PATH];
   FILE *fpLog, *fpElf;
   char substr[128], line[256];
-  time_t timestamp;
+  time_t tstamp;
   struct stat fstat;
   int addheader;
 
   line[0] = '\0';
 
   /* current date/time */
-  timestamp = time(NULL);
-  strftime(substr, sizeof(substr), "%Y-%m-%d %H:%M:%S, ", localtime(&timestamp));
+  tstamp = time(NULL);
+  strftime(substr, sizeof(substr), "%Y-%m-%d %H:%M:%S, ", localtime(&tstamp));
   strlcat(line, substr, sizearray(line));
 
   /* ELF file date/time */
@@ -659,7 +659,7 @@ static void version(void)
 # endif
 
   printf("BMFlash version %s.\n", SVNREV_STR);
-  printf("Copyright 2019-2022 CompuPhase\nLicensed under the Apache License version 2.0\n");
+  printf("Copyright 2019-2023 CompuPhase\nLicensed under the Apache License version 2.0\n");
 }
 
 #if defined FORTIFY
@@ -872,7 +872,7 @@ static bool rspreply_semihosting(char *packet)
     buffer[len] = '\0';
     gdbrsp_hex2array(buffer, (unsigned char*)buffer, 2 * size);
     buffer[size] = '\0';
-    sprintf(packet, "%u,%s", size, buffer);
+    sprintf(packet, "%u,%s", handle, buffer);
     free((void*)buffer);
     sprintf(cmd, "F%X:", size);
     gdbrsp_xmit(cmd, -1);
@@ -894,14 +894,16 @@ static void rspreply_poll(void)
 
 typedef struct tagAPPSTATE {
   int curstate;                 /**< current state */
-  int is_attached;              /**< is debug probe attached? */
+  bool is_attached;             /**< is debug probe attached? */
   int probe;                    /**< selected debug probe (index) */
   int netprobe;                 /**< index for the IP address (pseudo-probe) */
   const char **probelist;       /**< list of detected probes */
   int architecture;             /**< MCU architecture (index) */
+  const char *monitor_cmds;     /**< list of "monitor" commands (target & probe dependent) */
+  bool set_probe_options;       /**< whether option in the debug probe must be set/updated */
   nk_bool tpwr;                 /**< option: tpwr (target power) */
-  nk_bool fullerase;            /**< option: erase entire flash before download */
   nk_bool connect_srst;         /**< option: keep in reset during connect */
+  nk_bool fullerase;            /**< option: erase entire flash before download */
   nk_bool write_log;            /**< option: record downloads in log file */
   nk_bool print_time;           /**< option: print download time */
   int skip_download;            /**< do download+verify procedure without actually downloading */
@@ -919,6 +921,7 @@ typedef struct tagAPPSTATE {
   char ParamFile[_MAX_PATH];    /**< configuration file for the target */
   char SerialFile[_MAX_PATH];   /**< optional file for serialization settings */
   char PostProcess[_MAX_PATH];  /**< path to post-process script */
+  nk_bool PostProcessFailures;  /**< whether to execute the post-process script on failed uploads too */
   FILE *fpTgt;                  /**< target file */
   FILE *fpWork;                 /**< intermediate work file */
   struct tcl tcl;               /**< Tcl context */
@@ -927,6 +930,7 @@ typedef struct tagAPPSTATE {
   thrd_t thrd_tcl;              /**< thread id for Tcl script */
   int isrunning_tcl;            /**< running state of the Tcl script */
   int isrunning_download;       /**< running state of the download thread */
+  bool download_success;        /**< success/failure state of most recent download */
   unsigned long tstamp_start;   /**< timestamp of start of download */
 } APPSTATE;
 
@@ -1127,6 +1131,7 @@ static bool tcl_preparescript(APPSTATE *state)
     tcl_var(&state->tcl, "ident", tcl_value("", 0));
   }
   tcl_var(&state->tcl, "sysreply", tcl_value("", 0));
+  tcl_var(&state->tcl, "status", state->download_success ? tcl_value("1", 1) : tcl_value("0", 1));
   return true;
 }
 
@@ -1182,9 +1187,10 @@ static bool load_targetparams(const char *filename, APPSTATE *state)
       break;
   if (state->architecture >= sizearray(architectures))
     state->architecture = 0;
-  state->tpwr = (int)ini_getl("Flash", "tpwr", 0, filename);
-  state->fullerase = (int)ini_getl("Flash", "full-erase", 0, filename);
+  state->tpwr = (nk_bool)ini_getl("Flash", "tpwr", 0, filename);
+  state->fullerase = (nk_bool)ini_getl("Flash", "full-erase", 0, filename);
   ini_gets("Flash", "postprocess", "", state->PostProcess, sizearray(state->PostProcess), filename);
+  state->PostProcessFailures = (nk_bool)ini_getl("Flash", "postprocess-failures", 0, filename);
 
   strlcpy(state->SerialFile, filename, sizearray(state->SerialFile));
   ini_gets("Serialize", "file", "", state->SerialFile, sizearray(state->SerialFile), filename);
@@ -1243,6 +1249,7 @@ static bool save_targetparams(const char *filename, const APPSTATE *state)
   ini_putl("Flash", "tpwr", state->tpwr, filename);
   ini_putl("Flash", "full-erase", state->fullerase, filename);
   ini_puts("Flash", "postprocess", state->PostProcess, filename);
+  ini_putl("Flash", "postprocess-failures", state->PostProcessFailures, filename);
 
   ini_puts("Serialize", "file", state->SerialFile, filename);
   char serialfile[_MAX_PATH];
@@ -1260,6 +1267,37 @@ static bool save_targetparams(const char *filename, const APPSTATE *state)
   return true;
 }
 
+static bool probe_set_options(APPSTATE *state)
+{
+  bool ok = bmp_isopen();
+  if (ok && state->set_probe_options) {
+    char cmd[100];
+    if (bmp_expand_monitor_cmd(cmd, sizearray(cmd), "connect", state->monitor_cmds)) {
+      strlcat(cmd, " ", sizearray(cmd));
+      strlcat(cmd, state->connect_srst ? "enable" : "disable", sizearray(cmd));
+      if (!bmp_monitor(cmd)) {
+        bmp_callback(BMPERR_MONITORCMD, "Setting connect-with-reset option failed");
+        ok = false;
+      }
+    }
+    strcpy(cmd, "tpwr ");
+    strlcat(cmd, state->tpwr ? "enable" : "disable", sizearray(cmd));
+    if (bmp_monitor(cmd)) {
+      /* give the micro-controller a bit of time to start up, after power-up */
+#     if defined _WIN32
+        Sleep(100);
+#     else
+        usleep(100 * 1000);
+#     endif
+    } else {
+      bmp_callback(BMPERR_MONITORCMD, "Power to target failed");
+      ok = false;
+    }
+    state->set_probe_options = false;
+  }
+  return ok;
+}
+
 static void panel_options(struct nk_context *ctx, APPSTATE *state,
                           enum nk_collapse_states tab_states[TAB_COUNT])
 {
@@ -1269,11 +1307,16 @@ static void panel_options(struct nk_context *ctx, APPSTATE *state,
   if (nk_tree_state_push(ctx, NK_TREE_TAB, "Options", &tab_states[TAB_OPTIONS])) {
     struct nk_rect rcwidget;
     assert(state->probelist != NULL);
+    bool reconnect = false;
     nk_layout_row(ctx, NK_DYNAMIC, ROW_HEIGHT * 0.8, 2, nk_ratio(2, 0.45, 0.55));
     nk_label(ctx, "Black Magic Probe", NK_TEXT_ALIGN_LEFT | NK_TEXT_ALIGN_MIDDLE);
     rcwidget = nk_widget_bounds(ctx);
-    state->probe = nk_combo(ctx, state->probelist, state->netprobe+1, state->probe,
-                            (int)COMBOROW_CY, nk_vec2(rcwidget.w, 4.5*ROW_HEIGHT));
+    int select = nk_combo(ctx, state->probelist, state->netprobe+1, state->probe,
+                          (int)COMBOROW_CY, nk_vec2(rcwidget.w, 4.5*ROW_HEIGHT));
+    if (select != state->probe) {
+      state->probe = select;
+      reconnect = true;
+    }
     if (state->probe == state->netprobe) {
       nk_layout_row(ctx, NK_DYNAMIC, ROW_HEIGHT, 4, nk_ratio(4, 0.05, 0.40, 0.49, 0.06));
       nk_spacing(ctx, 1);
@@ -1281,7 +1324,8 @@ static void panel_options(struct nk_context *ctx, APPSTATE *state,
       nk_flags result = nk_edit_string_zero_terminated(ctx, NK_EDIT_FIELD|NK_EDIT_SIG_ENTER,
                                                        state->IPaddr, sizearray(state->IPaddr),
                                                        nk_filter_ascii);
-      int reconnect = ((result & NK_EDIT_COMMITED) != 0 && bmp_is_ip_address(state->IPaddr));
+      if ((result & NK_EDIT_COMMITED) != 0 && bmp_is_ip_address(state->IPaddr))
+        reconnect = true;
       if (button_symbol_tooltip(ctx, NK_SYMBOL_TRIPLE_DOT, NK_KEY_NONE, nk_true, "Scan network for ctxLink probes.")) {
 #       if defined WIN32 || defined _WIN32
           HCURSOR hcur = SetCursor(LoadCursor(NULL, IDC_WAIT));
@@ -1294,16 +1338,16 @@ static void panel_options(struct nk_context *ctx, APPSTATE *state,
         if (count == 1) {
           sprintf(state->IPaddr, "%lu.%lu.%lu.%lu",
                  addr & 0xff, (addr >> 8) & 0xff, (addr >> 16) & 0xff, (addr >> 24) & 0xff);
-          reconnect = 1;
+          reconnect = true;
         } else {
           strlcpy(state->IPaddr, "no gdbserver found", sizearray(state->IPaddr));
         }
       }
-      if (reconnect) {
-        bmp_disconnect();
-        bmp_connect(state->probe, (state->probe == state->netprobe) ? state->IPaddr : NULL);
-        state->curstate = STATE_IDLE;
-      }
+    }
+    if (reconnect) {
+      bmp_disconnect();
+      bmp_connect(state->probe, (state->probe == state->netprobe) ? state->IPaddr : NULL);
+      state->curstate = STATE_IDLE;
     }
 
     nk_layout_row(ctx, NK_DYNAMIC, ROW_HEIGHT * 0.8, 2, nk_ratio(2, 0.45, 0.55));
@@ -1314,10 +1358,13 @@ static void panel_options(struct nk_context *ctx, APPSTATE *state,
 
     nk_layout_row(ctx, NK_DYNAMIC, ROW_HEIGHT, 3, nk_ratio(3, 0.45, 0.497, 0.053));
     nk_label(ctx, "Post-process", NK_TEXT_ALIGN_LEFT | NK_TEXT_ALIGN_MIDDLE);
+    bool error = editctrl_cond_color(ctx, strlen(state->PostProcess) > 0 && access(state->PostProcess, 0) != 0, COLOUR_BG_DARKRED);
     editctrl_tooltip(ctx, NK_EDIT_FIELD,
                      state->PostProcess, sizearray(state->PostProcess),
-                     nk_filter_ascii, "Tcl script to run after successful download");
+                     nk_filter_ascii, "Tcl script to run after a successful download");
+    editctrl_reset_color(ctx, error);
     if (button_symbol_tooltip(ctx, NK_SYMBOL_TRIPLE_DOT, NK_KEY_NONE, nk_true, "Browse...")) {
+      nk_input_clear_mousebuttons(ctx);
 #     if defined _WIN32
         const char *filter = "Tcl scripts\0*.tcl\0All files\0*.*\0";
 #     else
@@ -1328,14 +1375,20 @@ static void panel_options(struct nk_context *ctx, APPSTATE *state,
                            NULL, state->PostProcess,
                            "Select Tcl script", guidriver_apphandle());
     }
+    nk_layout_row(ctx, NK_DYNAMIC, ROW_HEIGHT * 0.8, 2, nk_ratio(2, 0.45, 0.55));
+    nk_spacing(ctx, 1);
+    checkbox_tooltip(ctx, "Post-process on failed downloads", &state->PostProcessFailures, NK_TEXT_LEFT,
+                     "Also run the post-process script after a failed download");
 
     nk_layout_row_dynamic(ctx, ROW_HEIGHT, 1);
-    checkbox_tooltip(ctx, "Power Target (3.3V)", &state->tpwr, NK_TEXT_LEFT,
-                     "Let the debug probe provide power to the target");
+    if (checkbox_tooltip(ctx, "Power Target (3.3V)", &state->tpwr, NK_TEXT_LEFT,
+                         "Let the debug probe provide power to the target"))
+      state->set_probe_options = true;
     checkbox_tooltip(ctx, "Full Flash Erase before download", &state->fullerase, NK_TEXT_LEFT,
                      "Erase entire Flash memory, instead of only sectors that are overwritten");
-    checkbox_tooltip(ctx, "Reset Target during connect", &state->connect_srst, NK_TEXT_LEFT,
-                     "Keep target MCU reset while debug probe attaches");
+    if (checkbox_tooltip(ctx, "Reset Target during connect", &state->connect_srst, NK_TEXT_LEFT,
+                         "Keep target MCU reset while debug probe attaches"))
+      state->set_probe_options = true;
     checkbox_tooltip(ctx, "Keep Log of downloads", &state->write_log, NK_TEXT_LEFT,
                      "Write successful downloads to a log file");
     checkbox_tooltip(ctx, "Print Download Time", &state->print_time, NK_TEXT_LEFT,
@@ -1412,7 +1465,10 @@ static bool handle_stateaction(APPSTATE *state, enum nk_collapse_states tab_stat
     state->probelist = get_probelist(&state->probe, &state->netprobe);
     tcpip_init();
     bmp_setcallback(bmp_callback);
-    bmp_connect(state->probe, (state->probe == state->netprobe) ? state->IPaddr : NULL);
+    result = bmp_connect(state->probe, (state->probe == state->netprobe) ? state->IPaddr : NULL);
+    if (result && state->monitor_cmds == NULL)
+      state->monitor_cmds = bmp_get_monitor_cmds();
+    state->set_probe_options = true;  /* probe changed, make sure options are set */
     bmp_progress_reset(0);
     state->curstate = STATE_IDLE;
     waitidle = false;
@@ -1429,7 +1485,7 @@ static bool handle_stateaction(APPSTATE *state, enum nk_collapse_states tab_stat
     }
     if (state->is_attached) {
       bmp_detach(1);  /* if currently attached, detach */
-      state->is_attached = 0;
+      state->is_attached = false;
     }
     gdbrsp_clear();
     state->skip_download = 0;
@@ -1457,8 +1513,11 @@ static bool handle_stateaction(APPSTATE *state, enum nk_collapse_states tab_stat
     bmp_progress_reset(0);
     result = bmp_connect(state->probe, (state->probe == state->netprobe) ? state->IPaddr : NULL);
     if (result) {
+      if (state->monitor_cmds == NULL)
+        state->monitor_cmds = bmp_get_monitor_cmds();
+      probe_set_options(state);
       char mcufamily[32];
-      state->is_attached = bmp_attach(state->tpwr, state->connect_srst, mcufamily, sizearray(mcufamily), NULL, 0);
+      state->is_attached = bmp_attach(false, mcufamily, sizearray(mcufamily), NULL, 0);
       if (state->is_attached) {
         /* check for particular architectures, try exact match first */
         int arch;
@@ -1600,9 +1659,14 @@ static bool handle_stateaction(APPSTATE *state, enum nk_collapse_states tab_stat
     /* compare the checksum of Flash memory to the file */
     if (state->architecture > 0)
       bmp_runscript("memremap", architectures[state->architecture], NULL, NULL, 0);
-    result = bmp_verify((state->fpWork != NULL)? state->fpWork : state->fpTgt);
-    state->curstate = result ? STATE_FINISH : STATE_IDLE;
-    if (result && state->print_time) {
+    state->download_success = bmp_verify((state->fpWork != NULL)? state->fpWork : state->fpTgt);
+    if (state->download_success)
+      state->curstate = STATE_FINISH;
+    else if (strlen(state->PostProcess) > 0 && state->PostProcessFailures)
+      state->curstate = STATE_POSTPROCESS;
+    else
+      state->curstate = STATE_IDLE;
+    if (state->download_success && state->print_time) {
       char msg[100];
       clock_t tstamp_stop = clock();
       sprintf(msg, "Completed in %.1f seconds\n", (tstamp_stop - state->tstamp_start) / 1000.0);
@@ -1679,7 +1743,8 @@ static bool handle_stateaction(APPSTATE *state, enum nk_collapse_states tab_stat
   case STATE_ERASE_OPTBYTES:
     bmp_progress_reset(0);
     if (bmp_connect(state->probe, (state->probe == state->netprobe) ? state->IPaddr : NULL)
-        && bmp_attach(state->tpwr, state->connect_srst, NULL, 0, NULL, 0))
+        && probe_set_options(state)
+        && bmp_attach(false, NULL, 0, NULL, 0))
     {
       state->is_attached = 1;
       result = bmp_monitor("option erase");
@@ -1693,7 +1758,8 @@ static bool handle_stateaction(APPSTATE *state, enum nk_collapse_states tab_stat
   case STATE_SET_CRP:
     bmp_progress_reset(0);
     if (bmp_connect(state->probe, (state->probe == state->netprobe) ? state->IPaddr : NULL)
-        && bmp_attach(state->tpwr, state->connect_srst, NULL, 0, NULL, 0))
+        && probe_set_options(state)
+        && bmp_attach(false, NULL, 0, NULL, 0))
     {
       state->is_attached = 1;
       result = bmp_monitor("option option 0x1ffff800 0x00ff");
@@ -1707,7 +1773,8 @@ static bool handle_stateaction(APPSTATE *state, enum nk_collapse_states tab_stat
   case STATE_FULLERASE:
     bmp_progress_reset(0);
     if (bmp_connect(state->probe, (state->probe == state->netprobe) ? state->IPaddr : NULL)
-        && bmp_attach(state->tpwr, state->connect_srst, NULL, 0, NULL, 0))
+        && probe_set_options(state)
+        && bmp_attach(false, NULL, 0, NULL, 0))
     {
       state->is_attached = 1;
       if (state->architecture > 0)
@@ -1745,6 +1812,7 @@ int main(int argc, char *argv[])
   appstate.SerialFmt = FMT_BIN;
   appstate.isrunning_tcl = THRD_IDLE;
   appstate.isrunning_download = THRD_IDLE;
+  appstate.set_probe_options = true;
   strcpy(appstate.Section, ".text");
   strcpy(appstate.Address, "0");
   strcpy(appstate.Serial, "1");
@@ -1904,6 +1972,7 @@ int main(int argc, char *argv[])
             log_addstring("Changed target, settings loaded\n");
           else
             log_addstring("Settings for target loaded\n");
+          appstate.set_probe_options = true;
           /* for an LPC* target, check CRP */
           if (appstate.architecture > 0) {
             appstate.fpTgt = fopen(appstate.ELFfile, "rb");
@@ -2006,6 +2075,8 @@ int main(int argc, char *argv[])
   gdbrsp_packetsize(0);
   bmp_disconnect();
   tcpip_cleanup();
+  if (appstate.monitor_cmds != NULL)
+    free((void*)appstate.monitor_cmds);
   if (logtext != NULL)
     free(logtext);
 # if defined FORTIFY

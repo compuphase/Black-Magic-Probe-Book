@@ -57,11 +57,13 @@ bool bmp_isopen(void);
 void bmp_sethandle(HCOM *hcom);
 HCOM *bmp_comport(void);
 
-int bmp_checkversionstring(void);
 int bmp_is_ip_address(const char *address);
+int bmp_checkversionstring(void);
+const char *bmp_get_monitor_cmds(void);
+bool bmp_expand_monitor_cmd(char *buffer, size_t bufsize, const char *name, const char *list);
 
-int bmp_attach(int tpwr, int connect_srst, char *name, size_t namelength, char *arch, size_t archlength);
-int bmp_detach(int powerdown);
+bool bmp_attach(bool autopower, char *name, size_t namelength, char *arch, size_t archlength);
+bool bmp_detach(bool powerdown);
 
 int bmp_monitor(const char *command);
 int bmp_fullerase(void);

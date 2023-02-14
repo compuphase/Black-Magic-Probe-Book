@@ -3,7 +3,7 @@
  * Black Magic Probe. This utility is built with Nuklear for a cross-platform
  * GUI.
  *
- * Copyright 2019-2022 CompuPhase
+ * Copyright 2019-2023 CompuPhase
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -179,7 +179,7 @@ static void version(void)
 # endif
 
   printf("BMTrace version %s.\n", SVNREV_STR);
-  printf("Copyright 2019-2022 CompuPhase\nLicensed under the Apache License version 2.0\n");
+  printf("Copyright 2019-2023 CompuPhase\nLicensed under the Apache License version 2.0\n");
 }
 
 #if defined FORTIFY
@@ -202,6 +202,7 @@ typedef struct tagAPPSTATE {
   char mcu_family[64];          /**< detected MCU family (on attach), also the "driver" name of BMP */
   char mcu_architecture[32];    /**< detected ARM architecture (on attach) */
   unsigned long mcu_partid;     /**< specific ID code (0 if unknown) */
+  const char *monitor_cmds;     /**< list of "monitor" commands (target & probe dependent) */
   int reinitialize;             /**< whether to re-initialize the traceswo interface */
   int trace_status;             /**< status of traceswo */
   bool trace_running;           /**< whether tracing is running or paused */
@@ -411,6 +412,19 @@ static bool load_settings(const char *filename, APPSTATE *state,
   return true;
 }
 
+static void probe_set_options(APPSTATE *state)
+{
+  if (bmp_isopen()) {
+    char cmd[100];
+    if (bmp_expand_monitor_cmd(cmd, sizearray(cmd), "connect", state->monitor_cmds)) {
+      strlcat(cmd, " ", sizearray(cmd));
+      strlcat(cmd, state->connect_srst ? "enable" : "disable", sizearray(cmd));
+      if (!bmp_monitor(cmd))
+        bmp_callback(BMPERR_MONITORCMD, "Setting connect-with-reset option failed");
+    }
+  }
+}
+
 static void find_popup(struct nk_context *ctx, APPSTATE *state, float canvas_width, float canvas_height)
 {
   if (state->find_popup > 0) {
@@ -599,8 +613,7 @@ static void panel_options(struct nk_context *ctx, APPSTATE *state,
     nk_layout_row_push(ctx, LABEL_WIDTH);
     nk_label(ctx, "TSDL file", NK_TEXT_ALIGN_LEFT | NK_TEXT_ALIGN_MIDDLE);
     nk_layout_row_push(ctx, VALUE_WIDTH - BROWSEBTN_WIDTH - 5);
-    if (state->error_flags & ERROR_NO_TSDL)
-      nk_style_push_color(ctx,&ctx->style.edit.text_normal, COLOUR_FG_RED);
+    bool error = editctrl_cond_color(ctx, (state->error_flags & ERROR_NO_TSDL), COLOUR_BG_DARKRED);
     result = editctrl_tooltip(ctx, NK_EDIT_FIELD|NK_EDIT_SIG_ENTER,
                               state->TSDLfile, sizearray(state->TSDLfile), nk_filter_ascii,
                               "Metadata file for Common Trace Format (CTF)");
@@ -608,10 +621,10 @@ static void panel_options(struct nk_context *ctx, APPSTATE *state,
       state->clear_channels = true;
       state->reload_format = true;
     }
-    if (state->error_flags & ERROR_NO_TSDL)
-      nk_style_pop_color(ctx);
+    editctrl_reset_color(ctx, error);
     nk_layout_row_push(ctx, BROWSEBTN_WIDTH);
     if (nk_button_symbol(ctx, NK_SYMBOL_TRIPLE_DOT)) {
+      nk_input_clear_mousebuttons(ctx);
 #     if defined _WIN32
         const char *filter = "TSDL files\0*.tsdl;*.ctf\0All files\0*.*\0";
 #     else
@@ -631,17 +644,16 @@ static void panel_options(struct nk_context *ctx, APPSTATE *state,
     nk_layout_row_push(ctx, LABEL_WIDTH);
     nk_label(ctx, "ELF file", NK_TEXT_ALIGN_LEFT | NK_TEXT_ALIGN_MIDDLE);
     nk_layout_row_push(ctx, VALUE_WIDTH - BROWSEBTN_WIDTH - 5);
-    if (state->error_flags & ERROR_NO_ELF)
-      nk_style_push_color(ctx,&ctx->style.edit.text_normal, COLOUR_FG_RED);
+    error = editctrl_cond_color(ctx, (state->error_flags & ERROR_NO_ELF), COLOUR_BG_DARKRED);
     result = editctrl_tooltip(ctx, NK_EDIT_FIELD|NK_EDIT_SIG_ENTER,
                               state->ELFfile, sizearray(state->ELFfile), nk_filter_ascii,
                               "ELF file for symbol lookup");
     if (result & (NK_EDIT_COMMITED | NK_EDIT_DEACTIVATED))
       state->reload_format = true;
-    if (state->error_flags & ERROR_NO_ELF)
-      nk_style_pop_color(ctx);
+    editctrl_reset_color(ctx, error);
     nk_layout_row_push(ctx, BROWSEBTN_WIDTH);
     if (nk_button_symbol(ctx, NK_SYMBOL_TRIPLE_DOT)) {
+      nk_input_clear_mousebuttons(ctx);
 #     if defined _WIN32
         const char *filter = "ELF Executables\0*.elf;*.\0All files\0*.*\0";
 #     else
@@ -689,7 +701,7 @@ static void panel_status(struct nk_context *ctx, APPSTATE *state,
     nk_layout_row_push(ctx, LABEL_WIDTH(8));
     nk_label(ctx, "Overflow events", NK_TEXT_ALIGN_LEFT | NK_TEXT_ALIGN_MIDDLE);
     nk_layout_row_push(ctx, VALUE_WIDTH(8));
-    sprintf(valuestr, "%u", overflow);
+    sprintf(valuestr, "%d", overflow);
     label_tooltip(ctx, valuestr, NK_TEXT_ALIGN_LEFT | NK_TEXT_ALIGN_MIDDLE, "Overflow event count.\nLimit the number of displayed traces to avoid overflows.");
     nk_layout_row_end(ctx);
 
@@ -697,7 +709,7 @@ static void panel_status(struct nk_context *ctx, APPSTATE *state,
     nk_layout_row_push(ctx, LABEL_WIDTH(8));
     nk_label(ctx, "Packet errors", NK_TEXT_ALIGN_LEFT | NK_TEXT_ALIGN_MIDDLE);
     nk_layout_row_push(ctx, VALUE_WIDTH(8));
-    sprintf(valuestr, "%u", trace_getpacketerrors(false));
+    sprintf(valuestr, "%d", trace_getpacketerrors(false));
     label_tooltip(ctx, valuestr, NK_TEXT_ALIGN_LEFT | NK_TEXT_ALIGN_MIDDLE, "SWO packet errors.\nVerify 'Data size' setting.");
     nk_layout_row_end(ctx);
 
@@ -947,12 +959,15 @@ static void handle_stateaction(APPSTATE *state)
       if (bmp_comport() != NULL)
         bmp_break();
       result = bmp_connect(state->probe, (state->probe == state->netprobe) ? state->IPaddr : NULL);
-      if (result) /* bmp_connect() also opens the (virtual) serial port/device */
-        result = bmp_attach(2, state->connect_srst,
-                            state->mcu_family, sizearray(state->mcu_family),
+      if (result) { /* bmp_connect() also opens the (virtual) serial port/device */
+        if (state->monitor_cmds == NULL)
+          state->monitor_cmds = bmp_get_monitor_cmds();
+        probe_set_options(state);
+        result = bmp_attach(true, state->mcu_family, sizearray(state->mcu_family),
                             state->mcu_architecture, sizearray(state->mcu_architecture));
-      else
+      } else {
         state->trace_status = TRACESTAT_NO_CONNECT;
+      }
       if (result) {
         /* overrule any default protocol setting, if the debug probe can be
            verified */
@@ -1328,6 +1343,8 @@ int main(int argc, char *argv[])
   ini_puts("Settings", "size", valstr, txtConfigFile);
 
   clear_probelist(appstate.probelist, appstate.netprobe);
+  if (appstate.monitor_cmds != NULL)
+    free((void*)appstate.monitor_cmds);
   trace_close();
   guidriver_close();
   tracestring_clear();

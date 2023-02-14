@@ -4,7 +4,7 @@
  * The * input is a file in the Trace Stream Description Language (TDSL), the
  * primary specification language for CTF.
  *
- * Copyright 2019-2022 CompuPhase
+ * Copyright 2019-2023 CompuPhase
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -512,7 +512,7 @@ static void unknown_option(const char *option)
 static void version(int status)
 {
   printf("tracegen version %s.\n", SVNREV_STR);
-  printf("Copyright 2019-2022 CompuPhase\nLicensed under the Apache License version 2.0\n");
+  printf("Copyright 2019-2023 CompuPhase\nLicensed under the Apache License version 2.0\n");
   exit(status);
 }
 

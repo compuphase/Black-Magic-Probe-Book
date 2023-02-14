@@ -502,6 +502,8 @@ void guidriver_close(void)
   pointer_cleanup();
   nk_glfw3_shutdown();
   glfwTerminate();
+  if (UsbVid != 0)
+    libusb_exit(NULL);
 }
 
 /** guidriver_setfont() switches font between standard (proportional) and

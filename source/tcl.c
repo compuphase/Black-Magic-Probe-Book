@@ -1725,7 +1725,7 @@ static int tcl_cmd_clock(struct tcl *tcl, struct tcl_value *args, void *arg) {
   struct tcl_value *cmd = tcl_list_item(args, 1);
   if (SUBCMD(cmd, "seconds")) {
     char buffer[20];
-    sprintf(buffer, "%lu", (long)time(NULL));
+    sprintf(buffer, "%ld", (long)time(NULL));
     r = tcl_result(tcl, FNORMAL, tcl_value(buffer, strlen(buffer)));
   } else if (SUBCMD(cmd, "format")) {
     int argcount = tcl_list_length(args);

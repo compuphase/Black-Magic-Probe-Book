@@ -70,7 +70,7 @@ int noc_file_dialog_open(char *path, size_t pathsize,   /* output */
 
     if (default_path)
         gtk_file_chooser_set_filename(chooser, default_path);
-    if (default_name)
+    if (default_name && (flags & NOC_FILE_DIALOG_SAVE))
         gtk_file_chooser_set_current_name(chooser, default_name);
 
     while (filters && *filters) {
@@ -137,6 +137,8 @@ int noc_file_dialog_open(char *path, size_t pathsize,   /* output */
     ofn.nMaxFileTitle = 0;
     ofn.lpstrInitialDir = default_path;
     ofn.Flags = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST | OFN_NOCHANGEDIR;
+    if (flags & NOC_FILE_DIALOG_OVERWRITE_CONFIRMATION)
+        ofn.Flags |= OFN_OVERWRITEPROMPT;
     ofn.lpstrTitle = caption;
     if (parent != NULL)
         ofn.hwndOwner = *(HWND*)parent;

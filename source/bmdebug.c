@@ -17,7 +17,7 @@
  * limitations under the License.
  */
 
-#if defined _WIN32
+#if defined WIN32 || defined _WIN32
 # define STRICT
 # define WIN32_LEAN_AND_MEAN
 # define _WIN32_WINNT   0x0500 /* for AttachConsole() */
@@ -80,6 +80,7 @@
 #include "nuklear_style.h"
 #include "nuklear_splitter.h"
 #include "nuklear_tooltip.h"
+#include "pathsearch.h"
 #include "serialmon.h"
 #include "specialfolder.h"
 #include "svd-support.h"
@@ -2639,12 +2640,13 @@ static int ctf_findmetadata(const char *target, char *metadata, size_t metadata_
     if ((ptr = (char*)lastdirsep(metadata)) == NULL)
       ptr = metadata;
     if (strchr(ptr, '.') != NULL) {
-      /* there is a filename in the metadata parameter already */
+      /* there is a filename with extension in the metadata parameter already */
       strlcpy(basename, metadata, sizearray(basename));
     } else {
-      /* there is only a path in the metadata parameter */
+      /* there appears to be only a path in the metadata parameter */
       strlcpy(basename, metadata, sizearray(basename));
-      if (ptr == NULL || *(ptr + 1) != '\0') {
+      assert(ptr != NULL);
+      if (*(ptr + 1) != '\0') {
 #       if defined _WIN32
           strlcat(basename, "\\", sizearray(basename));
 #       else
@@ -2879,7 +2881,7 @@ int task_launch(const char *program, const char *options, TASK *task)
   return result;
 }
 
-int task_isrunning(TASK *task)
+bool task_isrunning(TASK *task)
 {
   DWORD dwExitCode;
 
@@ -2996,7 +2998,7 @@ typedef struct tagTASK {
   int pStdErr[2];
 } TASK;
 
-int task_isrunning(TASK *task);
+bool task_isrunning(TASK *task);
 
 void task_init(TASK *task)
 {
@@ -3042,7 +3044,7 @@ int task_launch(const char *program, const char *options, TASK *task)
   return task_isrunning(task);
 }
 
-int task_isrunning(TASK *task)
+bool task_isrunning(TASK *task)
 {
   int status;
   pid_t result;
@@ -3675,8 +3677,10 @@ enum {
   STATE_GDBVERSION,
   STATE_FILE,
   STATE_TARGET_EXT,
-  STATE_MON_VERSION,
+  STATE_PROBE_TYPE,
+  STATE_PROBE_CMDS,
   STATE_MON_TPWR,
+  STATE_CONNECT_SRST,
   STATE_MON_SCAN,
   STATE_ASYNC_MODE,
   STATE_ATTACH,
@@ -4060,7 +4064,7 @@ static bool handle_help_cmd(char *command, STRINGLIST *textroot, int *active,
     *reformat = nk_true;    /* by default, reformat (overruled for "help mon") */
     if (*cmdptr == '\0') {
       stringlist_append(textroot, "BMDebug is a GDB front-end, specifcally for embedded debugging with the Black Magic Probe.", 0);
-      stringlist_append(textroot, "Copyright 2019-2022 CompuPhase", 0);
+      stringlist_append(textroot, "Copyright 2019-2023 CompuPhase", 0);
       stringlist_append(textroot, "Licensed under the Apache License version 2.0", 0);
       stringlist_append(textroot, "", 0);
       stringlist_append(textroot, "Front-end topics.", 0);
@@ -5157,7 +5161,7 @@ static void version(void)
 # endif
 
   printf("BMDebug version %s.\n", SVNREV_STR);
-  printf("Copyright 2019-2022 CompuPhase\nLicensed under the Apache License version 2.0\n");
+  printf("Copyright 2019-2023 CompuPhase\nLicensed under the Apache License version 2.0\n");
 }
 
 #if defined FORTIFY
@@ -5222,8 +5226,9 @@ typedef struct tagAPPSTATE {
   char mcu_family[64];          /**< detected MCU family (on attach), also the "driver" name of BMP */
   char mcu_architecture[32];    /**< detected ARM architecture (on attach) */
   unsigned long mcu_partid;     /**< specific ID code (0 if unknown) */
+  const char *monitor_cmds;     /**< list of "monitor" commands (target & probe dependent) */
   char GDBpath[_MAX_PATH];      /**< path to GDB executable */
-  TASK task;                    /**< GDB task */
+  TASK gdb_task;                /**< GDB process */
   char *cmdline;                /**< command & response buffer (for GDB task) */
   char port_sermon[64];         /**< COM port name for serial monitor */
   int sermon_baud;              /**< serial monitor baud rate */
@@ -5234,7 +5239,7 @@ typedef struct tagAPPSTATE {
   nk_bool autodownload;         /**< option: download ELF file to target on changes */
   nk_bool force_download;       /**< temporary option: download ELF file */
   nk_bool allmsg;               /**< option: show all GDB output (instead of filtered) */
-  nk_bool atprompt;             /**< whether GDB has displayed the prompt (and waits for input) */
+  bool atprompt;                /**< whether GDB has displayed the prompt (and waits for input) */
   bool monitor_cmd_active;      /**< to silence output of scripts */
   bool monitor_cmd_finish;      /**< automatically set the command as handled when the monitor command completes */
   nk_bool waitidle;             /**< whether to yield while waiting for GUI input */
@@ -5338,14 +5343,14 @@ static void help_popup(struct nk_context *ctx, APPSTATE *state, float canvas_wid
           && !handle_info_cmd(state->help_edit, &helptext_root, &state->popup_active, &state->reformat_help, &state->swo))
       {
         strlcat(state->help_edit, "\n", sizearray(state->help_edit));
-        if (task_stdin(&state->task, state->help_edit))
+        if (task_stdin(&state->gdb_task, state->help_edit))
           gdbmi_sethandled(false); /* clear result on new input */
       }
       state->help_edit[0] = '\0';
     }
     if (nk_button_label(ctx, "Close") || nk_input_is_key_pressed(&ctx->input, NK_KEY_ESCAPE)) {
       state->popup_active = POPUP_NONE;
-      state->atprompt = nk_true;
+      state->atprompt = true;
       state->help_edit[0] = '\0';
       stringlist_clear(&helptext_root);
       nk_popup_close(ctx);
@@ -5388,7 +5393,7 @@ static void help_popup(struct nk_context *ctx, APPSTATE *state, float canvas_wid
     nk_popup_end(ctx);
   } else {
     state->popup_active = POPUP_NONE;
-    state->atprompt = nk_true;
+    state->atprompt = true;
   }
 }
 
@@ -5720,7 +5725,7 @@ static void console_view(struct nk_context *ctx, APPSTATE *state,
           /* translate any register names in the command */
           strcpy(translated, state->console_edit);
           svd_xlate_all_names(translated, sizearray(translated));
-          if (task_stdin(&state->task, translated))
+          if (task_stdin(&state->gdb_task, translated))
             console_input(state->console_edit);
         }
         /* check for a list of breakpoint commands, so that we can refresh
@@ -5854,7 +5859,7 @@ static void panel_configuration(struct nk_context *ctx, APPSTATE *state,
     }
 
     /* GDB */
-    char tooltip[_MAX_PATH];
+    char tiptext[_MAX_PATH];
     char basename[_MAX_PATH], *p;
     p = strrchr(state->GDBpath, DIRSEP_CHAR);
     strlcpy(basename,(p == NULL)? state->GDBpath : p + 1, sizearray(basename));
@@ -5862,22 +5867,25 @@ static void panel_configuration(struct nk_context *ctx, APPSTATE *state,
     nk_layout_row_push(ctx, LABEL_WIDTH);
     nk_label(ctx, "GDB", NK_TEXT_LEFT);
     nk_layout_row_push(ctx, edtwidth);
-    strlcpy(tooltip, (strlen(state->GDBpath) > 0) ? state->GDBpath : "Path to the GDB executable", sizearray(tooltip));
-    editctrl_tooltip(ctx, NK_EDIT_FIELD|NK_EDIT_READ_ONLY,
-                     basename, sizearray(basename), nk_filter_ascii, tooltip);
+    strlcpy(tiptext, (strlen(state->GDBpath) > 0) ? state->GDBpath : "Path to the GDB executable", sizearray(tiptext));
+    bool error = editctrl_cond_color(ctx, !task_isrunning(&state->gdb_task), COLOUR_BG_DARKRED);
+    int res = editctrl_tooltip(ctx, NK_EDIT_FIELD|NK_EDIT_READ_ONLY,
+                               basename, sizearray(basename), nk_filter_ascii, tiptext);
+    editctrl_reset_color(ctx, error);
     nk_layout_row_push(ctx, BROWSEBTN_WIDTH);
-    if (nk_button_symbol(ctx, NK_SYMBOL_TRIPLE_DOT)) {
+    if (nk_button_symbol(ctx, NK_SYMBOL_TRIPLE_DOT) || (res & NK_EDIT_BLOCKED)) {
+      nk_input_clear_mousebuttons(ctx);
 #     if defined _WIN32
         const char *filter = "Executables\0*.exe;*.\0All files\0*.*\0";
 #     else
         const char *filter = "Executables\0*\0All files\0*\0";
 #     endif
-      int res = noc_file_dialog_open(state->GDBpath, sizearray(state->GDBpath),
-                                     NOC_FILE_DIALOG_OPEN, filter,
-                                     NULL, state->GDBpath, "Select GDB program",
-                                     guidriver_apphandle());
+      res = noc_file_dialog_open(state->GDBpath, sizearray(state->GDBpath),
+                                 NOC_FILE_DIALOG_OPEN, filter,
+                                 NULL, state->GDBpath, "Select GDB program",
+                                 guidriver_apphandle());
       if (res) {
-        task_close(&state->task);  /* terminate running instance of GDB */
+        task_close(&state->gdb_task);  /* terminate running instance of GDB (if any) */
         RESETSTATE(state, STATE_INIT);
       }
     }
@@ -5890,23 +5898,26 @@ static void panel_configuration(struct nk_context *ctx, APPSTATE *state,
     nk_layout_row_push(ctx, LABEL_WIDTH);
     nk_label(ctx, "File", NK_TEXT_LEFT);
     nk_layout_row_push(ctx, edtwidth);
-    strlcpy(tooltip, (strlen(state->ELFfile) > 0) ? state->ELFfile : "Path to the target ELF file", sizearray(tooltip));
-    editctrl_tooltip(ctx, NK_EDIT_FIELD|NK_EDIT_READ_ONLY,
-                     basename, sizearray(basename), nk_filter_ascii, tooltip);
+    strlcpy(tiptext, (strlen(state->ELFfile) > 0) ? state->ELFfile : "Path to the target ELF file", sizearray(tiptext));
+    error = editctrl_cond_color(ctx, strlen(state->ELFfile) == 0 || access(state->ELFfile, 0) != 0, COLOUR_BG_DARKRED);
+    res = editctrl_tooltip(ctx, NK_EDIT_FIELD|NK_EDIT_READ_ONLY,
+                           basename, sizearray(basename), nk_filter_ascii, tiptext);
+    editctrl_reset_color(ctx, error);
     nk_layout_row_push(ctx, BROWSEBTN_WIDTH);
-    if (nk_button_symbol(ctx, NK_SYMBOL_TRIPLE_DOT)) {
+    if (nk_button_symbol(ctx, NK_SYMBOL_TRIPLE_DOT) || (res & NK_EDIT_BLOCKED)) {
+      nk_input_clear_mousebuttons(ctx);
       translate_path(state->ELFfile, 1);
 #     if defined _WIN32
         const char *filter = "ELF Executables\0*.elf;*.\0All files\0*.*\0";
 #     else
         const char *filter = "ELF Executables\0*.elf\0All files\0*\0";
 #     endif
-      int res = noc_file_dialog_open(state->ELFfile, sizearray(state->ELFfile),
-                                     NOC_FILE_DIALOG_OPEN, filter,
-                                     NULL, state->ELFfile, "Select ELF Executable",
-                                     guidriver_apphandle());
+      res = noc_file_dialog_open(state->ELFfile, sizearray(state->ELFfile),
+                                 NOC_FILE_DIALOG_OPEN, filter,
+                                 NULL, state->ELFfile, "Select ELF Executable",
+                                 guidriver_apphandle());
+      translate_path(state->ELFfile, 0);
       if (res) {
-        translate_path(state->ELFfile, 0);
         if (state->curstate > STATE_FILE)
           RESETSTATE(state, STATE_FILE);
       }
@@ -5918,11 +5929,11 @@ static void panel_configuration(struct nk_context *ctx, APPSTATE *state,
     nk_layout_row_push(ctx, LABEL_WIDTH);
     nk_label(ctx, "Entry point", NK_TEXT_LEFT);
     nk_layout_row_push(ctx, edtwidth + BROWSEBTN_WIDTH);
-    int result = editctrl_tooltip(ctx, NK_EDIT_FIELD|NK_EDIT_SIG_ENTER,
-                                  state->EntryPoint, sizearray(state->EntryPoint), nk_filter_ascii,
-                                  "The name of the entry point function (if not \"main\")");
+    res = editctrl_tooltip(ctx, NK_EDIT_FIELD|NK_EDIT_SIG_ENTER,
+                           state->EntryPoint, sizearray(state->EntryPoint), nk_filter_ascii,
+                           "The name of the entry point function (if not \"main\")");
     nk_layout_row_end(ctx);
-    if (result & NK_EDIT_ACTIVATED)
+    if (res & NK_EDIT_ACTIVATED)
       state->console_activate = 0;
 
     /* CMSIS SVD file */
@@ -5932,25 +5943,28 @@ static void panel_configuration(struct nk_context *ctx, APPSTATE *state,
     nk_layout_row_push(ctx, LABEL_WIDTH);
     nk_label(ctx, "SVD", NK_TEXT_LEFT);
     nk_layout_row_push(ctx, edtwidth);
-    strlcpy(tooltip, (strlen(state->SVDfile) > 0) ? state->SVDfile : "Path to an SVD file with the MCU description & registers", sizearray(tooltip));
-    editctrl_tooltip(ctx, NK_EDIT_FIELD|NK_EDIT_READ_ONLY,
-                     basename, sizearray(basename), nk_filter_ascii, tooltip);
+    strlcpy(tiptext, (strlen(state->SVDfile) > 0) ? state->SVDfile : "Path to an SVD file with the MCU description & registers", sizearray(tiptext));
+    error = editctrl_cond_color(ctx, strlen(state->SVDfile) > 0 && access(state->SVDfile, 0) != 0, COLOUR_BG_DARKRED);
+    res = editctrl_tooltip(ctx, NK_EDIT_FIELD|NK_EDIT_READ_ONLY,
+                     basename, sizearray(basename), nk_filter_ascii, tiptext);
+    editctrl_reset_color(ctx, error);
     nk_layout_row_push(ctx, BROWSEBTN_WIDTH);
-    if (nk_button_symbol(ctx, NK_SYMBOL_TRIPLE_DOT)) {
+    if (nk_button_symbol(ctx, NK_SYMBOL_TRIPLE_DOT) || (res & NK_EDIT_BLOCKED)) {
+      nk_input_clear_mousebuttons(ctx);
       translate_path(state->SVDfile, 1);
-      int res = noc_file_dialog_open(state->SVDfile, sizearray(state->SVDfile),
-                                     NOC_FILE_DIALOG_OPEN,
-                                     "CMSIS SVD files\0*.svd\0All files\0*.*\0",
-                                     NULL, state->SVDfile, "Select CMSIS SVD file",
-                                     guidriver_apphandle());
+      res = noc_file_dialog_open(state->SVDfile, sizearray(state->SVDfile),
+                                 NOC_FILE_DIALOG_OPEN,
+                                 "CMSIS SVD files\0*.svd\0All files\0*.*\0",
+                                 NULL, state->SVDfile, "Select CMSIS SVD file",
+                                 guidriver_apphandle());
       if (res) {
         if (state->curstate > STATE_GET_SOURCES) {
           svd_clear();
-          if (strlen(state->SVDfile) >0)
+          if (strlen(state->SVDfile) > 0)
             svd_load(state->SVDfile);
         }
-        translate_path(state->SVDfile, 0);
       }
+      translate_path(state->SVDfile, 0);
     }
     nk_layout_row_end(ctx);
 
@@ -5962,9 +5976,9 @@ static void panel_configuration(struct nk_context *ctx, APPSTATE *state,
     if (checkbox_tooltip(ctx, "Power Target (3.3V)", &state->tpwr, NK_TEXT_LEFT, "Let the debug probe provide power to the target")) {
       state->monitor_cmd_active = true;
       if (!state->tpwr)
-        task_stdin(&state->task, "monitor tpwr disable\n");
+        task_stdin(&state->gdb_task, "monitor tpwr disable\n");
       if (state->tpwr && state->curstate != STATE_MON_SCAN)
-        task_stdin(&state->task, "monitor tpwr enable\n");
+        task_stdin(&state->gdb_task, "monitor tpwr enable\n");
       if (state->curstate == STATE_MON_SCAN)
         RESETSTATE(state, STATE_MON_TPWR);
       else
@@ -5975,10 +5989,16 @@ static void panel_configuration(struct nk_context *ctx, APPSTATE *state,
     nk_layout_row_dynamic(ctx, ROW_HEIGHT, 1);
     if (checkbox_tooltip(ctx, "Reset target during connect", &state->connect_srst, NK_TEXT_LEFT, "Keep target MCU reset while debug probe attaches")) {
       state->monitor_cmd_active = true;
-      if (state->connect_srst)
-        task_stdin(&state->task, "monitor connect_srst enable\n");
+      char cmd[50];
+      if (state->monitor_cmds != NULL && strstr(state->monitor_cmds, "connect_srst") != NULL)
+        strcpy(cmd, "monitor connect_srst");
       else
-        task_stdin(&state->task, "monitor connect_srst disable\n");
+        strcpy(cmd, "monitor connect_rst");
+      if (state->connect_srst)
+        strcat(cmd, " enable\n");
+      else
+        strcat(cmd, " disable\n");
+      task_stdin(&state->gdb_task, cmd);
       RESETSTATE(state, STATE_MON_SCAN);
     }
 
@@ -6370,7 +6390,7 @@ static void panel_semihosting(struct nk_context *ctx, APPSTATE *state,
   /* highlight tab text if new content arrives and the tab is closed */
   bool highlight = !(*tab_state) && stringlist_count(&semihosting_root) != state->semihosting_lines;
   if (highlight)
-    nk_style_push_color(ctx,&ctx->style.tab.text, COLOUR_FG_YELLOW);
+    nk_style_push_color(ctx, &ctx->style.tab.text, COLOUR_FG_YELLOW);
   int result = nk_tree_state_push(ctx, NK_TREE_TAB, "Semihosting output", tab_state);
   if (highlight)
     nk_style_pop_color(ctx);
@@ -6394,7 +6414,7 @@ static void panel_serialmonitor(struct nk_context *ctx, APPSTATE *state,
   /* highlight tab text if new content arrives and the tab is closed */
   bool highlight = !(*tab_state) && sermon_countlines() != state->sermon_lines;
   if (highlight)
-    nk_style_push_color(ctx,&ctx->style.tab.text, COLOUR_FG_YELLOW);
+    nk_style_push_color(ctx, &ctx->style.tab.text, COLOUR_FG_YELLOW);
   int result = nk_tree_state_push(ctx, NK_TREE_TAB, "Serial console", tab_state);
   if (highlight)
     nk_style_pop_color(ctx);
@@ -6458,7 +6478,7 @@ static void panel_traceswo(struct nk_context *ctx, APPSTATE *state,
   /* highlight tab text if new content arrives and the tab is closed */
   bool highlight = !(*tab_state) && tracestring_count() != state->swo_lines;
   if (highlight)
-    nk_style_push_color(ctx,&ctx->style.tab.text, COLOUR_FG_YELLOW);
+    nk_style_push_color(ctx, &ctx->style.tab.text, COLOUR_FG_YELLOW);
   int result = nk_tree_state_push(ctx, NK_TREE_TAB, "SWO tracing", tab_state);
   if (highlight)
     nk_style_pop_color(ctx);
@@ -6535,30 +6555,33 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
     switch (state->curstate) {
     case STATE_INIT:
       /* kill GDB if it is running */
-      if (task_isrunning(&state->task))
-        task_close(&state->task);
+      if (task_isrunning(&state->gdb_task))
+        task_close(&state->gdb_task);
       RESETSTATE(state, STATE_GDB_TASK);
       state->refreshflags = 0;
       state->is_attached = nk_false;
-      state->atprompt = nk_false;
+      state->atprompt = false;
       state->cont_is_run = nk_false;
       break;
     case STATE_GDB_TASK:
-      if (task_launch(state->GDBpath, "--interpreter=mi2", &state->task)) {
+      assert(!task_isrunning(&state->gdb_task));
+      if (strlen(state->GDBpath) == 0 || access(state->GDBpath, 0) != 0) {
+#       if defined _WIN32
+          pathsearch(state->GDBpath, sizearray(state->GDBpath), "arm-none-eabi-gdb.exe");
+#       else
+          pathsearch(state->GDBpath, sizearray(state->GDBpath), "arm-none-eabi-gdb");
+#       endif
+      }
+      if (strlen(state->GDBpath) > 0 && task_launch(state->GDBpath, "--interpreter=mi2", &state->gdb_task)) {
         RESETSTATE(state, STATE_SCAN_BMP); /* GDB started, now find Black Magic Probe */
       } else {
-        /* dialog to select GDB */
-#       if defined _WIN32
-          const char *filter = "Executables\0*.exe\0All files\0*.*\0";
-#       else
-          const char *filter = "Executables\0*\0All files\0*\0";
-#       endif
-        int res = noc_file_dialog_open(state->GDBpath, sizearray(state->GDBpath),
-                                       NOC_FILE_DIALOG_OPEN, filter,
-                                       NULL, state->GDBpath, "Select GDB Executable",
-                                       guidriver_apphandle());
-        if (!res)
-          RESETSTATE(state, STATE_QUIT);  /* selection dialog was canceled, quit the front-end */
+        if (STATESWITCH(state)) {
+          if (strlen(state->GDBpath) == 0)
+            console_add("Path to GDB is not set, check the configuration\n", STRFLG_ERROR);
+          else
+            console_add("GDB failed to launch, check the configuration\n", STRFLG_ERROR);
+        }
+        set_idle_time(1000); /* repeat scan on timeout (but don't sleep the GUI thread) */
       }
       break;
     case STATE_SCAN_BMP:
@@ -6644,9 +6667,9 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
         /* load target filename in GDB */
         snprintf(state->cmdline, CMD_BUFSIZE, "-file-exec-and-symbols %s\n",
                  enquote(temp, state->ELFfile, sizeof(temp)));
-        if (task_stdin(&state->task, state->cmdline))
+        if (task_stdin(&state->gdb_task, state->cmdline))
           console_input(state->cmdline);
-        state->atprompt = nk_false;
+        state->atprompt = false;
         MARKSTATE(state);
       } else if (gdbmi_isresult() != NULL) {
         if (strncmp(gdbmi_isresult(), "done", 4) == 0) {
@@ -6695,13 +6718,13 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
         break;
       if (STATESWITCH(state)) {
         snprintf(state->cmdline, CMD_BUFSIZE, "-target-select extended-remote %s\n", state->port_gdb);
-        if (task_stdin(&state->task, state->cmdline))
+        if (task_stdin(&state->gdb_task, state->cmdline))
           console_input(state->cmdline);
-        state->atprompt = nk_false;
+        state->atprompt = false;
         MARKSTATE(state);
       } else if (gdbmi_isresult() != NULL) {
         if (strncmp(gdbmi_isresult(), "connected", 9) == 0) {
-          MOVESTATE(state, STATE_MON_VERSION);
+          MOVESTATE(state, STATE_PROBE_TYPE);
         } else {
           snprintf(state->cmdline, CMD_BUFSIZE, "Port %s busy or unavailable\n", state->port_gdb);
           console_add(state->cmdline, STRFLG_ERROR);
@@ -6713,14 +6736,14 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
         gdbmi_sethandled(false);
       }
       break;
-    case STATE_MON_VERSION:
+    case STATE_PROBE_TYPE:
       if (!state->atprompt)
         break;
       if (STATESWITCH(state)) {
         state->console_mark = stringlist_getlast(&consolestring_root, STRFLG_RESULT, 0);
         assert(state->console_mark != NULL);
-        task_stdin(&state->task, "monitor version\n");
-        state->atprompt = nk_false;
+        task_stdin(&state->gdb_task, "monitor version\n");
+        state->atprompt = false;
         MARKSTATE(state);
       } else if (gdbmi_isresult() != NULL) {
         if (strncmp(gdbmi_isresult(), "done", 4) == 0) {
@@ -6739,10 +6762,81 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
             else if (state->probe_type == PROBE_CTXLINK)
               state->swo.mode = SWOMODE_ASYNC;
           }
-          MOVESTATE(state, STATE_MON_TPWR);
+          MOVESTATE(state, STATE_PROBE_CMDS);
           state->console_mark = NULL;
         }
         gdbmi_sethandled(false);
+      }
+      break;
+    case STATE_PROBE_CMDS:
+      if (!state->atprompt)
+        break;
+      if (STATESWITCH(state)) {
+        state->console_mark = stringlist_getlast(&consolestring_root, STRFLG_RESULT, 0);
+        assert(state->console_mark != NULL);
+        task_stdin(&state->gdb_task, "monitor help\n");
+        state->atprompt = false;
+        if (state->monitor_cmds != NULL) {
+          free((void*)state->monitor_cmds);
+          state->monitor_cmds = NULL;
+        }
+        MARKSTATE(state);
+      } else if (gdbmi_isresult() != NULL) {
+        if (strncmp(gdbmi_isresult(), "done", 4) == 0) {
+#         define MONITOR_CMD_SIZE 512
+          char *cmdlist = malloc(MONITOR_CMD_SIZE*sizeof(char));
+          if (cmdlist != NULL) {
+            cmdlist[0] = '\0';
+            assert(state->console_mark != NULL && state->console_mark->text != NULL);
+            assert(state->console_mark->flags & STRFLG_RESULT);
+            state->console_mark = state->console_mark->next;  /* skip the mark */
+            while (state->console_mark != NULL && (state->console_mark->flags & STRFLG_RESULT) == 0) {
+              const char *tail = strstr(state->console_mark->text, "--");
+              if (tail != NULL) {
+                const char *head = skipwhite(state->console_mark->text);
+                while (tail > head && *(tail - 1) <= ' ')
+                  tail--;
+                size_t len = tail - head;
+                assert(len > 0);
+                char cmdname[40];
+                if (len > 0 && len < sizearray(cmdname)) {
+                  strncpy(cmdname, head, len);
+                  cmdname[len] = '\0';
+                  if (cmdlist[0] != '\0')
+                    strlcat(cmdlist, " ", MONITOR_CMD_SIZE);
+                  strlcat(cmdlist, cmdname, MONITOR_CMD_SIZE);
+                }
+              }
+              state->console_mark = state->console_mark->next;
+            }
+            state->monitor_cmds = cmdlist;
+          }
+          MOVESTATE(state, STATE_CONNECT_SRST);
+          state->console_mark = NULL;
+        }
+        gdbmi_sethandled(false);
+      }
+      break;
+    case STATE_CONNECT_SRST:
+      if (!state->connect_srst) {
+        MOVESTATE(state, STATE_MON_TPWR);
+      } else {
+        if (!state->atprompt)
+          break;
+        if (STATESWITCH(state)) {
+          char cmd[50];
+          if (state->monitor_cmds != NULL && strstr(state->monitor_cmds, "connect_srst") != NULL)
+            strcpy(cmd, "monitor connect_srst enable");
+          else
+            strcpy(cmd, "monitor connect_rst enable");
+          task_stdin(&state->gdb_task, cmd);
+          state->atprompt = false;
+          MARKSTATE(state);
+        } else if (gdbmi_isresult() != NULL) {
+          if (strncmp(gdbmi_isresult(), "done", 4) == 0)
+            MOVESTATE(state, STATE_MON_TPWR);
+          gdbmi_sethandled(false);
+        }
       }
       break;
     case STATE_MON_TPWR:
@@ -6752,8 +6846,8 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
         if (!state->atprompt)
           break;
         if (STATESWITCH(state)) {
-          task_stdin(&state->task, "monitor tpwr enable\n");
-          state->atprompt = nk_false;
+          task_stdin(&state->gdb_task, "monitor tpwr enable\n");
+          state->atprompt = false;
           MARKSTATE(state);
         } else if (gdbmi_isresult() != NULL) {
           if (strncmp(gdbmi_isresult(), "done", 4) == 0)
@@ -6768,8 +6862,8 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
       if (!state->atprompt)
         break;
       if (STATESWITCH(state)) {
-        task_stdin(&state->task, "monitor swdp_scan\n");
-        state->atprompt = nk_false;
+        task_stdin(&state->gdb_task, "monitor swdp_scan\n");
+        state->atprompt = false;
         MARKSTATE(state);
         state->mcu_family[0] = '\0';
         state->mcu_architecture[0] = '\0';
@@ -6817,9 +6911,9 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
         break;
       if (STATESWITCH(state)) {
         strcpy(state->cmdline, "-gdb-set target-async 1\n");
-        if (task_stdin(&state->task, state->cmdline))
+        if (task_stdin(&state->gdb_task, state->cmdline))
           console_input(state->cmdline);
-        state->atprompt = nk_false;
+        state->atprompt = false;
         MARKSTATE(state);
       } else if (gdbmi_isresult() != NULL) {
         MOVESTATE(state, STATE_ATTACH);
@@ -6833,15 +6927,15 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
           source_cursorline = line_addr2phys(source_execfile, exec_address);
         else
           source_cursorline = line_source2phys(source_execfile, source_execline);
-        state->atprompt = nk_true; /* in GDB 10, no prompt follows on error, so force it */
+        state->atprompt = true; /* in GDB 10, no prompt follows on error, so force it */
       }
       if (!state->atprompt)
         break;
       if (STATESWITCH(state)) {
         strcpy(state->cmdline, "-target-attach 1\n");
-        if (task_stdin(&state->task, state->cmdline))
+        if (task_stdin(&state->gdb_task, state->cmdline))
           console_input(state->cmdline);
-        state->atprompt = nk_false;
+        state->atprompt = false;
         MARKSTATE(state);
       } else if (gdbmi_isresult() != NULL) {
         if (strncmp(gdbmi_isresult(), "done", 4) == 0) {
@@ -6867,9 +6961,9 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
         /* also get the list of source files from GDB (it might use a different
            order of the file index numbers) */
         strcpy(state->cmdline, "-file-list-exec-source-files\n");
-        if (task_stdin(&state->task, state->cmdline))
+        if (task_stdin(&state->gdb_task, state->cmdline))
           console_input(state->cmdline);
-        state->atprompt = nk_false;
+        state->atprompt = false;
         MARKSTATE(state);
       } else if (gdbmi_isresult() != NULL) {
         if (strncmp(gdbmi_isresult(), "done,", 5) == 0) {
@@ -6892,8 +6986,8 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
       if (!state->atprompt)
         break;
       if (STATESWITCH(state)) {
-        task_stdin(&state->task, "set mem inaccessible-by-default off\n");
-        state->atprompt = nk_false;
+        task_stdin(&state->gdb_task, "set mem inaccessible-by-default off\n");
+        state->atprompt = false;
         MARKSTATE(state);
       } else if (gdbmi_isresult() != NULL) {
         /* GDB tends to "forget" this setting, so before running a script we
@@ -6910,8 +7004,8 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
       if (STATESWITCH(state)) {
         if (bmscript_line_fmt("memremap", state->cmdline, NULL, 0)) {
           /* run first line from the script */
-          task_stdin(&state->task, state->cmdline);
-          state->atprompt = nk_false;
+          task_stdin(&state->gdb_task, state->cmdline);
+          state->atprompt = false;
           MARKSTATE(state);
           console_replaceflags = STRFLG_LOG;  /* move LOG to SCRIPT, to hide script output by default */
           console_xlateflags = STRFLG_SCRIPT;
@@ -6922,8 +7016,8 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
         /* run next line from the script (on the end of the script, move to
            the next state) */
         if (bmscript_line_fmt(NULL, state->cmdline, NULL, 0)) {
-          task_stdin(&state->task, state->cmdline);
-          state->atprompt = nk_false;
+          task_stdin(&state->gdb_task, state->cmdline);
+          state->atprompt = false;
         } else {
           console_replaceflags = console_xlateflags = 0;
           MOVESTATE(state, STATE_PARTID);
@@ -6937,8 +7031,8 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
       if (STATESWITCH(state)) {
         if (bmscript_line_fmt("partid", state->cmdline, NULL, 0)) {
           /* run first line from the script */
-          task_stdin(&state->task, state->cmdline);
-          state->atprompt = nk_false;
+          task_stdin(&state->gdb_task, state->cmdline);
+          state->atprompt = false;
           MARKSTATE(state);
           console_replaceflags = STRFLG_LOG;  /* move LOG to SCRIPT, to hide script output by default */
           console_xlateflags = STRFLG_SCRIPT;
@@ -6949,8 +7043,8 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
         /* run next line from the script (on the end of the script, move to
            the next state) */
         if (bmscript_line_fmt(NULL, state->cmdline, NULL, 0)) {
-          task_stdin(&state->task, state->cmdline);
-          state->atprompt = nk_false;
+          task_stdin(&state->gdb_task, state->cmdline);
+          state->atprompt = false;
         } else {
           /* read the last response of the script, because it contains the ID */
           STRINGLIST *item = stringlist_getlast(&consolestring_root, 0, STRFLG_RESULT|STRFLG_HANDLED);
@@ -6976,8 +7070,8 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
         break;
       if (STATESWITCH(state)) {
         /* check whether the firmware CRC matches the file in GDB */
-        task_stdin(&state->task, "compare-sections\n");
-        state->atprompt = nk_false;
+        task_stdin(&state->gdb_task, "compare-sections\n");
+        state->atprompt = false;
         MARKSTATE(state);
       } else if (gdbmi_isresult() != NULL) {
         gdbmi_sethandled(false); /* first flag the result message as handled, to find the line preceding it */
@@ -7010,8 +7104,8 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
       if (!state->atprompt)
         break;
       if (STATESWITCH(state)) {
-        task_stdin(&state->task, "-target-download\n");
-        state->atprompt = nk_false;
+        task_stdin(&state->gdb_task, "-target-download\n");
+        state->atprompt = false;
         MARKSTATE(state);
         state->force_download = nk_false;
       } else if (gdbmi_isresult() != NULL) {
@@ -7041,8 +7135,8 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
         /* check whether the there is a function "main" */
         assert(strlen(state->EntryPoint) != 0);
         snprintf(state->cmdline, CMD_BUFSIZE, "info functions ^%s$\n", state->EntryPoint);
-        task_stdin(&state->task, state->cmdline);
-        state->atprompt = nk_false;
+        task_stdin(&state->gdb_task, state->cmdline);
+        state->atprompt = false;
         MARKSTATE(state);
       } else if (gdbmi_isresult() != NULL) {
         STRINGLIST *item;
@@ -7071,8 +7165,8 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
       if (STATESWITCH(state)) {
         assert(strlen(state->EntryPoint) != 0);
         snprintf(state->cmdline, CMD_BUFSIZE, "-break-insert -t %s\n", state->EntryPoint);
-        task_stdin(&state->task, state->cmdline);
-        state->atprompt = nk_false;
+        task_stdin(&state->gdb_task, state->cmdline);
+        state->atprompt = false;
         MARKSTATE(state);
       } else if (gdbmi_isresult() != NULL) {
         MOVESTATE(state, STATE_EXEC_CMD);
@@ -7116,8 +7210,8 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
           strcpy(state->cmdline, "-exec-finish\n");
           break;
         }
-        task_stdin(&state->task, state->cmdline);
-        state->atprompt = nk_false;
+        task_stdin(&state->gdb_task, state->cmdline);
+        state->atprompt = false;
         MARKSTATE(state);
       } else if (gdbmi_isresult() != NULL) {
         /* after "interrupt" command, still switch to state "running" so that
@@ -7133,11 +7227,17 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
         break;
       if (STATESWITCH(state)) {
         state->monitor_cmd_active = true;
-        if (state->tpwr)
-          task_stdin(&state->task, "monitor tpwr disable\n");  /* will be enabled before re-attach */
-        else
-          task_stdin(&state->task, "monitor hard_srst\n");
-        state->atprompt = nk_false;
+        if (state->tpwr) {
+          task_stdin(&state->gdb_task, "monitor tpwr disable\n");  /* will be enabled before re-attach */
+        } else {
+          char cmd[50];
+          if (state->monitor_cmds != NULL && strstr(state->monitor_cmds, "hard_srst") != NULL)
+            strcpy(cmd, "monitor hard_srst\n");
+          else
+            strcpy(cmd, "monitor reset\n");  /* "monitor hard_srst" is renamed to "monitor reset" in version 1.9 */
+          task_stdin(&state->gdb_task, cmd);
+        }
+        state->atprompt = false;
         MARKSTATE(state);
       } else if (gdbmi_isresult() != NULL) {
         MOVESTATE(state, STATE_INIT);  /* regardless of the result, we restart */
@@ -7199,8 +7299,8 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
       if (!state->atprompt)
         break;
       if (STATESWITCH(state)) {
-        task_stdin(&state->task, "-break-list\n");
-        state->atprompt = nk_false;
+        task_stdin(&state->gdb_task, "-break-list\n");
+        state->atprompt = false;
         MARKSTATE(state);
       } else if (gdbmi_isresult() != NULL) {
         const char *ptr = gdbmi_isresult();
@@ -7218,8 +7318,8 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
       if (!state->atprompt)
         break;
       if (STATESWITCH(state)) {
-        task_stdin(&state->task, "-stack-list-variables --skip-unavailable --all-values\n");
-        state->atprompt = nk_false;
+        task_stdin(&state->gdb_task, "-stack-list-variables --skip-unavailable --all-values\n");
+        state->atprompt = false;
         MARKSTATE(state);
       } else if (gdbmi_isresult() != NULL) {
         state->refreshflags &= ~REFRESH_LOCALS;
@@ -7232,8 +7332,8 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
       if (!state->atprompt)
         break;
       if (STATESWITCH(state)) {
-        task_stdin(&state->task, "-var-update --all-values *\n");
-        state->atprompt = nk_false;
+        task_stdin(&state->gdb_task, "-var-update --all-values *\n");
+        state->atprompt = false;
         MARKSTATE(state);
       } else if (gdbmi_isresult() != NULL) {
         state->refreshflags &= ~REFRESH_WATCHES;
@@ -7246,8 +7346,8 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
       if (!state->atprompt)
         break;
       if (STATESWITCH(state)) {
-        task_stdin(&state->task, "-data-list-register-values --skip-unavailable x\n");
-        state->atprompt = nk_false;
+        task_stdin(&state->gdb_task, "-data-list-register-values --skip-unavailable x\n");
+        state->atprompt = false;
         MARKSTATE(state);
       } else if (gdbmi_isresult() != NULL) {
         state->refreshflags &= ~REFRESH_REGISTERS;
@@ -7267,8 +7367,8 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
         assert(state->memdump.expr != NULL && strlen(state->memdump.expr) > 0);
         sprintf(state->cmdline, "-data-read-memory \"%s\" %c %d 1 %d\n",
                 state->memdump.expr, state->memdump.fmt, state->memdump.size, state->memdump.count);
-        task_stdin(&state->task, state->cmdline);
-        state->atprompt = nk_false;
+        task_stdin(&state->gdb_task, state->cmdline);
+        state->atprompt = false;
         MARKSTATE(state);
       } else if (gdbmi_isresult() != NULL) {
         if (memdump_parse(gdbmi_isresult(), &state->memdump)) {
@@ -7302,8 +7402,8 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
         default:
           assert(0);
         }
-        task_stdin(&state->task, state->cmdline);
-        state->atprompt = nk_false;
+        task_stdin(&state->gdb_task, state->cmdline);
+        state->atprompt = false;
         MARKSTATE(state);
       } else if (gdbmi_isresult() != NULL) {
         state->refreshflags |= REFRESH_BREAKPOINTS;
@@ -7330,8 +7430,8 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
         default:
           assert(0);
         }
-        task_stdin(&state->task, state->cmdline);
-        state->atprompt = nk_false;
+        task_stdin(&state->gdb_task, state->cmdline);
+        state->atprompt = false;
         MARKSTATE(state);
       } else if (gdbmi_isresult() != NULL) {
         const char *ptr = gdbmi_isresult();
@@ -7377,8 +7477,8 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
         }
         snprintf(state->cmdline, CMD_BUFSIZE, "-var-set-format watch%u %s\n",
                  (unsigned)state->stateparam[0], fmt);
-        task_stdin(&state->task, state->cmdline);
-        state->atprompt = nk_false;
+        task_stdin(&state->gdb_task, state->cmdline);
+        state->atprompt = false;
         MARKSTATE(state);
       } else if (gdbmi_isresult() != NULL) {
         /* GDB reply holds the new format for the watch -> update */
@@ -7417,8 +7517,8 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
           sprintf(state->cmdline, "monitor traceswo %u\n", state->swo.bitrate); /* automatically select async mode in the BMP */
         else
           strlcpy(state->cmdline, "monitor traceswo\n", CMD_BUFSIZE);
-        task_stdin(&state->task, state->cmdline);
-        state->atprompt = nk_false;
+        task_stdin(&state->gdb_task, state->cmdline);
+        state->atprompt = false;
         MARKSTATE(state);
       } else if (gdbmi_isresult() != NULL) {
         /* check the reply of "monitor traceswo" to get the endpoint */
@@ -7464,8 +7564,8 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
       if (STATESWITCH(state)) {
         if (bmscript_line_fmt("swo_device", state->cmdline, NULL, 0)) {
           /* run first line from the script */
-          task_stdin(&state->task, state->cmdline);
-          state->atprompt = nk_false;
+          task_stdin(&state->gdb_task, state->cmdline);
+          state->atprompt = false;
           MARKSTATE(state);
           console_replaceflags = STRFLG_LOG;  /* move LOG to SCRRIPT, to hide script output by default */
           console_xlateflags = STRFLG_SCRIPT;
@@ -7476,8 +7576,8 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
         /* run next line from the script (on the end of the script, move to
            the next state) */
         if (bmscript_line_fmt(NULL, state->cmdline, NULL, 0)) {
-          task_stdin(&state->task, state->cmdline);
-          state->atprompt = nk_false;
+          task_stdin(&state->gdb_task, state->cmdline);
+          state->atprompt = false;
         } else {
           console_replaceflags = console_xlateflags = 0;
           MOVESTATE(state, STATE_SWOGENERIC);
@@ -7502,8 +7602,8 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
         state->scriptparams[3] = (symbol != NULL) ? (unsigned long)symbol->data_addr : ~0;
         if (bmscript_line_fmt("swo_trace", state->cmdline, state->scriptparams, 4)) {
           /* run first line from the script */
-          task_stdin(&state->task, state->cmdline);
-          state->atprompt = nk_false;
+          task_stdin(&state->gdb_task, state->cmdline);
+          state->atprompt = false;
           MARKSTATE(state);
           console_replaceflags = STRFLG_LOG;  /* move LOG to SCRIPT, to hide script output by default */
           console_xlateflags = STRFLG_SCRIPT;
@@ -7514,8 +7614,8 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
         /* run next line from the script (on the end of the script, move to
            the next state) */
         if (bmscript_line_fmt(NULL, state->cmdline, state->scriptparams, 4)) {
-          task_stdin(&state->task, state->cmdline);
-          state->atprompt = nk_false;
+          task_stdin(&state->gdb_task, state->cmdline);
+          state->atprompt = false;
         } else {
           console_replaceflags = console_xlateflags = 0;
           MOVESTATE(state, STATE_SWOCHANNELS);
@@ -7540,8 +7640,8 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
         }
         if (bmscript_line_fmt("swo_channels", state->cmdline, state->scriptparams, 2)) {
           /* run first line from the script */
-          task_stdin(&state->task, state->cmdline);
-          state->atprompt = nk_false;
+          task_stdin(&state->gdb_task, state->cmdline);
+          state->atprompt = false;
           MARKSTATE(state);
           console_replaceflags = STRFLG_LOG;  /* move LOG to SCRRIPT, to hide script output by default */
           console_xlateflags = STRFLG_SCRIPT;
@@ -7552,8 +7652,8 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
         /* run next line from the script (on the end of the script, move to
            the next state) */
         if (bmscript_line_fmt(NULL, state->cmdline, state->scriptparams, 2)) {
-          task_stdin(&state->task, state->cmdline);
-          state->atprompt = nk_false;
+          task_stdin(&state->gdb_task, state->cmdline);
+          state->atprompt = false;
         } else {
           console_replaceflags = console_xlateflags = 0;
           bmscript_clearcache();
@@ -7577,8 +7677,8 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
           snprintf(state->cmdline, CMD_BUFSIZE, "-data-evaluate-expression %s\n", regalias);
         else
           snprintf(state->cmdline, CMD_BUFSIZE, "-data-evaluate-expression %s\n", state->statesymbol);
-        task_stdin(&state->task, state->cmdline);
-        state->atprompt = nk_false;
+        task_stdin(&state->gdb_task, state->cmdline);
+        state->atprompt = false;
         MARKSTATE(state);
         state->ttipvalue[0] = '\0';
       } else if (gdbmi_isresult() != NULL) {
@@ -7607,7 +7707,7 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
     } /* switch (curstate) */
   } /* if (!is_idle()) */
 
-  if (state->curstate > STATE_GDB_TASK && !task_isrunning(&state->task))
+  if (state->curstate > STATE_GDB_TASK && !task_isrunning(&state->gdb_task))
     RESETSTATE(state, STATE_QUIT);   /* GDB ended -> quit the front-end too */
 }
 
@@ -7641,11 +7741,7 @@ int main(int argc, char *argv[])
   char txtConfigFile[_MAX_PATH];
   get_configfile(txtConfigFile, sizearray(txtConfigFile), "bmdebug.ini");
 
-# if defined _WIN32
-    ini_gets("Settings", "gdb", "arm-none-eabi-gdb.exe", appstate.GDBpath, sizearray(appstate.GDBpath), txtConfigFile);
-# else
-    ini_gets("Settings", "gdb", "arm-none-eabi-gdb", appstate.GDBpath, sizearray(appstate.GDBpath), txtConfigFile);
-# endif
+  ini_gets("Settings", "gdb", "", appstate.GDBpath, sizearray(appstate.GDBpath), txtConfigFile);
   ini_gets("Settings", "size", "", valstr, sizearray(valstr), txtConfigFile);
   if (sscanf(valstr, "%d %d", &canvas_width, &canvas_height) != 2 || canvas_width < 100 || canvas_height < 50) {
     canvas_width = WINDOW_WIDTH;
@@ -7777,7 +7873,7 @@ int main(int argc, char *argv[])
   appstate.probelist = get_probelist(&appstate.probe, &appstate.netprobe);
   tcpip_init();
 
-  task_init(&appstate.task);
+  task_init(&appstate.gdb_task);
   memdump_init(&appstate.memdump);
   RESETSTATE(&appstate, STATE_INIT);
   console_hiddenflags = appstate.allmsg ? 0 : STRFLG_NOTICE | STRFLG_RESULT | STRFLG_EXEC | STRFLG_MI_INPUT | STRFLG_TARGET | STRFLG_SCRIPT;
@@ -7796,7 +7892,7 @@ int main(int argc, char *argv[])
     handle_stateaction(&appstate, tab_states);
 
     /* parse GDB output (stderr first, because the prompt is given in stdout) */
-    while (task_stderr(&appstate.task, appstate.cmdline, CMD_BUFSIZE) > 0) {
+    while (task_stderr(&appstate.gdb_task, appstate.cmdline, CMD_BUFSIZE) > 0) {
       int flag = STRFLG_ERROR;
       /* silence a meaningless error (downgrade it to "notice") */
       if (strstr(appstate.cmdline,"path for the index cache") != NULL)
@@ -7804,7 +7900,7 @@ int main(int argc, char *argv[])
       console_add(appstate.cmdline, flag);
       appstate.waitidle = nk_false;  /* output was added, so not idle */
     }
-    while (task_stdout(&appstate.task, appstate.cmdline, CMD_BUFSIZE) > 0) {
+    while (task_stdout(&appstate.gdb_task, appstate.cmdline, CMD_BUFSIZE) > 0) {
       int flags = 0;
       if (appstate.curstate < STATE_START)
         flags |= STRFLG_STARTUP;
@@ -7813,7 +7909,7 @@ int main(int argc, char *argv[])
       if (appstate.popup_active != POPUP_NONE)
         helptext_add(&helptext_root, appstate.cmdline, appstate.reformat_help);
       if (appstate.popup_active == POPUP_NONE && console_add(appstate.cmdline, flags)) {
-        appstate.atprompt = nk_true;
+        appstate.atprompt = true;
         appstate.console_activate = 1;
         if (appstate.monitor_cmd_active) {
           appstate.monitor_cmd_active = false;
@@ -7926,7 +8022,7 @@ int main(int argc, char *argv[])
     /* Draw */
     guidriver_render(COLOUR_BG0_S);
   }
-  exitcode = task_close(&appstate.task);
+  exitcode = task_close(&appstate.gdb_task);
 
   /* save parameter file */
   if (strlen(appstate.ELFfile) > 0 && access(appstate.ELFfile, 0) == 0)
@@ -7969,6 +8065,8 @@ int main(int argc, char *argv[])
   ini_putl("Settings", "probe", (appstate.probe == appstate.netprobe) ? 99 : appstate.probe, txtConfigFile);
 
   free(appstate.cmdline);
+  if (appstate.monitor_cmds != NULL)
+    free((void*)appstate.monitor_cmds);
   clear_probelist(appstate.probelist, appstate.netprobe);
   guidriver_close();
   stringlist_clear(&consolestring_root);

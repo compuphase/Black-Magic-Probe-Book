@@ -133,7 +133,7 @@ static void version(void)
 # endif
 
   printf("BMSerial version %s.\n", SVNREV_STR);
-  printf("Copyright 2022 CompuPhase\nLicensed under the Apache License version 2.0\n");
+  printf("Copyright 2022-2023 CompuPhase\nLicensed under the Apache License version 2.0\n");
 }
 
 #if defined FORTIFY
@@ -1011,8 +1011,8 @@ static int process_data(APPSTATE *state)
        and thus, any "normal" FF bytes are doubled. */
     for (int idx = 0; idx < count - 1; idx++) {
       if (buffer[idx] == 0xff) {
-        int remove = 2;
         if (buffer[idx + 1] == 0) {
+          int remove = 2;
           if (idx < count - 2 && buffer[idx + 2] == 0) {
             state->linestatus |= LINESTAT_BREAK;
             remove = 3;
@@ -1034,7 +1034,7 @@ static int process_data(APPSTATE *state)
   /* check whether the entirity of the block is ASCII */
   bool isascii = true;
   for (size_t idx = 0; isascii && idx < count; idx++)
-    if (buffer[idx] >= '\x80')
+    if (buffer[idx] >= 0x80)
       isascii = false;
 
   int flags = state->tcl_running ? DFLAG_APPEND : 0;
@@ -1161,8 +1161,6 @@ static void widget_monitor(struct nk_context *ctx, const char *id, APPSTATE *sta
 
   nk_style_push_color(ctx, &stwin->fixed_background.data.color, COLOUR_BG0);
   if (nk_group_begin(ctx, id, widget_flags)) {
-    static int scrollpos = 0;
-    static int prev_linecount = 0;
     float lineheight = 0.0;
     float vpwidth = 0.0;
     int cur_linecount = 0;
@@ -1221,6 +1219,8 @@ static void widget_monitor(struct nk_context *ctx, const char *id, APPSTATE *sta
     nk_group_end(ctx);
     /* calculate scrolling: if number of lines change, scroll to the last line */
     if (state->scrolltolast) {
+      static int prev_linecount = 0;
+      static int scrollpos = 0;
       int ypos = scrollpos;
       if (cur_linecount != prev_linecount) {
         prev_linecount = cur_linecount;

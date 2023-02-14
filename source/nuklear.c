@@ -10831,11 +10831,13 @@ nk_font_bake_pack(struct nk_font_baker *baker,
     }
     /* setup font baker from temporary memory */
     for (config_iter = config_list; config_iter; config_iter = config_iter->next) {
-        struct stbtt_fontinfo *font_info = &baker->build[i++].info;
         it = config_iter;
-        font_info->userdata = alloc;
-        do {if (!stbtt_InitFont(font_info, (const unsigned char*)it->ttf_blob, 0))
-            return nk_false;
+        do {
+            struct stbtt_fontinfo *font_info = &baker->build[i++].info;
+            font_info->userdata = alloc;
+
+            if (!stbtt_InitFont(font_info, (const unsigned char*)it->ttf_blob, stbtt_GetFontOffsetForIndex((const unsigned char*)it->ttf_blob, 0)))
+                return nk_false;
         } while ((it = it->n) != config_iter);
     }
     *height = 0;
@@ -12064,8 +12066,10 @@ nk_input_clear_mousebuttons(struct nk_context *ctx)
     NK_ASSERT(ctx);
     if (!ctx) return;
     in = &ctx->input;
-    for (i = 0; i < NK_BUTTON_MAX; ++i)
+    for (i = 0; i < NK_BUTTON_MAX; ++i) {
         in->mouse.buttons[i].clicked = 0;
+        in->mouse.buttons[i].down = nk_false;
+    }
 }
 NK_API void
 nk_input_motion(struct nk_context *ctx, int x, int y)
@@ -21328,14 +21332,19 @@ nk_do_edit(nk_flags *state, struct nk_command_buffer *out,
     prev_state = (char)edit->active;
     is_hovered = (char)nk_input_is_mouse_hovering_rect(in, bounds);
     if (in && in->mouse.buttons[NK_BUTTON_LEFT].clicked && in->mouse.buttons[NK_BUTTON_LEFT].down) {
-        edit->active = NK_INBOX(in->mouse.pos.x, in->mouse.pos.y,
-                                bounds.x, bounds.y, bounds.w, bounds.h);
+        edit->active = nk_false;
+        if (NK_INBOX(in->mouse.pos.x, in->mouse.pos.y, bounds.x, bounds.y, bounds.w, bounds.h)) {
+            if (flags & NK_EDIT_READ_ONLY)
+                ret |= NK_EDIT_BLOCKED;
+            else
+                edit->active = nk_true;
+        }
     }
 
     /* (de)activate text editor */
     if (!prev_state && edit->active) {
         const enum nk_text_edit_type type = (flags & NK_EDIT_MULTILINE) ?
-            NK_TEXT_EDIT_MULTI_LINE: NK_TEXT_EDIT_SINGLE_LINE;
+            NK_TEXT_EDIT_MULTI_LINE : NK_TEXT_EDIT_SINGLE_LINE;
         /* keep scroll position when re-activating edit widget */
         struct nk_vec2 oldscrollbar = edit->scrollbar;
         nk_textedit_clear_state(edit, type, filter);
@@ -21344,7 +21353,7 @@ nk_do_edit(nk_flags *state, struct nk_command_buffer *out,
             select_all = nk_true;
         if (flags & NK_EDIT_GOTO_END_ON_ACTIVATE) {
             edit->cursor = edit->string.len;
-            in = 0;
+            in = 0; /* ignore position of mouse click */
         }
     } else if (!edit->active) edit->mode = NK_TEXT_EDIT_MODE_VIEW;
     if (flags & NK_EDIT_READ_ONLY)
@@ -21352,12 +21361,12 @@ nk_do_edit(nk_flags *state, struct nk_command_buffer *out,
     else if (flags & NK_EDIT_ALWAYS_INSERT_MODE)
         edit->mode = NK_TEXT_EDIT_MODE_INSERT;
 
-    ret = (edit->active) ? NK_EDIT_ACTIVE: NK_EDIT_INACTIVE;
+    ret |= (edit->active) ? NK_EDIT_ACTIVE : NK_EDIT_INACTIVE;
     if (prev_state != edit->active)
         ret |= (edit->active) ? NK_EDIT_ACTIVATED: NK_EDIT_DEACTIVATED;
 
     /* handle user input */
-    if (edit->active && in)
+    if (edit->active && in && !(flags & NK_EDIT_READ_ONLY))
     {
         int shift_mod = in->keyboard.keys[NK_KEY_SHIFT].down;
         const float mouse_x = (in->mouse.pos.x - area.x) + edit->scrollbar.x;
@@ -21880,7 +21889,8 @@ nk_edit_string(struct nk_context *ctx, nk_flags flags,
         win->edit.mode = edit->mode;
         win->edit.scrollbar.x = (nk_uint)edit->scrollbar.x;
         win->edit.scrollbar.y = (nk_uint)edit->scrollbar.y;
-    } return state;
+    }
+    return state;
 }
 NK_API nk_flags
 nk_edit_buffer(struct nk_context *ctx, nk_flags flags,
@@ -21932,7 +21942,6 @@ nk_edit_buffer(struct nk_context *ctx, nk_flags flags,
 
     filter = (!filter) ? nk_filter_default: filter;
     prev_state = (unsigned char)edit->active;
-    in = (flags & NK_EDIT_READ_ONLY) ? 0: in;
     ret_flags = nk_do_edit(&ctx->last_widget_state, &win->buffer, bounds, flags,
                            filter, edit, &style->edit, in, style->font);
 

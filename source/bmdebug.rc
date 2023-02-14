@@ -2,7 +2,7 @@
  * GDB front-end with specific support for the Black Magic Probe.
  * This utility is built with Nuklear for a cross-platform GUI.
  *
- * Copyright 2019-2022 CompuPhase
+ * Copyright 2019-2023 CompuPhase
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -33,7 +33,7 @@ AppIcon ICON "res/icon_debug.ico"
 #define BUILD                SVNREV_NUM
 #define VERSIONSTR           SVNREV_STR
 #define VERSIONNAME          "bmdebug.exe\0"
-#define VERSIONDESCRIPTION   "GDB front-end\0"
+#define VERSIONDESCRIPTION   "BMDebug: GDB front-end\0"
 #define VERSIONCOMPANYNAME   "CompuPhase\0"
 #define VERSIONPRODUCTNAME   "bmdebug\0"
 #define VERSIONCOPYRIGHT     "Copyright \251 CompuPhase 2019-2022\0"
