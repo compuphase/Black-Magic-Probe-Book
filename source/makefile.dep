@@ -7,8 +7,8 @@ bmcommon.obj : bmcommon.h bmp-scan.h specialfolder.h
 bmdebug.obj : armdisasm.h bmcommon.h bmp-scan.h bmp-script.h demangle.h \
 	dwarf.h guidriver.h nuklear.h nuklear_config.h mcu-info.h memdump.h \
 	noc_file_dialog.h nuklear_mousepointer.h nuklear_style.h \
-	nuklear_splitter.h nuklear_tooltip.h minIni.h minGlue.h serialmon.h \
-	specialfolder.h svd-support.h tcpip.h parsetsdl.h decodectf.h \
+	nuklear_splitter.h nuklear_tooltip.h minIni.h minGlue.h pathsearch.h \
+	serialmon.h specialfolder.h svd-support.h tcpip.h parsetsdl.h decodectf.h \
 	swotrace.h
 bmflash.obj : guidriver.h nuklear.h nuklear_config.h noc_file_dialog.h \
 	nuklear_style.h nuklear_tooltip.h bmcommon.h bmp-scan.h bmp-script.h \
@@ -47,6 +47,7 @@ nuklear_splitter.obj : nuklear_splitter.h nuklear.h nuklear_config.h
 nuklear_style.obj : nuklear_style.h nuklear.h nuklear_config.h
 nuklear_tooltip.obj : nuklear_tooltip.h nuklear.h nuklear_config.h
 parsetsdl.obj : parsetsdl.h
+pathsearch.obj : pathsearch.h
 picoro.obj : c11threads.h
 rs232.obj : rs232.h
 serialmon.obj : bmp-scan.h guidriver.h nuklear.h nuklear_config.h \
@@ -66,8 +67,8 @@ bmcommon.o : bmcommon.h bmp-scan.h specialfolder.h
 bmdebug.o : armdisasm.h bmcommon.h bmp-scan.h bmp-script.h demangle.h \
 	dwarf.h elf.h guidriver.h nuklear.h nuklear_config.h mcu-info.h \
 	memdump.h minIni.h minGlue.h noc_file_dialog.h nuklear_mousepointer.h \
-	nuklear_style.h nuklear_splitter.h nuklear_tooltip.h serialmon.h \
-	specialfolder.h svd-support.h tcpip.h parsetsdl.h decodectf.h \
+	nuklear_style.h nuklear_splitter.h nuklear_tooltip.h pathsearch.h \
+	serialmon.h specialfolder.h svd-support.h tcpip.h parsetsdl.h decodectf.h \
 	swotrace.h res/icon_debug_64.h
 bmflash.o : guidriver.h nuklear.h nuklear_config.h noc_file_dialog.h \
 	nuklear_mousepointer.h nuklear_style.h nuklear_tooltip.h bmcommon.h \
@@ -115,6 +116,7 @@ nuklear_splitter.o : nuklear_splitter.h nuklear.h nuklear_config.h
 nuklear_style.o : nuklear_style.h nuklear.h nuklear_config.h
 nuklear_tooltip.o : nuklear_tooltip.h nuklear.h nuklear_config.h
 parsetsdl.o : parsetsdl.h
+pathsearch.o : pathsearch.h
 picoro.o : c11threads.h
 rs232.o : rs232.h
 serialmon.o : bmp-scan.h guidriver.h nuklear.h nuklear_config.h rs232.h \

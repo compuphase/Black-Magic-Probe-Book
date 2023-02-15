@@ -3679,8 +3679,8 @@ enum {
   STATE_TARGET_EXT,
   STATE_PROBE_TYPE,
   STATE_PROBE_CMDS,
-  STATE_MON_TPWR,
   STATE_CONNECT_SRST,
+  STATE_MON_TPWR,
   STATE_MON_SCAN,
   STATE_ASYNC_MODE,
   STATE_ATTACH,
@@ -5172,8 +5172,8 @@ static void version(void)
         freopen("CONOUT$", "wb", stdout);
         freopen("CONOUT$", "wb", stderr);
       }
-      printf("Fortify: [%d] %s\n", type, str);
 #   endif
+    printf("Fortify: [%d] %s\n", type, str);
   }
 #endif
 
@@ -5214,6 +5214,7 @@ typedef struct tagAPPSTATE {
   int curstate;                 /**< current (or new) state */
   int prevstate;                /**< previous state (to detect state changes) */
   int nextstate;                /**< on occasion, follow-up state depends on logic */
+  bool debugmode;               /**< for extra debug logging */
   unsigned long gdbversion;     /**< version of GDB, xx.yy.zzzz */
   int stateparam[3];            /**< parameters for state change */
   int refreshflags;             /**< flags for refresh of various views */
@@ -5306,11 +5307,18 @@ enum {
 
 #define CMD_BUFSIZE   2048
 
-#define RESETSTATE(app, state)  ((app)->prevstate = (app)->nextstate = -1, (app)->waitidle = nk_false, (app)->curstate = (state))
-#define MOVESTATE(app, state)   ((app)->waitidle = nk_false, (app)->curstate = (state))
+#define RESETSTATE(app, state)  ((app)->prevstate = (app)->nextstate = -1, (app)->waitidle = nk_false, (app)->curstate = (state), log_state(app))
+#define MOVESTATE(app, state)   ((app)->waitidle = nk_false, (app)->curstate = (state), log_state(app))
 #define STATESWITCH(app)        ((app)->curstate != (app)->prevstate)
 #define MARKSTATE(app)          ((app)->prevstate = (app)->curstate)
 
+
+static int log_state(const APPSTATE *state)
+{
+  if (state->debugmode)
+    printf("State: %d (moved from %d)\n", state->curstate, state->prevstate);
+  return state->curstate;
+}
 
 static void help_popup(struct nk_context *ctx, APPSTATE *state, float canvas_width, float canvas_height)
 {
@@ -7800,6 +7808,9 @@ int main(int argc, char *argv[])
       case 'h':
         usage(NULL);
         return EXIT_SUCCESS;
+      case 'd':
+        appstate.debugmode = true;
+        break;
       case 'f':
         ptr = &argv[idx][2];
         if (*ptr == '=' || *ptr == ':')
@@ -8072,6 +8083,7 @@ int main(int argc, char *argv[])
   stringlist_clear(&consolestring_root);
   stringlist_clear(&appstate.consoleedit_root);
   stringlist_clear(&semihosting_root);
+  tracelog_statusclear();
   breakpoint_clear();
   svd_clear();
   locals_clear();
@@ -8083,6 +8095,10 @@ int main(int argc, char *argv[])
   disasm_cleanup(&appstate.armstate);
   tcpip_cleanup();
   sermon_close();
+# if defined FORTIFY
+    Fortify_CheckAllMemory();
+    Fortify_ListAllMemory();
+# endif
   return exitcode;
 }
 
