@@ -666,15 +666,16 @@ static void console_growbuffer(size_t extra)
     while (extra >= console_bufsize)
       console_bufsize *= 2;
     console_buffer = (char*)malloc(console_bufsize * sizeof(char));
-    console_buffer[0] = '\0';
+    if (console_buffer != NULL)
+      console_buffer[0]= '\0';
   } else if (strlen(console_buffer) + extra >= console_bufsize) {
-    static char *newbuffer;
     console_bufsize *= 2;
     while (strlen(console_buffer) + extra >= console_bufsize)
       console_bufsize *= 2;
-    newbuffer = (char*)realloc(console_buffer, console_bufsize * sizeof(char));
-    if (newbuffer == NULL)
-      free((void*)console_buffer);
+    char *newbuffer = (char*)malloc(console_bufsize * sizeof(char));
+    if (newbuffer != NULL)
+      strcpy(newbuffer, console_buffer);
+    free((void*)console_buffer);
     console_buffer = newbuffer;
   }
   if (console_buffer == NULL) {
@@ -5243,10 +5244,11 @@ typedef struct tagAPPSTATE {
   bool atprompt;                /**< whether GDB has displayed the prompt (and waits for input) */
   bool monitor_cmd_active;      /**< to silence output of scripts */
   bool monitor_cmd_finish;      /**< automatically set the command as handled when the monitor command completes */
-  nk_bool waitidle;             /**< whether to yield while waiting for GUI input */
-  nk_bool is_attached;          /**< BMP is attached */
-  nk_bool cont_is_run;          /**< "cont" command must be interpreted as "run" command */
-  nk_bool warn_source_tstamps;  /**< whether warning must be given when source files are more recent than target */
+  bool waitidle;                /**< whether to yield while waiting for GUI input */
+  bool target_errmsg_set;       /**< whether error message for failure to connect was already given */
+  bool is_attached;             /**< BMP is attached */
+  bool cont_is_run;             /**< "cont" command must be interpreted as "run" command */
+  bool warn_source_tstamps;     /**< whether warning must be given when source files are more recent than target */
   unsigned watchseq;            /**< sequence number for watches */
   int console_activate;         /**< whether the edit line should get the focus (and whether to move the cursor to the end) */
   bool console_isactive;        /**< whether the console is currently active */
@@ -5307,8 +5309,8 @@ enum {
 
 #define CMD_BUFSIZE   2048
 
-#define RESETSTATE(app, state)  ((app)->prevstate = (app)->nextstate = -1, (app)->waitidle = nk_false, (app)->curstate = (state), log_state(app))
-#define MOVESTATE(app, state)   ((app)->waitidle = nk_false, (app)->curstate = (state), log_state(app))
+#define RESETSTATE(app, state)  ((app)->prevstate = (app)->nextstate = -1, (app)->waitidle = false, (app)->curstate = (state), log_state(app))
+#define MOVESTATE(app, state)   ((app)->waitidle = false, (app)->curstate = (state), log_state(app))
 #define STATESWITCH(app)        ((app)->curstate != (app)->prevstate)
 #define MARKSTATE(app)          ((app)->prevstate = (app)->curstate)
 
@@ -5318,6 +5320,15 @@ static int log_state(const APPSTATE *state)
   if (state->debugmode)
     printf("State: %d (moved from %d)\n", state->curstate, state->prevstate);
   return state->curstate;
+}
+
+static void log_console_strings(const APPSTATE *state)
+{
+  if (state->debugmode) {
+    printf("List:");
+    for (STRINGLIST *item = consolestring_root.next; item != NULL; item = item->next)
+      printf("\t%04x %s\n", item->flags, item->text);
+  }
 }
 
 static void help_popup(struct nk_context *ctx, APPSTATE *state, float canvas_width, float canvas_height)
@@ -6567,9 +6578,10 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
         task_close(&state->gdb_task);
       RESETSTATE(state, STATE_GDB_TASK);
       state->refreshflags = 0;
-      state->is_attached = nk_false;
+      state->is_attached = false;
       state->atprompt = false;
-      state->cont_is_run = nk_false;
+      state->cont_is_run = false;
+      state->target_errmsg_set = false;
       break;
     case STATE_GDB_TASK:
       assert(!task_isrunning(&state->gdb_task));
@@ -6577,7 +6589,8 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
 #       if defined _WIN32
           pathsearch(state->GDBpath, sizearray(state->GDBpath), "arm-none-eabi-gdb.exe");
 #       else
-          pathsearch(state->GDBpath, sizearray(state->GDBpath), "arm-none-eabi-gdb");
+          if (!pathsearch(state->GDBpath, sizearray(state->GDBpath), "arm-none-eabi-gdb"))
+            pathsearch(state->GDBpath, sizearray(state->GDBpath), "gdb-multiarch");
 #       endif
       }
       if (strlen(state->GDBpath) > 0 && task_launch(state->GDBpath, "--interpreter=mi2", &state->gdb_task)) {
@@ -6624,6 +6637,7 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
         }
         set_idle_time(1000); /* repeat scan on timeout (but don't sleep the GUI thread) */
       }
+      log_console_strings(state);
       gdbmi_sethandled(false);
       break;
     case STATE_GDBVERSION:
@@ -6656,6 +6670,7 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
           }
         }
         MOVESTATE(state, STATE_FILE);
+        log_console_strings(state);
         gdbmi_sethandled(true);
       }
       break;
@@ -6718,6 +6733,7 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
           }
           set_idle_time(1000); /* stay in file state */
         }
+        log_console_strings(state);
         gdbmi_sethandled(false);
       }
       break;
@@ -6732,15 +6748,23 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
         MARKSTATE(state);
       } else if (gdbmi_isresult() != NULL) {
         if (strncmp(gdbmi_isresult(), "connected", 9) == 0) {
+          state->target_errmsg_set = false;
           MOVESTATE(state, STATE_PROBE_TYPE);
         } else {
-          snprintf(state->cmdline, CMD_BUFSIZE, "Port %s busy or unavailable\n", state->port_gdb);
-          console_add(state->cmdline, STRFLG_ERROR);
+          if (!state->target_errmsg_set) {
+            if (strstr(state->cmdline, "Permission denied") != NULL)
+              snprintf(state->cmdline, CMD_BUFSIZE, "Port %s permission denied (check user/group permissions)\n", state->port_gdb);
+            else
+              snprintf(state->cmdline, CMD_BUFSIZE, "Port %s busy or unavailable\n", state->port_gdb);
+            console_add(state->cmdline, STRFLG_ERROR);
+            state->target_errmsg_set = true;
+          }
           if (get_bmp_count() > 0) {
             MOVESTATE(state, STATE_SCAN_BMP);
             set_idle_time(1000); /* drop back to scan (after on timeout) */
           }
         }
+        log_console_strings(state);
         gdbmi_sethandled(false);
       }
       break;
@@ -6773,6 +6797,7 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
           MOVESTATE(state, STATE_PROBE_CMDS);
           state->console_mark = NULL;
         }
+        log_console_strings(state);
         gdbmi_sethandled(false);
       }
       break;
@@ -6822,6 +6847,7 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
           MOVESTATE(state, STATE_CONNECT_SRST);
           state->console_mark = NULL;
         }
+        log_console_strings(state);
         gdbmi_sethandled(false);
       }
       break;
@@ -6947,7 +6973,7 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
         MARKSTATE(state);
       } else if (gdbmi_isresult() != NULL) {
         if (strncmp(gdbmi_isresult(), "done", 4) == 0) {
-          state->is_attached = nk_true;
+          state->is_attached = true;
           MOVESTATE(state, STATE_GET_SOURCES);
         } else {
           MOVESTATE(state, STATE_STOPPED);
@@ -7163,7 +7189,7 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
           else
             source_cursorline = line_source2phys(source_execfile, source_execline);
           MOVESTATE(state, STATE_STOPPED);  /* main() not found, stay stopped */
-          state->cont_is_run = nk_true;     /* but when "Cont" is pressed, "run" is performed */
+          state->cont_is_run = true;        /* but when "Cont" is pressed, "run" is performed */
         }
       }
       break;
@@ -7191,7 +7217,7 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
         case STATEPARAM_EXEC_CONTINUE:
           if (state->cont_is_run || state->stateparam[0] == STATEPARAM_EXEC_RESTART) {
             strcpy(state->cmdline, "-exec-run --start\n");
-            state->cont_is_run = nk_false;  /* do this only once */
+            state->cont_is_run = false;   /* do this only once */
           } else {
             strcpy(state->cmdline, "-exec-continue\n");
           }
@@ -7299,7 +7325,7 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
       }
       if (state->warn_source_tstamps) {
         console_add("Sources have more recent date/time stamps than the target\n", STRFLG_ERROR);
-        state->warn_source_tstamps = nk_false;  /* do it only once */
+        state->warn_source_tstamps = false;   /* do it only once */
       }
       state->ctrl_c_tstamp = 0; /* when execution stops, forget any Ctrl+C press */
       break;
@@ -7898,7 +7924,7 @@ int main(int argc, char *argv[])
   nuklear_style(ctx);
 
   while (appstate.curstate != STATE_QUIT) {
-    appstate.waitidle = nk_true;
+    appstate.waitidle = true;
     /* handle state */
     handle_stateaction(&appstate, tab_states);
 
@@ -7909,9 +7935,11 @@ int main(int argc, char *argv[])
       if (strstr(appstate.cmdline,"path for the index cache") != NULL)
         flag = STRFLG_NOTICE;
       console_add(appstate.cmdline, flag);
-      appstate.waitidle = nk_false;  /* output was added, so not idle */
+      appstate.waitidle = false;  /* output was added, so not idle */
     }
     while (task_stdout(&appstate.gdb_task, appstate.cmdline, CMD_BUFSIZE) > 0) {
+      if (appstate.debugmode)
+        printf("IN: %s\n", appstate.cmdline);
       int flags = 0;
       if (appstate.curstate < STATE_START)
         flags |= STRFLG_STARTUP;
@@ -7930,7 +7958,7 @@ int main(int argc, char *argv[])
           }
         }
       }
-      appstate.waitidle = nk_false;
+      appstate.waitidle = false;
     }
 
     /* handle user input */
