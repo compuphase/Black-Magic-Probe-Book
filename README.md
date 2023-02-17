@@ -1,6 +1,12 @@
 # Embedded Debugging with the Black Magic Probe
 <img src="https://github.com/compuphase/Black-Magic-Probe-Book/blob/master/doc/blackmagicprobe-book.jpg" alt="Book cover" width="400" align="right">
-This guide covers setting up and using the <a href="https://github.com/blackmagic-debug/blackmagic/">Black Magic Probe</a>. The Black Magic Probe is a low cost JTAG/SWD probe for ARM Cortex micro-controllers. A distinguishing feature of the Black Magic Probe is that it embeds a GDB server. As a result, the GNU Debugger can directly connect to the Black Magic Probe.
+This guide covers setting up and using the <a href="https://github.com/blackmagic-debug/blackmagic/">Black Magic Probe</a>. The Black Magic Probe is a low cost JTAG/SWD probe for ARM Cortex micro-controllers. A distinguishing feature of the Black Magic Probe is that it embeds a GDB server. As a result, the 
+    libbsd-dev
+    libfontconfig-dev
+    libgtk-3-dev
+    libusb-1.0-dev
+    glfw-3.3 (libglfw3-dev)
+GNU Debugger can directly connect to the Black Magic Probe.
 
 &nbsp;<br/>
 While setting up and using the Black Magic Probe has also been covered in wikis and blogs, I found that those description often only scratched the surface of the subject. With this guide, I set out to give a more comprehensive account. Over time, this guide has been updated to cover new firmware releases, as well as specific notes on [ctxLink](http://www.sidprice.com/ctxlink/), a derivative of the Black Magic Probe that offers a WiFi connection.
@@ -57,7 +63,7 @@ Prerequisites are
 * libbsd-dev
 * libfontconfig-dev
 * libgtk-3-dev
-* libusb-1.0-dev
+* libusb-1.0-0-dev
 * glfw-3.3 (libglfw3-dev)
 
 The development packages for these modules must be present. If you build glfw from source (as a static library), you can configure the path to the include files and the library in makefile.cfg. In particular, on some Linux distributions the library is called `glfw` rather than `glfw3`; in this case, create a `makefile.cfg` file in the same directory as `Makefile.linux` and add the following line to it:
