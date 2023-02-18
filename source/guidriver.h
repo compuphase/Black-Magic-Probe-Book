@@ -19,6 +19,7 @@
 #ifndef _GUIDRIVER_H
 #define _GUIDRIVER_H
 
+#include <stdbool.h>
 #include "nuklear.h"
 
 #define GUIDRV_RESIZEABLE 0x0001
@@ -49,9 +50,9 @@ enum {
 struct nk_context* guidriver_init(const char *caption, int width, int height, int flags,
                                   const char *fontstd, const char *fontmono, float fontsize);
 void  guidriver_close(void);
-int   guidriver_appsize(int *width, int *height);
+bool  guidriver_appsize(int *width, int *height);
 void  guidriver_render(struct nk_color clear);
-int   guidriver_poll(int waitidle);
+bool  guidriver_poll(bool waitidle);
 void *guidriver_apphandle(void);
 
 int   guidriver_setfont(struct nk_context *ctx, int type);

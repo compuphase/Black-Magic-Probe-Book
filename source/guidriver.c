@@ -54,7 +54,7 @@ static GdipFont *fontHeading1 = NULL;
 static GdipFont *fontHeading2 = NULL;
 static GdipFont *fontSmall = NULL;
 static HWND hwndApp = NULL;
-static int UsbEvent = 0;
+static volatile int UsbEvent = 0;
 static unsigned short UsbVid = 0, UsbPid = 0;
 
 static LRESULT CALLBACK WindowProc(HWND wnd, UINT msg, WPARAM wparam, LPARAM lparam)
@@ -317,7 +317,7 @@ int guidriver_setfont(struct nk_context *ctx, int type)
  *  application window. A program can use this to resize Nuklear windows to
  *  fit into the application window.
  */
-int guidriver_appsize(int *width, int *height)
+bool guidriver_appsize(int *width, int *height)
 {
   if (IsWindow(hwndApp)) {
     RECT rc;
@@ -325,9 +325,9 @@ int guidriver_appsize(int *width, int *height)
     assert(width != NULL && height != NULL);
     *width = rc.right - rc.left;
     *height = rc.bottom - rc. top;
-    return 1;
+    return true;
   }
-  return 0;
+  return false;
 }
 
 void guidriver_render(struct nk_color clear)
@@ -335,14 +335,14 @@ void guidriver_render(struct nk_color clear)
   nk_gdip_render(NK_ANTI_ALIASING_ON, clear);
 }
 
-int guidriver_poll(int waitidle)
+bool guidriver_poll(bool waitidle)
 {
   MSG msg;
 
   if (waitidle) {
     /* wait for an event, to avoid taking CPU load without anything to do */
     if (GetMessageW(&msg, NULL, 0, 0) <= 0)
-      return 0;
+      return false;
     TranslateMessage(&msg);
     DispatchMessageW(&msg);
   }
@@ -350,11 +350,11 @@ int guidriver_poll(int waitidle)
   /* so there was at least one event, handle all outstanding events */
   while (PeekMessageW(&msg, NULL, 0, 0, PM_REMOVE)) {
     if (msg.message == WM_QUIT)
-      return 0;
+      return false;
     TranslateMessage(&msg);
     DispatchMessageW(&msg);
   }
-  return 1;
+  return true;
 }
 
 int guidriver_monitor_usb(unsigned short vid, unsigned short pid)
@@ -396,7 +396,7 @@ static struct nk_font *fontMono = NULL;
 static struct nk_font *fontHeading1 = NULL;
 static struct nk_font *fontHeading2 = NULL;
 static struct nk_font *fontSmall = NULL;
-static int UsbEvent = 0;
+static volatile int UsbEvent = 0;
 static unsigned short UsbVid = 0, UsbPid = 0;
 
 static void error_callback(int e, const char *d)

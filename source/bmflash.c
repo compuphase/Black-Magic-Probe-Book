@@ -898,6 +898,7 @@ typedef struct tagAPPSTATE {
   int probe;                    /**< selected debug probe (index) */
   int netprobe;                 /**< index for the IP address (pseudo-probe) */
   const char **probelist;       /**< list of detected probes */
+  char mcufamily[32];           /**< name of the target driver */
   int architecture;             /**< MCU architecture (index) */
   const char *monitor_cmds;     /**< list of "monitor" commands (target & probe dependent) */
   bool set_probe_options;       /**< whether option in the debug probe must be set/updated */
@@ -1516,20 +1517,19 @@ static bool handle_stateaction(APPSTATE *state, enum nk_collapse_states tab_stat
       if (state->monitor_cmds == NULL)
         state->monitor_cmds = bmp_get_monitor_cmds();
       probe_set_options(state);
-      char mcufamily[32];
-      state->is_attached = bmp_attach(false, mcufamily, sizearray(mcufamily), NULL, 0);
+      state->is_attached = bmp_attach(false, state->mcufamily, sizearray(state->mcufamily), NULL, 0);
       if (state->is_attached) {
         /* check for particular architectures, try exact match first */
         int arch;
         for (arch = 0; arch < sizearray(architectures); arch++)
-          if (architecture_match(architectures[arch], mcufamily))
+          if (architecture_match(architectures[arch], state->mcufamily))
             break;
         if (arch >= sizearray(architectures)) {
           /* try prefix match */
           for (arch = 0; arch < sizearray(architectures); arch++) {
             int len = strlen(architectures[arch]);
             char pattern[32];
-            strcpy(pattern, mcufamily);
+            strcpy(pattern, state->mcufamily);
             pattern[len] = '\0';
             if (architecture_match(architectures[arch], pattern))
               break;
@@ -1744,12 +1744,24 @@ static bool handle_stateaction(APPSTATE *state, enum nk_collapse_states tab_stat
     bmp_progress_reset(0);
     if (bmp_connect(state->probe, (state->probe == state->netprobe) ? state->IPaddr : NULL)
         && probe_set_options(state)
-        && bmp_attach(false, NULL, 0, NULL, 0))
+        && bmp_attach(false, state->mcufamily, sizearray(state->mcufamily), NULL, 0))
     {
-      state->is_attached = 1;
-      result = bmp_monitor("option erase");
-      if (!result)
-        log_addstring("^1Failed to erase the option bytes\n");
+      state->is_attached = true;
+      /* get the monitor commands (again, now that the target is attached),
+         check that "option" is available */
+      if (state->monitor_cmds != NULL)
+        free((void*)state->monitor_cmds);
+      state->monitor_cmds = bmp_get_monitor_cmds();
+      if (bmp_expand_monitor_cmd(NULL, 0, "option", state->monitor_cmds)) {
+        result = bmp_monitor("option erase");
+        if (result)
+          log_addstring("^2Option bytes erased; power cycle is needed\n");
+        else
+          log_addstring("^1Failed to erase the option bytes\n");
+      } else {
+        char msg[100];
+        sprintf(msg, "^1Command not supported for target driver %s\n", state->mcufamily);
+      }
     }
     state->curstate = STATE_IDLE;
     waitidle = false;
@@ -1759,12 +1771,22 @@ static bool handle_stateaction(APPSTATE *state, enum nk_collapse_states tab_stat
     bmp_progress_reset(0);
     if (bmp_connect(state->probe, (state->probe == state->netprobe) ? state->IPaddr : NULL)
         && probe_set_options(state)
-        && bmp_attach(false, NULL, 0, NULL, 0))
+        && bmp_attach(false, state->mcufamily, sizearray(state->mcufamily), NULL, 0))
     {
-      state->is_attached = 1;
-      result = bmp_monitor("option option 0x1ffff800 0x00ff");
-      if (!result)
-        log_addstring("^1Failed to set the option byte for CRP\n");
+      state->is_attached = true;
+      if (state->monitor_cmds != NULL)
+        free((void*)state->monitor_cmds);
+      state->monitor_cmds = bmp_get_monitor_cmds();
+      if (bmp_expand_monitor_cmd(NULL, 0, "option", state->monitor_cmds)) {
+        result = bmp_monitor("option 0x1ffff800 0x00ff");
+        if (result)
+          log_addstring("^2Option bytes set; power cycle is needed\n");
+        else
+          log_addstring("^1Failed to set the option byte for CRP\n");
+      } else {
+        char msg[100];
+        sprintf(msg, "^1Command not supported for target driver %s\n", state->mcufamily);
+      }
     }
     state->curstate = STATE_IDLE;
     waitidle = false;
@@ -1776,7 +1798,7 @@ static bool handle_stateaction(APPSTATE *state, enum nk_collapse_states tab_stat
         && probe_set_options(state)
         && bmp_attach(false, NULL, 0, NULL, 0))
     {
-      state->is_attached = 1;
+      state->is_attached = true;
       if (state->architecture > 0)
         bmp_runscript("memremap", architectures[state->architecture], NULL, NULL, 0);
       bmp_fullerase();

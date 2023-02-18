@@ -61,7 +61,7 @@ typedef struct tagFLASHRGN {
   unsigned long size;
   unsigned int blocksize;
 } FLASHRGN;
-#define MAX_FLASHRGN  8
+#define MAX_FLASHRGN  16
 
 static HCOM *hCom = NULL;
 static int CurrentProbe = -1;
@@ -340,7 +340,7 @@ bool bmp_attach(bool autopower, char *name, size_t namelength, char *arch, size_
   }
 
 restart:
-  gdbrsp_xmit("qRcmd,swdp_scan", -1);
+  gdbrsp_xmit("qRcmd,swdp_scan", -1); /* causes a detach, if MCU was attached */
   for ( ;; ) {
     size = gdbrsp_recv(buffer, sizearray(buffer), 1000);
     if (size > 2 && buffer[0] == 'o') {
@@ -625,15 +625,22 @@ const char *bmp_get_monitor_cmds(void)
 }
 
 /** bmp_expand_monitor_cmd() finds the complete command from a prefix.
- *  \param buffer   [out] Will contain the complete command.
+ *
+ *  \param buffer   [out] Will contain the complete command. This parameter may
+ *                  be set to NULL (in which case the complete command is not
+ *                  stored).
  *  \param bufsize  The size of the output buffer.
  *  \param name     [in] The prefix to complete.
  *  \param list     [in] A string with all commands (separated by spaces).
+ *
  *  \return true on success, false if the prefix does not match any command.
+ *
+ *  \note This function can also be used to check whether a command is supported
+ *        on the target (parameters "buffer" and "bufsize" can be set to NULL
+ *        and zero respectively).
  */
 bool bmp_expand_monitor_cmd(char *buffer, size_t bufsize, const char *name, const char *list)
 {
-  assert(buffer != NULL && bufsize != 0);
   assert(name != NULL);
   assert(list != NULL);
   size_t name_len = strlen(name);
@@ -650,11 +657,12 @@ bool bmp_expand_monitor_cmd(char *buffer, size_t bufsize, const char *name, cons
     size_t token_len = tail - head;
     if (token_len >= name_len && strncmp(name, head, name_len) == 0) {
       /* match, copy the token */
-      assert(token_len < bufsize);
-      if (bufsize <= token_len)
-        token_len = bufsize - 1;
-      strncpy(buffer, head, token_len);
-      buffer[token_len] = '\0';
+      if (buffer != NULL && bufsize > 0) {
+        if (bufsize <= token_len)
+          token_len = bufsize - 1;
+        strncpy(buffer, head, token_len);
+        buffer[token_len] = '\0';
+      }
       return true;
     }
     head = tail;

@@ -69,8 +69,8 @@ LFLAGS_C  = $(L_DEBUG) /NOLOGO /SUBSYSTEM:console
 OBJLIST_BMDEBUG = bmdebug.obj armdisasm.obj bmcommon.obj bmp-scan.obj bmp-script.obj \
                   c11threads_win32.obj demangle.obj dirent.obj dwarf.obj elf.obj guidriver.obj mcu-info.obj memdump.obj \
                   minIni.obj nuklear_mousepointer.obj nuklear_splitter.obj nuklear_style.obj \
-                  nuklear_tooltip.obj rs232.obj serialmon.obj specialfolder.obj svd-support.obj \
-                  swotrace.obj tcpip.obj xmltractor.obj decodectf.obj parsetsdl.obj \
+                  nuklear_tooltip.obj pathsearch.obj rs232.obj serialmon.obj specialfolder.obj \
+                  svd-support.obj swotrace.obj tcpip.obj xmltractor.obj decodectf.obj parsetsdl.obj \
                   strlcpy.obj usb-support.obj \
                   nuklear.obj nuklear_gdip.obj noc_file_dialog.obj
 
@@ -194,6 +194,8 @@ nuklear_style.obj : nuklear_style.c
 nuklear_tooltip.obj : nuklear_tooltip.c
 
 parsetsdl.obj : parsetsdl.c
+
+pathsearch.obj : pathsearch.c
 
 rs232.obj : rs232.c
 

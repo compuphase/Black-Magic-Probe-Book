@@ -202,7 +202,7 @@ const char bmprofile_help[] = {
   "Black Magic Probe. It is a self-contained utility; it does not require GDB.\n"
   "\n"
   "---\n"
-  "Version 1.2.6877 \\\n"
+  "Version 1.2.6897 \\\n"
   "Copyright 2022 CompuPhase \\\n"
   "Licensed under the Apache License version 2.0\n"
   "\n"

@@ -263,6 +263,15 @@ static const char *skipwhite(const char *text)
   return text;
 }
 
+static char *striptrailing(char *text)
+{
+  assert(text != NULL);
+  char *ptr = text + strlen(text);
+  while (ptr > text && *(ptr - 1) <= ' ')
+    *--ptr = '\0'; /* strip trailing whitespace */
+  return text;
+}
+
 static int strtokenize(const char *token, int *length, char delimiter)
 {
   assert(token != NULL);
@@ -704,7 +713,6 @@ static bool console_add(const char *text, int flags)
 
   if (curflags != flags && console_buffer[0] != '\0') {
     int xtraflags;
-    char *tok;
     assert(curflags >= 0);
     ptr = gdbmi_leader(console_buffer, &xtraflags, NULL);
     if ((curflags & STRFLG_MON_OUT) != 0 && (xtraflags & STRFLG_TARGET) != 0)
@@ -712,8 +720,10 @@ static bool console_add(const char *text, int flags)
     if ((xtraflags & STRFLG_TARGET) != 0 && (curflags & STRFLG_STARTUP) == 0)
       semihosting_add(&semihosting_root, ptr, curflags | xtraflags);
     /* after gdbmi_leader(), there may again be '\n' characters in the resulting string */
-    for (tok = strtok((char*)ptr, "\n"); tok != NULL; tok = strtok(NULL, "\n"))
+    for (char *tok = strtok((char*)ptr, "\n"); tok != NULL; tok = strtok(NULL, "\n")) {
+      striptrailing(tok);
       stringlist_append(&consolestring_root, tok, curflags | xtraflags);
+    }
     console_buffer[0] = '\0';
   }
   curflags = flags;
@@ -754,7 +764,7 @@ static bool console_add(const char *text, int flags)
         /* after gdbmi_leader(), there may again be '\n' characters in the resulting string */
         if ((xtraflags & STRFLG_TARGET) != 0 && (curflags & STRFLG_STARTUP) == 0)
           semihosting_add(&semihosting_root, ptr, curflags | xtraflags);
-        const char *str = ptr;
+        char *str = (char*)ptr;
         while (str != NULL && *str != '\0') {
           char *eol = strchr(str, '\n');
           if (eol != NULL)
@@ -778,6 +788,7 @@ static bool console_add(const char *text, int flags)
                 last->flags = fullflags;
               }
             } else {
+              striptrailing(str);
               stringlist_append(&consolestring_root, str, fullflags);
             }
           }
@@ -5325,9 +5336,21 @@ static int log_state(const APPSTATE *state)
 static void log_console_strings(const APPSTATE *state)
 {
   if (state->debugmode) {
-    printf("List:");
-    for (STRINGLIST *item = consolestring_root.next; item != NULL; item = item->next)
-      printf("\t%04x %s\n", item->flags, item->text);
+    static int skip = 0;
+    STRINGLIST *item = consolestring_root.next;
+    int count = 0;
+    while (item != NULL && count < skip) {
+      item = item->next;
+      count++;
+    }
+    if (item != NULL) {
+      printf("List:");
+      while (item != NULL) {
+        printf("\t[%d] %04x %s\n", skip, item->flags, item->text);
+        item = item->next;
+        skip++;
+      }
+    }
   }
 }
 
@@ -5648,9 +5671,7 @@ static void console_view(struct nk_context *ctx, APPSTATE *state,
                                                   nk_filter_ascii);
       state->console_isactive = ((result & NK_EDIT_ACTIVE) != 0);
       if (result & NK_EDIT_COMMITED) {
-        char *ptr;
-        for (ptr = strchr(state->console_edit, '\0'); ptr > state->console_edit && *(ptr - 1) <= ' '; )
-          *--ptr = '\0'; /* strip trailing whitespace */
+        striptrailing(state->console_edit);
         /* some commands are handled internally (fully or partially) */
         if (handle_help_cmd(state->console_edit, &helptext_root, &state->popup_active, &state->reformat_help)) {
           /* nothing else to do */
@@ -6869,6 +6890,7 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
         } else if (gdbmi_isresult() != NULL) {
           if (strncmp(gdbmi_isresult(), "done", 4) == 0)
             MOVESTATE(state, STATE_MON_TPWR);
+          log_console_strings(state);
           gdbmi_sethandled(false);
         }
       }
@@ -6888,6 +6910,7 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
             MOVESTATE(state, STATE_MON_SCAN);
           else
             set_idle_time(500); /* stay in current state, TPWR may take a little time */
+          log_console_strings(state);
           gdbmi_sethandled(false);
         }
       }
@@ -6896,6 +6919,8 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
       if (!state->atprompt)
         break;
       if (STATESWITCH(state)) {
+        state->console_mark = stringlist_getlast(&consolestring_root, STRFLG_RESULT, 0);
+        assert(state->console_mark != NULL);
         task_stdin(&state->gdb_task, "monitor swdp_scan\n");
         state->atprompt = false;
         MARKSTATE(state);
@@ -6905,18 +6930,24 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
       } else if (gdbmi_isresult() != NULL) {
         if (strncmp(gdbmi_isresult(), "done", 4) == 0) {
           /* save architecture */
-          const char *ptr;
-          STRINGLIST *item = stringlist_getlast(&consolestring_root, 0, STRFLG_RESULT);
-          assert(item != NULL && item->text != NULL);
-          ptr = item->text;
-          while (*ptr <= ' ' && *ptr != '\0')
-            ptr++;
+          assert(state->console_mark != NULL && state->console_mark->text != NULL);
+          assert(state->console_mark->flags & STRFLG_RESULT);
+          STRINGLIST *item = state->console_mark->next;  /* skip the mark */
+          while (item != NULL && (item->flags & STRFLG_RESULT) == 0) {
+            const char *ptr = skipwhite(item->text);
+            if (isdigit(*ptr))
+              break;
+            item = item->next;
+          }
           /* expect: 1 STM32F10x medium density [M3/M4] */
-          if (isdigit(*ptr)) {
+          if (item != NULL && (item->flags & STRFLG_TARGET) != 0) {
+            assert(item->text != NULL);
+            const char *ptr = skipwhite(item->text);
             while (isdigit(*ptr))
               ptr++;
-            while (*ptr <= ' ' && *ptr != '\0')
-              ptr++;
+            ptr = skipwhite(ptr);
+            if (*ptr == '*')
+              ptr = skipwhite(ptr + 1);
             assert(*ptr != '\0');
             strlcpy(state->mcu_family, ptr, sizearray(state->mcu_family));
             /* split off architecture (if present) */
@@ -6926,7 +6957,10 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
               strlcpy(state->mcu_architecture, ptr, sizearray(state->mcu_architecture));
             }
           } else {
-            strlcpy(state->cmdline, ptr, CMD_BUFSIZE);
+            /* no targets found */
+            item = stringlist_getlast(&consolestring_root, 0, STRFLG_RESULT);
+            assert(item != NULL && item->text != NULL);
+            strlcpy(state->cmdline, skipwhite(item->text), CMD_BUFSIZE);
             strlcat(state->cmdline, "\n", CMD_BUFSIZE);
             console_add(state->cmdline, STRFLG_ERROR);
           }
@@ -6937,6 +6971,7 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
         } else {
           set_idle_time(500);   /* stay in scan state, wait for more data */
         }
+        log_console_strings(state);
         gdbmi_sethandled(false);
       }
       break;
@@ -6951,6 +6986,7 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
         MARKSTATE(state);
       } else if (gdbmi_isresult() != NULL) {
         MOVESTATE(state, STATE_ATTACH);
+        log_console_strings(state);
         gdbmi_sethandled(false);
       }
       break;
@@ -6978,6 +7014,7 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
         } else {
           MOVESTATE(state, STATE_STOPPED);
         }
+        log_console_strings(state);
         gdbmi_sethandled(false);
       }
       break;
@@ -7013,6 +7050,7 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
           }
           set_idle_time(1000); /* stay in attach state */
         }
+        log_console_strings(state);
         gdbmi_sethandled(false);
       }
       break;
@@ -7029,6 +7067,7 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
            script for the state */
         MOVESTATE(state, (state->nextstate > 0) ? state->nextstate : STATE_MEMACCESS_2);
         state->nextstate = -1;
+        log_console_strings(state);
         gdbmi_sethandled(false);
       }
       break;
@@ -7056,6 +7095,7 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
           console_replaceflags = console_xlateflags = 0;
           MOVESTATE(state, STATE_PARTID);
         }
+        log_console_strings(state);
         gdbmi_sethandled(false);
       }
       break;
@@ -7096,6 +7136,7 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
           console_replaceflags = console_xlateflags = 0;
           MOVESTATE(state, state->force_download ? STATE_DOWNLOAD : STATE_VERIFY);
         }
+        log_console_strings(state);
         gdbmi_sethandled(false);
       }
       break;
@@ -7128,6 +7169,7 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
         } else {
           MOVESTATE(state, STATE_CHECK_MAIN);
         }
+        log_console_strings(state);
       }
       break;
     case STATE_DOWNLOAD:
@@ -7145,6 +7187,7 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
       } else if (gdbmi_isresult() != NULL) {
         STRINGLIST *item = stringlist_getlast(&consolestring_root, STRFLG_RESULT, STRFLG_HANDLED);
         assert(item != NULL);
+        log_console_strings(state);
         gdbmi_sethandled(false);
         if (strncmp(item->text, "error", 5) == 0)
           item->flags = (item->flags & ~STRFLG_RESULT) | STRFLG_ERROR;
@@ -7191,6 +7234,7 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
           MOVESTATE(state, STATE_STOPPED);  /* main() not found, stay stopped */
           state->cont_is_run = true;        /* but when "Cont" is pressed, "run" is performed */
         }
+        log_console_strings(state);
       }
       break;
     case STATE_START:
@@ -7205,6 +7249,7 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
       } else if (gdbmi_isresult() != NULL) {
         MOVESTATE(state, STATE_EXEC_CMD);
         state->stateparam[0] = STATEPARAM_EXEC_RESTART;
+        log_console_strings(state);
         gdbmi_sethandled(false);
         if (sermon_isopen())
           sermon_clear(); /* erase any serial input that was received while starting up */
@@ -7253,6 +7298,7 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
         if ((state->stateparam[0] == STATEPARAM_EXEC_STOP && strncmp(gdbmi_isresult(), "done", 4) == 0)
             || strncmp(gdbmi_isresult(), "running", 7) == 0)
           MOVESTATE(state, STATE_RUNNING);
+        log_console_strings(state);
         gdbmi_sethandled(false);
       }
       break;
@@ -7277,6 +7323,7 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
         MOVESTATE(state, STATE_INIT);  /* regardless of the result, we restart */
         if (state->tpwr)
           set_idle_time(200);   /* make sure power is off for a minimum duration */
+        log_console_strings(state);
         gdbmi_sethandled(false);
       }
       break;
@@ -7304,6 +7351,7 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
       break;
     case STATE_STOPPED:
       if (STATESWITCH(state)) {
+        log_console_strings(state);
         gdbmi_sethandled(true);
         MARKSTATE(state);
       }
@@ -7337,6 +7385,7 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
         state->atprompt = false;
         MARKSTATE(state);
       } else if (gdbmi_isresult() != NULL) {
+        log_console_strings(state);
         const char *ptr = gdbmi_isresult();
         if (state->refreshflags & IGNORE_DOUBLE_DONE && strncmp(ptr, "done", 4) == 0 && ptr[4] != ',') {
           state->refreshflags &= ~IGNORE_DOUBLE_DONE;
@@ -7359,6 +7408,7 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
         state->refreshflags &= ~REFRESH_LOCALS;
         MOVESTATE(state, STATE_STOPPED);
         locals_update(gdbmi_isresult());
+        log_console_strings(state);
         gdbmi_sethandled(false);
       }
       break;
@@ -7373,6 +7423,7 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
         state->refreshflags &= ~REFRESH_WATCHES;
         MOVESTATE(state, STATE_STOPPED);
         watch_update(gdbmi_isresult());
+        log_console_strings(state);
         gdbmi_sethandled(false);
       }
       break;
@@ -7387,6 +7438,7 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
         state->refreshflags &= ~REFRESH_REGISTERS;
         MOVESTATE(state, STATE_STOPPED);
         registers_update(gdbmi_isresult());
+        log_console_strings(state);
         gdbmi_sethandled(false);
       }
       break;
@@ -7405,6 +7457,7 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
         state->atprompt = false;
         MARKSTATE(state);
       } else if (gdbmi_isresult() != NULL) {
+        log_console_strings(state);
         if (memdump_parse(gdbmi_isresult(), &state->memdump)) {
           state->refreshflags &= ~REFRESH_MEMORY;
           MOVESTATE(state, STATE_STOPPED);
@@ -7442,6 +7495,7 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
       } else if (gdbmi_isresult() != NULL) {
         state->refreshflags |= REFRESH_BREAKPOINTS;
         MOVESTATE(state, STATE_STOPPED);
+        log_console_strings(state);
         gdbmi_sethandled(false);
       }
       break;
@@ -7487,6 +7541,7 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
           state->refreshflags |= REFRESH_WATCHES;
         }
         MOVESTATE(state, next_state);
+        log_console_strings(state);
         gdbmi_sethandled(false);
       }
       break;
@@ -7518,6 +7573,7 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
         /* GDB reply holds the new format for the watch -> update */
         watch_update_format((unsigned)state->stateparam[0], gdbmi_isresult());
         MOVESTATE(state, STATE_STOPPED);
+        log_console_strings(state);
         gdbmi_sethandled(false);
       }
       break;
@@ -7585,6 +7641,7 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
            that follows this is the one to run the SWO script */
         state->nextstate = STATE_SWODEVICE;
         MOVESTATE(state, STATE_MEMACCESS_1);
+        log_console_strings(state);
         gdbmi_sethandled(false);
       }
       break;
@@ -7616,6 +7673,7 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
           console_replaceflags = console_xlateflags = 0;
           MOVESTATE(state, STATE_SWOGENERIC);
         }
+        log_console_strings(state);
         gdbmi_sethandled(false);
       }
       break;
@@ -7654,6 +7712,7 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
           console_replaceflags = console_xlateflags = 0;
           MOVESTATE(state, STATE_SWOCHANNELS);
         }
+        log_console_strings(state);
         gdbmi_sethandled(false);
       }
       break;
@@ -7693,6 +7752,7 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
           bmscript_clearcache();
           MOVESTATE(state, STATE_STOPPED);
         }
+        log_console_strings(state);
         gdbmi_sethandled(false);
       }
       break;
@@ -7735,6 +7795,7 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
           format_value(state->ttipvalue, sizearray(state->ttipvalue));
         }
         MOVESTATE(state, STATE_STOPPED);
+        log_console_strings(state);
         gdbmi_sethandled(false);
       }
       break;
