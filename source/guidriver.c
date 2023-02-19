@@ -549,10 +549,10 @@ int guidriver_setfont(struct nk_context *ctx, int type)
   return prev;
 }
 
-int guidriver_appsize(int *width, int *height)
+bool guidriver_appsize(int *width, int *height)
 {
   glfwGetWindowSize(winApp, width, height);
-  return 1;
+  return true;
 }
 
 void guidriver_render(struct nk_color clear)
@@ -571,14 +571,14 @@ void guidriver_render(struct nk_color clear)
   glfwSwapBuffers(winApp);
 }
 
-int guidriver_poll(int waitidle)
+bool guidriver_poll(bool waitidle)
 {
   (void)waitidle;
   if (glfwWindowShouldClose(winApp))
-    return 0;
+    return false;
   glfwPollEvents();
   nk_glfw3_new_frame();
-  return 1;
+  return true;
 }
 
 static int hotplug_callback(libusb_context *ctx, libusb_device *device,
