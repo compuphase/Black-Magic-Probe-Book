@@ -25,6 +25,8 @@
 
 #if defined __POCC__
 # include <stdlib.h>
+#elif defined __MINGW32__ || defined __MINGW64__
+# include <malloc.h>
 #else
 # include <alloca.h>
 #endif

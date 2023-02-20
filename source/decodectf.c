@@ -17,7 +17,11 @@
  * limitations under the License.
  */
 
-#include <alloca.h>
+#if defined __MINGW32__ || defined __MINGW64__
+# include <malloc.h>
+#else
+# include <alloca.h>
+#endif
 #include <assert.h>
 #include <stdbool.h>
 #include <stdio.h>
