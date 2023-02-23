@@ -4,10 +4,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <fontconfig/fontconfig.h>
-#if defined __MINGW32__ || defined __MINGW64__
-# include <sys/stat.h>
-# include "strlcpy.h"
-#endif
 #if defined __linux__
   #include <bsd/string.h>
 #endif
