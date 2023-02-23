@@ -28,6 +28,7 @@
 # include <io.h>
 # include <malloc.h>
 # if defined __MINGW32__ || defined __MINGW64__
+#   include <sys/stat.h>
 #   include "strlcpy.h"
 # elif defined _MSC_VER
 #   include "strlcpy.h"

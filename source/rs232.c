@@ -521,7 +521,7 @@ int rs232_collect(char **portlist, int listsize)
         char name[128],value[128];
         DWORD sz_name=sizearray(name);
         DWORD sz_value=sizearray(value);
-        if (RegEnumValue(hkey,count,name,&sz_name,NULL,NULL,value,&sz_value)!=ERROR_SUCCESS)
+        if (RegEnumValue(hkey,count,name,&sz_name,NULL,NULL,(unsigned char*)value,&sz_value)!=ERROR_SUCCESS)
           break;
         if (count<listsize) {
           assert(portlist!=NULL);

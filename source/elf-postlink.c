@@ -88,7 +88,7 @@ int main(int argc, char *argv[])
     idx_file = 1;
   }
 
-  result=elf_patch_vecttable(fp, argv[idx_type], &chksum);
+  result = elf_patch_vecttable(fp, argv[idx_type], &chksum);
   fclose(fp);
   switch (result) {
   case ELFERR_NONE:

@@ -23,7 +23,7 @@
 #include <string.h>
 #include "demangle.h"
 
-#if defined __POCC__
+#if defined __POCC__ || defined __MINGW32__ || defined __MINGW64__
 # include <stdlib.h>
 #else
 # include <alloca.h>

@@ -17,7 +17,6 @@
  * limitations under the License.
  */
 
-#include <alloca.h>
 #include <assert.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -29,6 +28,8 @@
 # include <bsd/string.h>
 #elif defined __MINGW32__ || defined __MINGW64__ || defined _MSC_VER
 # include "strlcpy.h"
+#else
+# include <alloca.h>
 #endif
 #if defined _MSC_VER
 # define strdup(s)   _strdup(s)
