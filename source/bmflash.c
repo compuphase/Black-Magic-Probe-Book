@@ -837,7 +837,7 @@ static bool rspreply_semihosting(char *packet)
     unsigned addr;
     sscanf(packet + 13, "%x", &addr);
     char buffer[100];
-    sprintf(buffer, "X%08X,%lX:", addr, sizeof(fio_timeval));
+    sprintf(buffer, "X%08X,%lX:", addr, (unsigned long)sizeof(fio_timeval));
     size_t offs = strlen(buffer);
     memcpy(buffer + offs, &fio_timeval, sizeof(fio_timeval));
     gdbrsp_xmit(buffer, offs + sizeof(fio_timeval));
@@ -1974,8 +1974,9 @@ int main(int argc, char *argv[])
           log_widget(ctx, "status", logtext, opt_fontsize, &loglines);
 
           nk_layout_row_dynamic(ctx, ROW_HEIGHT*0.4, 1);
-          nk_size progress, progress_range;
-          bmp_progress_get(&progress, &progress_range);
+          unsigned long progress_pos, progress_range;
+          bmp_progress_get(&progress_pos, &progress_range);
+          nk_size progress = progress_pos;
           nk_progress(ctx, &progress, progress_range, NK_FIXED);
 
           nk_tree_state_pop(ctx);

@@ -81,6 +81,7 @@ static int baudrate = 0;
 static int bmp_seqnr = -1;
 static char tdsl_metadata[_MAX_PATH];
 static thrd_t serial_thread;
+static bool serial_thread_valid = false;
 
 
 static void sermon_addstring(const unsigned char *buffer, size_t length)
@@ -192,7 +193,7 @@ bool sermon_open(const char *port, int baud)
 {
   char defaultport[64];
 
-  if (serial_thread) {
+  if (serial_thread_valid) {
     assert(rs232_isopen(hCom));
     return true;  /* double initialization */
   }
@@ -221,6 +222,7 @@ bool sermon_open(const char *port, int baud)
     hCom = rs232_close(hCom);
     return false;
   }
+  serial_thread_valid = true;
 
   rs232_flush(hCom);
 # if defined WIN32 || defined _WIN32
@@ -240,7 +242,10 @@ void sermon_close(void)
   if (hCom != NULL) {
     hCom = rs232_close(hCom);
   }
-  thrd_join(serial_thread, NULL);
+  if (serial_thread_valid) {
+    thrd_join(serial_thread, NULL);
+    serial_thread_valid = false;
+  }
   sermon_clear();
 }
 

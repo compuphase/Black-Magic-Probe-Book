@@ -94,7 +94,7 @@ OBJLIST_BMSERIAL = bmserial.obj guidriver.obj minIni.obj rs232.obj \
                    specialfolder.obj noc_file_dialog.obj \
                    nuklear_guide.obj nuklear_mousepointer.obj nuklear_splitter.obj \
                    nuklear_style.obj nuklear_tooltip.obj tcl.obj \
-                   findfont.obj lodepng.obj nuklear.obj nuklear_gdip.obj
+                   strlcpy.obj lodepng.obj nuklear.obj nuklear_gdip.obj
 
 OBJLIST_BMTRACE = bmtrace.obj bmcommon.obj bmp-scan.obj bmp-script.obj bmp-support.obj \
                   c11threads_win32.obj crc32.obj demangle.obj dwarf.obj elf.obj gdb-rsp.obj guidriver.obj mcu-info.obj \
@@ -104,10 +104,11 @@ OBJLIST_BMTRACE = bmtrace.obj bmcommon.obj bmp-scan.obj bmp-script.obj bmp-suppo
                   strlcpy.obj usb-support.obj \
                   nuklear.obj nuklear_gdip.obj noc_file_dialog.obj
 
-OBJLIST_BMSCAN = bmscan.obj bmp-scan.obj bmp-script.obj bmp-support.obj crc32.obj elf.obj \
-                 gdb-rsp.obj c11threads_win32.obj rs232.obj specialfolder.obj tcpip.obj xmltractor.obj \
+OBJLIST_BMSCAN = bmscan.obj bmp-scan.obj bmp-script.obj bmp-support.obj c11threads_win32.obj \
+                 crc32.obj elf.obj gdb-rsp.obj rs232.obj specialfolder.obj strlcpy.obj tcpip.obj \
+                 xmltractor.obj
 
-OBJLIST_CALLTREE = calltree.obj
+OBJLIST_CALLTREE = calltree.obj strlcpy.obj
 
 OBJLIST_POSTLINK = elf-postlink.obj elf.obj strlcpy.obj
 

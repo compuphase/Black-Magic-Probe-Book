@@ -17,11 +17,6 @@
  * limitations under the License.
  */
 
-#if defined __MINGW32__ || defined __MINGW64__
-# include <malloc.h>
-#else
-# include <alloca.h>
-#endif
 #include <assert.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -32,7 +27,10 @@
 #if defined __linux__
 # include <bsd/string.h>
 #elif defined __MINGW32__ || defined __MINGW64__ || defined _MSC_VER
+# include <malloc.h>
 # include "strlcpy.h"
+#else
+# include <alloca.h>
 #endif
 #if defined _MSC_VER
 # define strdup(s)   _strdup(s)

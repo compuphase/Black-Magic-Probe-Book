@@ -1249,17 +1249,18 @@ typedef struct tagSOURCELINE {
 } SOURCELINE;
 
 typedef struct tagSOURCEFILE {
-  char *basename;
-  char *path;
-  SOURCELINE root; /* base of text lines */
+  struct tagSOURCEFILE *next;
+  int *srcindex;          /* list of GDB file indices that map to this source file */
+  unsigned srccount, srcsize;
+  char *basename;         /* filename excluding path */
+  char *path;             /* full path to the source file */
+  SOURCELINE root;        /* root of text lines */
   time_t timestamp;
 } SOURCEFILE;
 
 static ELF_SYMBOL *elf_symbols = NULL;
 static int elf_symbol_count = 0;
-static SOURCEFILE *sources = NULL;
-static unsigned sources_size = 0;   /* size of the sources array (max. files that the array can contain) */
-static unsigned sources_count = 0;  /* number of entries in the sources array */
+static SOURCEFILE sources_root = { NULL };
 
 /** sourceline_append() adds a string to the tail of the list. */
 static SOURCELINE *sourceline_append(SOURCELINE *root, const char *text,
@@ -1337,19 +1338,34 @@ static void sourcefile_load(FILE *fp, SOURCELINE *root)
   }
 }
 
+static SOURCEFILE *source_fromindex(int srcindex)
+{
+  for (SOURCEFILE *src = sources_root.next; src != NULL; src = src->next)
+    for (unsigned idx = 0; idx < src->srccount; idx++)
+      if (src->srcindex[idx] == srcindex)
+        return src;
+  return NULL;
+}
+
+static bool source_isvalid(int srcindex)
+{
+  return (source_fromindex(srcindex) != NULL);
+}
+
 static int source_linecount(int srcindex)
 {
   int count = 0;
-  SOURCELINE *item;
-  if (srcindex >= 0 && srcindex < sources_count)
-    for (item = sources[srcindex].root.next; item != NULL; item = item->next)
+  SOURCEFILE *src = source_fromindex(srcindex);
+  if (src != NULL)
+    for (SOURCELINE *item = src->root.next; item != NULL; item = item->next)
       count++;
   return count;
 }
 
 static SOURCELINE *source_firstline(int srcindex)
 {
-  return (srcindex >= 0 && srcindex < sources_count) ? sources[srcindex].root.next : NULL;
+  SOURCEFILE *src = source_fromindex(srcindex);
+  return (src != NULL) ? src->root.next : NULL;
 }
 
 static bool disasm_callback(uint32_t address, const char *text, void *user)
@@ -1506,113 +1522,112 @@ static bool sourcefile_disassemble(const char *path, const SOURCEFILE *source, A
 }
 
 /** sources_add() adds a source file unless it already exists in the list.
+ *  \param srcindex   GDB file index;
  *  \param filename   The base name of the source file (including extension but
  *                    excluding the path).
- *  \param filepath   The (full or partial) path to the file. This parameter
- *                    may be NULL (in which case the path is assumed the same
- *                    as the base name).
+ *  \param filepath   The (full or partial) path to the file (already in
+ *                    OS-specific format). This parameter may be NULL (in which
+ *                    case the path is assumed the same as the base name).
  */
-static void sources_add(const char *filename, const char *filepath)
+static void sources_add(int srcindex, const char *filename, const char *filepath)
 {
-  assert((sources == NULL && sources_size == 0) || (sources != NULL && sources_size > 0));
   assert(filename != NULL);
 
   /* check whether the source already exists */
-  if (sources != NULL) {
-    unsigned idx;
-    for (idx = 0; idx < sources_count; idx++) {
-      if (strcmp(sources[idx].basename, filename)== 0) {
-        const char *p1 = (sources[idx].path != NULL) ? sources[idx].path : "";
-        const char *p2 = (filepath != NULL) ? filepath : "";
-        if (strcmp(p1, p2) == 0)
-          return; /* both base name and full path are the same -> do not add duplicate */
+  for (SOURCEFILE *src = sources_root.next; src != NULL; src = src->next) {
+    if (strcmp(src->basename, filename) == 0) {
+      const char *p1 = (src->path != NULL) ? src->path : "";
+      const char *p2 = (filepath != NULL) ? filepath : "";
+      if (strcmp(p1, p2) == 0) {
+        /* both base name and full path are the same -> do not add duplicate,
+           but add the index */
+        assert(src->srcindex != NULL);
+        if (src->srccount >= src->srcsize) {
+          /* grow list */
+          unsigned newsize = 2 * src->srcsize;
+          int *newindex = malloc(newsize * sizeof(int));
+          if (newindex != NULL) {
+            memcpy(newindex, src->srcindex, src->srccount * sizeof(int));
+            free((void*)src->srcindex);
+            src->srcindex = newindex;
+            src->srcsize = newsize;
+          }
+        }
+        if (src->srccount < src->srcsize) {
+          src->srcindex[src->srccount] = srcindex;
+          src->srccount += 1;
+        }
+        return;
       }
     }
   }
 
-  /* add the source, first grow the lists if needed */
-  if (sources_size == 0) {
-    assert(sources_count == 0);
-    sources_size = 16;
-    sources = (SOURCEFILE*)malloc(sources_size * sizeof(SOURCEFILE));
-  } else if (sources_count >= sources_size) {
-    SOURCEFILE *newsources;
-    sources_size *= 2;
-    newsources = (SOURCEFILE*)realloc(sources, sources_size * sizeof(SOURCEFILE));
-    if (newsources == NULL)
-      free((void*)sources);
-    sources = newsources;
-  }
-  if (sources == NULL) {
+  /* create new entry */
+  SOURCEFILE *newsrc = malloc(sizeof(SOURCEFILE));
+  if (newsrc == NULL) {
     fprintf(stderr, "Memory allocation error.\n");
     exit(EXIT_FAILURE);
   }
+  memset(newsrc, 0, sizeof(SOURCEFILE));
   assert(filename != NULL && strlen(filename) > 0);
-  sources[sources_count].basename = strdup(filename);
-  sources[sources_count].path = (filepath != NULL && strlen(filepath) > 0) ? strdup(filepath) : NULL;
-  memset(&sources[sources_count].root, 0, sizeof(STRINGLIST));
-  sources[sources_count].timestamp = 0;
-
-  if (sources[sources_count].path != NULL) {
-    /* load the source file */
-    FILE *fp = fopen(sources[sources_count].path, "rt");
-    if (fp != NULL) {
-      sourcefile_load(fp, &sources[sources_count].root);
-      fclose(fp);
-      /* get it's timestamp too */
-      sources[sources_count].timestamp = file_timestamp(sources[sources_count].path);
-    }
+  newsrc->basename = strdup(filename);
+  newsrc->path = (filepath != NULL && strlen(filepath) > 0) ? strdup(filepath) : NULL;
+  newsrc->srcsize = 1;
+  newsrc->srccount = 1;
+  newsrc->srcindex = malloc(newsrc->srcsize * sizeof(int));
+  if (newsrc->basename == NULL || newsrc->srcindex == NULL) {
+    fprintf(stderr, "Memory allocation error.\n");
+    exit(EXIT_FAILURE);
   }
+  newsrc->srcindex[0] = srcindex;
 
-  sources_count += 1;
+  /* add to list*/
+  SOURCEFILE *tail = &sources_root;
+  while (tail->next != NULL)
+    tail = tail->next;
+  tail->next = newsrc;
+
+  /* load the source file */
+  const char *path = (newsrc->path != NULL) ? newsrc->path : newsrc->basename;
+  FILE *fp = fopen(path, "rt");
+  if (fp != NULL) {
+    sourcefile_load(fp, &newsrc->root);
+    fclose(fp);
+    /* get it's timestamp too */
+    newsrc->timestamp = file_timestamp(path);
+  }
 }
 
-/** sources_clear() removes all files from the sources lists, and optionally
- *  removes these lists too.
- *  \param freelist   0 -> clear only files; 1 -> free lists fully.
+/** sources_clear() removes all source files from the sources lists, and
+ *  optionally removes these lists too.
+ *  \param free_sym   Whether to also clear the symbols.
  */
-static void sources_clear(int freelists)
+static void sources_clear(bool free_sym)
 {
-  if (sources_size == 0) {
-    assert(sources_count == 0);
-    assert(sources == NULL);
-    return;
+  while (sources_root.next != NULL) {
+    SOURCEFILE *src = sources_root.next;
+    sources_root.next = src->next;
+    assert(src->basename != NULL);
+    free((void*)src->basename);
+    if (src->path != NULL)
+      free((void*)src->path);
+    assert(src->srcindex != NULL);
+    free((void*)src->srcindex);
+    sourceline_clear(&src->root);
   }
 
-  for (unsigned idx = 0; idx < sources_count; idx++) {
-    assert(sources[idx].basename != NULL);
-    free((void*)sources[idx].basename);
-    sources[idx].basename = NULL;
-    if (sources[idx].path != NULL) {
-      free((void*)sources[idx].path);
-      sources[idx].path = NULL;
-    }
-    sourceline_clear(&sources[idx].root);
-    memset(&sources[idx].root, 0, sizeof(STRINGLIST));
-  }
-  sources_count = 0;
-
-  if (freelists) {
-    assert(sources != NULL);
-    free((void*)sources);
-    sources = NULL;
-    sources_size = 0;
-
-    if (elf_symbols != NULL) {
-      assert(elf_symbol_count > 0);
-      elf_clear_symbols(elf_symbols, elf_symbol_count);
-      free((void*)elf_symbols);
-      elf_symbols = NULL;
-      elf_symbol_count = 0;
-    }
+  if (free_sym && elf_symbols != NULL) {
+    assert(elf_symbol_count > 0);
+    elf_clear_symbols(elf_symbols, elf_symbol_count);
+    free((void*)elf_symbols);
+    elf_symbols = NULL;
+    elf_symbol_count = 0;
   }
 }
 
 static void sources_parse(const char *gdbresult)
 {
-  const char *head, *basename;
-
-  head = gdbresult;
+  const char *head = gdbresult;
   if (*head == '^')
     head++;
   if (strncmp(head, "done", 4) == 0)
@@ -1622,6 +1637,7 @@ static void sources_parse(const char *gdbresult)
   if (strncmp(head, "files=", 6) != 0)
     return;
 
+  int fileidx = 0;
   assert(head[6] == '[');
   head += 7;  /* skip [ too */
   while (*head != ']') {
@@ -1664,9 +1680,11 @@ static void sources_parse(const char *gdbresult)
     }
     if (strlen(path) == 0)
       strcpy(path, name);
+    const char *basename;
     for (basename = name + strlen(name) - 1; basename > name && *(basename -1 ) != '/' && *(basename -1 ) != '\\'; basename--)
       {}
-    sources_add(basename, path);
+    sources_add(fileidx, basename, path);
+    fileidx++;
     head = sep + 1;
     assert(*head == ',' || *head == ']');
     if (*head == ',')
@@ -1689,16 +1707,24 @@ static time_t file_timestamp(const char *path)
   return tstamp;
 }
 
-/** sources_ischanged() checks the timestamps of the entries in the sources list
- *  and returns the count files that were changed.
- */
-static int sources_ischanged(void)
+static unsigned sources_count(void)
 {
-  int count = 0;
-  for (unsigned idx = 0; idx < sources_count; idx++) {
-    const char *fname = (sources[idx].path != NULL) ? sources[idx].path : sources[idx].basename;
+  unsigned count = 0;
+  for (SOURCEFILE *src = sources_root.next; src != NULL; src = src->next)
+    count += 1;
+  return count;
+}
+
+/** sources_ischanged() checks the timestamps of the entries in the sources list
+ *  and returns the count of files that were changed.
+ */
+static unsigned sources_ischanged(void)
+{
+  unsigned count = 0;
+  for (SOURCEFILE *src = sources_root.next; src != NULL; src = src->next) {
+    const char *fname = (src->path != NULL) ? src->path : src->basename;
     assert(fname != NULL);
-    if (file_timestamp(fname) != sources[idx].timestamp)
+    if (file_timestamp(fname) != src->timestamp)
       count += 1;
   }
   return count;
@@ -1708,24 +1734,19 @@ static int sources_ischanged(void)
  *  source files. It returns nk_true if so, or nk_false if there is a source
  *  file that is more recent that the ELF file.
  */
-static nk_bool elf_up_to_date(const char *elffile)
+static bool elf_up_to_date(const char *elffile)
 {
   assert(elffile != NULL);
   time_t tstamp_elf = file_timestamp(elffile);
-  for (unsigned idx = 0; idx < sources_count; idx++)
-    if (sources[idx].timestamp > tstamp_elf)
-      return nk_false;
-  return nk_true;
+  for (SOURCEFILE *src = sources_root.next; src != NULL; src = src->next)
+    if (src->timestamp > tstamp_elf)
+      return false;
+  return true;
 }
 
-static int source_lookup(const char *filename)
+static int source_getindex(const char *filename)
 {
-  unsigned idx;
   const char *base;
-
-  if (sources == NULL)
-    return -1;
-
   if ((base = strrchr(filename, '/')) != NULL)
     filename = base + 1;
 # if defined _WIN32
@@ -1733,32 +1754,45 @@ static int source_lookup(const char *filename)
       filename = base + 1;
 # endif
 
-  for (idx = 0; idx < sources_count; idx++)
-    if (strcmp(filename, sources[idx].basename)== 0)
-      return idx;
+  for (SOURCEFILE *src = sources_root.next; src != NULL; src = src->next) {
+    if (strcmp(filename, src->basename)== 0) {
+      assert(src->srcindex != NULL && src->srccount > 0);
+      return src->srcindex[0];  /* in case multiple indices map to this source, return the first */
+    }
+  }
 
   return -1;
 }
 
-static const char *source_getname(unsigned idx)
+static const char *source_getname(unsigned srcindex)
 {
-  if (idx < sources_count)
-    return sources[idx].basename;
+  SOURCEFILE *src = source_fromindex(srcindex);
+  if (src != NULL)
+    return src->basename;
   return NULL;
 }
 
-static const char **sources_getnames(void)
+static const char **sources_getnames(unsigned *count)
 {
-  const char **namelist;
-
-  if (sources_count == 0)
+  assert(count != NULL);
+  *count = sources_count();
+  if (*count == 0)
     return NULL;
-  assert(sources != NULL);
-  namelist = (const char**)malloc(sources_count * sizeof(char*));
+
+  const char **namelist = (const char**)malloc(*count * sizeof(char*));
   if (namelist != NULL) {
-    int idx;
-    for (idx = 0; idx < sources_count; idx++)
+    for (unsigned idx = 0; idx < *count; idx++)
       namelist[idx] = source_getname(idx);
+
+    /* sort the source file list (insertion sort) */
+    for (unsigned i = 1; i < *count; i++) {
+      const char *key=namelist[i];
+      assert(key != NULL);
+      unsigned j;
+      for (j = i; j > 0 && stricmp(namelist[j-1], key) > 0; j--)
+        namelist[j] = namelist[j-1];
+      namelist[j] = key;
+    }
   }
 
   return namelist;
@@ -1907,7 +1941,7 @@ static int breakpoint_parse(const char *gdbresult)
             len = sizearray(filename) - 1;
           strncpy(filename, start, len);
           filename[len] = '\0';
-          bp->filenr = (short)source_lookup(filename);
+          bp->filenr = (short)source_getindex(filename);
         }
         if ((start=fieldfind(line, "line")) != NULL) {
           start = fieldvalue(start, NULL);
@@ -2634,8 +2668,7 @@ static const char *lastdirsep(const char *path)
 
 static int ctf_findmetadata(const char *target, char *metadata, size_t metadata_len)
 {
-  char basename[_MAX_PATH], path[_MAX_PATH], *ptr;
-  unsigned len, idx;
+  char basename[_MAX_PATH];// path[_MAX_PATH], *ptr;
 
   assert(target != NULL);
   assert(metadata != NULL);
@@ -2643,13 +2676,14 @@ static int ctf_findmetadata(const char *target, char *metadata, size_t metadata_
   /* if no metadata filename was set, create the base name (without path) from
      the target name; add a .tsdl extension */
   if (strlen(metadata) == 0) {
-    ptr = (char*)lastdirsep(target);
+    char *ptr = (char*)lastdirsep(target);
     strlcpy(basename, (ptr == NULL) ? target : ptr + 1, sizearray(basename));
     if ((ptr = strrchr(basename, '.')) != NULL)
       *ptr = '\0';
     strlcat(basename, ".tsdl", sizearray(basename));
   } else {
-    if ((ptr = (char*)lastdirsep(metadata)) == NULL)
+    char *ptr = (char*)lastdirsep(metadata);
+    if (ptr == NULL)
       ptr = metadata;
     if (strchr(ptr, '.') != NULL) {
       /* there is a filename with extension in the metadata parameter already */
@@ -2680,9 +2714,10 @@ static int ctf_findmetadata(const char *target, char *metadata, size_t metadata_
   }
 
   /* try target directory (if there is one) */
-  ptr = (char*)lastdirsep(target);
+  const char *ptr = lastdirsep(target);
   if (ptr != NULL) {
-    len = min(ptr - target, sizearray(path) - 2);
+    char path[_MAX_PATH];
+    unsigned len = min(ptr - target, sizearray(path) - 2);
     strncpy(path, target, len);
     path[len] = DIRSEP_CHAR;
     path[len + 1] = '\0';
@@ -2695,11 +2730,12 @@ static int ctf_findmetadata(const char *target, char *metadata, size_t metadata_
   }
 
   /* try directories in the sources array */
-  for (idx = 0; idx < sources_count; idx++) {
-    ptr =(char*)lastdirsep(sources[idx].path);
+  for (SOURCEFILE *src = sources_root.next; src != NULL; src = src->next) {
+    ptr = lastdirsep(src->path);
     if (ptr != NULL) {
-      len = min(ptr - sources[idx].path, sizearray(path) - 2);
-      strncpy(path, sources[idx].path, len);
+      char path[_MAX_PATH];
+      unsigned len = min(ptr - src->path, sizearray(path) - 2);
+      strncpy(path, src->path, len);
       path[len] = DIRSEP_CHAR;
       path[len + 1] = '\0';
       strlcat(path, basename, sizearray(path));
@@ -2774,9 +2810,9 @@ static int check_stopped(int *filenr, int *linenr, uint32_t *address)
           filename[len] = '\0';
           /* look up the file (but there is the possibility that no source files
              were yet loaded) */
-          if (sources != NULL) {
+          if (sources_root.next != NULL) {
             assert(filenr != NULL);
-            *filenr = source_lookup(filename);
+            *filenr = source_getindex(filename);
           }
         }
         if ((head = strstr(item->text, "line=")) != NULL) {
@@ -3505,9 +3541,10 @@ static void source_widget(struct nk_context *ctx, const char *id, float rowheigh
         nk_label(ctx, item->text, NK_TEXT_LEFT);
       nk_layout_row_end(ctx);
     }
+    nk_layout_row_dynamic(ctx, rowheight, 1);
+    nk_spacing(ctx, 1);
     if (lines == 0) {
       nk_layout_row_dynamic(ctx, rowheight, 1);
-      nk_spacing(ctx, 1);
       nk_label(ctx, "NO SOURCE", NK_TEXT_CENTERED);
     }
     nk_group_end(ctx);
@@ -4311,7 +4348,7 @@ static bool handle_list_cmd(const char *command, const DWARF_SYMBOLLIST *symbolt
       if (sym != NULL) {
         const char *path = dwarf_path_from_fileindex(filetable, sym->fileindex);
         if (path != NULL)
-          idx = source_lookup(path);
+          idx = source_getindex(path);
         line = sym->line;
       } else {
         char *p2 = strchr(p1, ':');
@@ -4323,19 +4360,20 @@ static bool handle_list_cmd(const char *command, const DWARF_SYMBOLLIST *symbolt
         }
         if (strchr(p1, '.') != NULL) {
           /* extension is given, try an exact match */
-          idx = source_lookup(p1);
+          idx = source_getindex(p1);
         } else {
           /* no extension, ignore extension on match */
           unsigned len = strlen(p1);
-          for (idx = 0; idx < sources_count; idx++) {
+          for (idx = 0; ; idx++) {
             const char *basename = source_getname(idx);
-            assert(basename != NULL);
+            if (basename == NULL)
+              break;
             if (strncmp(basename, p1, len) == 0 && basename[len] == '.')
               break;
           }
         }
       }
-      if (idx < sources_count && line >= 1) {
+      if (source_isvalid(idx) && line >= 1) {
         source_cursorfile = idx;
         source_cursorline = line;
         return true;
@@ -5275,7 +5313,9 @@ typedef struct tagAPPSTATE {
   SWOSETTINGS swo;              /**< TRACESWO configuration */
   ARMSTATE armstate;            /**< state of the disassembler */
   unsigned long scriptparams[4];/**< parameters for running configuration scripts (for TRACESWO) */
-  const char **sourcefiles;     /**< array of all source files */
+  const char **sourcefiles;     /**< array of all source file names (base names) */
+  unsigned sourcefiles_count;   /**< size of the array with all source file names */
+  int sourcefiles_index;        /**< index into the sourcefiles array, or -1 if undetermined */
   bool disassemble_mode;        /**< whether source code is mixed with disassembly */
   bool dwarf_loaded;            /**< whether DWARF info is loaded */
   int prev_clicked_line;        /**< line in source view that was previously clicked on (to detect multiple clicks on the same line) */
@@ -5504,15 +5544,33 @@ static void button_bar(struct nk_context *ctx, APPSTATE *state, float panel_widt
   }
   float combo_width = panel_width - 6 * (BUTTON_WIDTH + 5);
   nk_layout_row_push(ctx, combo_width);
-  if (sources_count > 0) {
-    int curfile = source_cursorfile;
-    if (curfile < 0 || (unsigned)curfile >= sources_count)
-      curfile = 0;
-    assert(state->sourcefiles != NULL);
-    source_cursorfile = nk_combo(ctx, state->sourcefiles, sources_count, curfile,
-                                 (int)COMBOROW_CY, nk_vec2(combo_width, 10*ROW_HEIGHT));
-    if (source_cursorfile != curfile)
-      source_cursorline = 1;  /* reset scroll */
+  if (state->sourcefiles_count > 0) {
+    if ((state->sourcefiles_index < 0 || state->sourcefiles_index > state->sourcefiles_count)) {
+      assert(state->sourcefiles != NULL);
+      state->sourcefiles_index = 0;
+      SOURCEFILE *src = source_fromindex(source_cursorfile);
+      if (src != NULL) {
+        for (unsigned idx = 0; idx < state->sourcefiles_count; idx++) {
+          assert(state->sourcefiles[idx] != NULL);
+          if (strcmp(src->basename, state->sourcefiles[idx]) == 0) {
+            state->sourcefiles_index = idx;
+            break;
+          }
+        }
+      }
+    }
+    assert(state->sourcefiles_index >= 0 && state->sourcefiles_index < state->sourcefiles_count);
+    int curfile = nk_combo(ctx, state->sourcefiles, state->sourcefiles_count,
+                           state->sourcefiles_index,
+                           (int)COMBOROW_CY, nk_vec2(combo_width, 10*ROW_HEIGHT));
+    if (curfile != state->sourcefiles_index) {
+      state->sourcefiles_index = curfile;
+      curfile = source_getindex(state->sourcefiles[curfile]);
+      if (source_cursorfile != curfile) {
+        source_cursorfile = curfile;
+        source_cursorline = 1;  /* reset scroll */
+      }
+    }
   }
 }
 
@@ -5531,7 +5589,7 @@ static void toggle_breakpoint(APPSTATE *state, int source_idx, int linenr)
   if (bp == NULL) {
     /* no breakpoint yet -> add (but check first whether that can
        be done) */
-    if (source_idx < sources_count) {
+    if (source_isvalid(source_idx)) {
       RESETSTATE(state, STATE_BREAK_TOGGLE);
       state->stateparam[0] = STATEPARAM_BP_ADD;
       state->stateparam[1] = source_idx;
@@ -5561,19 +5619,19 @@ static void sourcecode_view(struct nk_context *ctx, APPSTATE *state)
   assert(ctx != NULL);
   assert(state != NULL);
 
-  if (source_cursorfile >= 0 && source_cursorfile < sources_count) {
+  if (source_isvalid(source_cursorfile)) {
     int linecount = source_linecount(source_cursorfile);
     if (source_cursorline > linecount)
       source_cursorline = linecount;
   }
 
   /* if disassembly is requested, check whether to do this first */
-  if (state->disassemble_mode && source_cursorfile >= 0 && source_cursorfile < sources_count) {
+  if (state->disassemble_mode && source_isvalid(source_cursorfile)) {
     SOURCELINE *item;
     for (item = source_firstline(source_cursorfile); item != NULL && item->linenumber != 0; item = item->next)
       {}  /* lines in assembly have address set, but no linenumber */
     if (item == NULL) {
-      bool ok = sourcefile_disassemble(state->ELFfile, &sources[source_cursorfile], &state->armstate);
+      bool ok = sourcefile_disassemble(state->ELFfile, source_fromindex(source_cursorfile), &state->armstate);
       if (!ok) {
         /* on failure, switch disassembly off (otherwise, this routine will be
            re-entered each update) */
@@ -7024,10 +7082,11 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
       if (STATESWITCH(state)) {
         /* clear source files (if any were loaded); these will be reloaded
            after the list of source files is refreshed */
-        sources_clear(0);
+        sources_clear(false);
         if (state->sourcefiles != NULL) {
           free((void*)state->sourcefiles);
           state->sourcefiles = NULL;
+          state->sourcefiles_count = 0;
         }
         /* also get the list of source files from GDB (it might use a different
            order of the file index numbers) */
@@ -7039,8 +7098,8 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
       } else if (gdbmi_isresult() != NULL) {
         if (strncmp(gdbmi_isresult(), "done,", 5) == 0) {
           sources_parse(gdbmi_isresult() + 5);      /* + 5 to skip "done" and comma */
-          state->sourcefiles = sources_getnames();  /* create array with names for the dropdown */
-          state->warn_source_tstamps = !elf_up_to_date(state->ELFfile); /* check timestamps of sources against elf file */
+          state->sourcefiles = sources_getnames(&state->sourcefiles_count); /* create array with names for the dropdown */
+          state->warn_source_tstamps = !elf_up_to_date(state->ELFfile);     /* check timestamps of sources against elf file */
           MOVESTATE(state, STATE_MEMACCESS_1);
         } else {
           if (strncmp(gdbmi_isresult(), "error", 5) == 0) {
@@ -7351,6 +7410,7 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
       break;
     case STATE_STOPPED:
       if (STATESWITCH(state)) {
+        state->sourcefiles_index = -1;  /* look up "current" source file again */
         log_console_strings(state);
         gdbmi_sethandled(true);
         MARKSTATE(state);
@@ -7479,9 +7539,10 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
           sprintf(state->cmdline, "-break-disable %d\n", state->stateparam[1]);
           break;
         case STATEPARAM_BP_ADD:
-          assert(sources != NULL);
-          sprintf(state->cmdline, "-break-insert %s:%d\n",
-                  sources[state->stateparam[1]].path, state->stateparam[2]);
+          if (source_isvalid(state->stateparam[1]))
+            sprintf(state->cmdline, "-break-insert %s:%d\n", source_getname(state->stateparam[1]), state->stateparam[2]);
+          else
+            sprintf(state->cmdline, "-break-insert %d\n", state->stateparam[2]);
           break;
         case STATEPARAM_BP_DELETE:
           sprintf(state->cmdline, "-break-delete %d\n", state->stateparam[1]);
@@ -7829,6 +7890,7 @@ int main(int argc, char *argv[])
   appstate.trace_status = TRACESTAT_INIT_FAILED;
   appstate.trace_endpoint = BMP_EP_TRACE;
   appstate.popup_active = POPUP_NONE;
+  appstate.sourcefiles_index = -1;
   appstate.cmdline = malloc(CMD_BUFSIZE * sizeof(char));
   if (appstate.cmdline == NULL)
     return EXIT_FAILURE;
@@ -8178,7 +8240,7 @@ int main(int argc, char *argv[])
   locals_clear();
   memdump_cleanup(&appstate.memdump);
   console_clear();
-  sources_clear(nk_true);
+  sources_clear(true);
   bmscript_clear();
   dwarf_cleanup(&dwarf_linetable, &dwarf_symboltable, &dwarf_filetable);
   disasm_cleanup(&appstate.armstate);
