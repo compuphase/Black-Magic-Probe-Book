@@ -31,6 +31,7 @@
 #   include <sys/stat.h>
 #   include "strlcpy.h"
 # elif defined _MSC_VER
+#   include <sys/stat.h>
 #   include "strlcpy.h"
 #   define access(p,m)       _access((p),(m))
 # endif

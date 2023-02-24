@@ -76,5 +76,16 @@ A makefile is provided for MingW, called `Makefile.mingw`.
 
 The current release links to either WinUSB or libusbK dynamically. It is no longer necessary to get the headers for WinUSB from the Windows DDK or create an import library from a .def file. However, for the libusbK option, you will need to download the appropriate libusbK.dll and place it into the directory where the binaries are built. See the [libusbK project](https://sourceforge.net/projects/libusbk/).
 
+To generate the `.res` files, use MingW's `windres` function as follows:
+```
+windres -O coff -J rc -i file.rc -o file.res
+```
+
+You'll also need to install fontconfig with:
+
+```
+pacman -S mingw-w64-x86_64-fontconfig
+```
+
 ### Windows with Visual C/C++
 The makefile for Visual C/C++ (`Makefile.msvc`) uses Microsoft's `nmake`, which is a bare-bones `make` clone.
