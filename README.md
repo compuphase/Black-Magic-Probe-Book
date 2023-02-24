@@ -1,6 +1,6 @@
 # Embedded Debugging with the Black Magic Probe
 <img src="https://github.com/compuphase/Black-Magic-Probe-Book/blob/master/doc/blackmagicprobe-book.jpg" alt="Book cover" width="400" align="right">
-This guide covers setting up and using the <a href="https://github.com/blackmagic-debug/blackmagic/">Black Magic Probe</a>. The Black Magic Probe is a low cost JTAG/SWD probe for ARM Cortex micro-controllers. A distinguishing feature of the Black Magic Probe is that it embeds a GDB server. As a result, the 
+This guide covers setting up and using the <a href="https://github.com/blackmagic-debug/blackmagic/">Black Magic Probe</a>. The Black Magic Probe is a low cost JTAG/SWD probe for ARM Cortex micro-controllers. A distinguishing feature of the Black Magic Probe is that it embeds a GDB server. As a result, the
     libbsd-dev
     libfontconfig-dev
     libgtk-3-dev
@@ -80,12 +80,5 @@ To generate the `.res` files, use MingW's `windres` function as follows:
 ```
 windres -O coff -J rc -i file.rc -o file.res
 ```
-
-You'll also need to install fontconfig with:
-
-```
-pacman -S mingw-w64-x86_64-fontconfig
-```
-
 ### Windows with Visual C/C++
 The makefile for Visual C/C++ (`Makefile.msvc`) uses Microsoft's `nmake`, which is a bare-bones `make` clone.

@@ -1529,7 +1529,7 @@ static bool sourcefile_disassemble(const char *path, const SOURCEFILE *source, A
  *                    OS-specific format). This parameter may be NULL (in which
  *                    case the path is assumed the same as the base name).
  */
-static void sources_add(int srcindex, const char *filename, const char *filepath)
+static bool sources_add(int srcindex, const char *filename, const char *filepath, bool debugmode)
 {
   assert(filename != NULL);
 
@@ -1557,7 +1557,9 @@ static void sources_add(int srcindex, const char *filename, const char *filepath
           src->srcindex[src->srccount] = srcindex;
           src->srccount += 1;
         }
-        return;
+        if (debugmode)
+          printf("exists, mapped to index %d\n", src->srcindex[0]);
+        return true;
       }
     }
   }
@@ -1590,12 +1592,18 @@ static void sources_add(int srcindex, const char *filename, const char *filepath
   /* load the source file */
   const char *path = (newsrc->path != NULL) ? newsrc->path : newsrc->basename;
   FILE *fp = fopen(path, "rt");
-  if (fp != NULL) {
-    sourcefile_load(fp, &newsrc->root);
-    fclose(fp);
-    /* get it's timestamp too */
-    newsrc->timestamp = file_timestamp(path);
+  if (fp == NULL) {
+    if (debugmode)
+      printf("file open failed, error %d\n", errno);
+    return false;
   }
+  sourcefile_load(fp, &newsrc->root);
+  fclose(fp);
+  if (debugmode)
+    printf("loaded\n");
+  /* get it's timestamp too */
+  newsrc->timestamp = file_timestamp(path);
+  return true;
 }
 
 /** sources_clear() removes all source files from the sources lists, and
@@ -1625,7 +1633,7 @@ static void sources_clear(bool free_sym)
   }
 }
 
-static void sources_parse(const char *gdbresult)
+static bool sources_parse(const char *gdbresult, bool debugmode)
 {
   const char *head = gdbresult;
   if (*head == '^')
@@ -1635,7 +1643,7 @@ static void sources_parse(const char *gdbresult)
   if (*head == ',')
     head++;
   if (strncmp(head, "files=", 6) != 0)
-    return;
+    return false;
 
   int fileidx = 0;
   assert(head[6] == '[');
@@ -1683,13 +1691,16 @@ static void sources_parse(const char *gdbresult)
     const char *basename;
     for (basename = name + strlen(name) - 1; basename > name && *(basename -1 ) != '/' && *(basename -1 ) != '\\'; basename--)
       {}
-    sources_add(fileidx, basename, path);
+    if (debugmode)
+      printf("SRC: %d: %s [%s] ", fileidx, basename, path);
+    sources_add(fileidx, basename, path, debugmode);
     fileidx++;
     head = sep + 1;
     assert(*head == ',' || *head == ']');
     if (*head == ',')
-        head++;
+      head++;
   }
+  return true;
 }
 
 /** file_timestamp() returns the latest modification time of a file, which may
@@ -3546,6 +3557,10 @@ static void source_widget(struct nk_context *ctx, const char *id, float rowheigh
     if (lines == 0) {
       nk_layout_row_dynamic(ctx, rowheight, 1);
       nk_label(ctx, "NO SOURCE", NK_TEXT_CENTERED);
+      const char *basename = source_getname(source_cursorfile);
+      char msg[250];
+      sprintf(msg, "[%d] %s", source_cursorfile, (basename != NULL) ? basename : "unknown");
+      nk_label(ctx, msg, NK_TEXT_CENTERED);
     }
     nk_group_end(ctx);
     if (maxlen > 0)
@@ -7097,7 +7112,7 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
         MARKSTATE(state);
       } else if (gdbmi_isresult() != NULL) {
         if (strncmp(gdbmi_isresult(), "done,", 5) == 0) {
-          sources_parse(gdbmi_isresult() + 5);      /* + 5 to skip "done" and comma */
+          sources_parse(gdbmi_isresult() + 5, state->debugmode);      /* + 5 to skip "done" and comma */
           state->sourcefiles = sources_getnames(&state->sourcefiles_count); /* create array with names for the dropdown */
           state->warn_source_tstamps = !elf_up_to_date(state->ELFfile);     /* check timestamps of sources against elf file */
           MOVESTATE(state, STATE_MEMACCESS_1);

@@ -12762,9 +12762,9 @@ nk_style_from_table(struct nk_context *ctx, const struct nk_color *table)
     combo->label_normal     = table[NK_COLOR_TEXT];
     combo->label_hover      = table[NK_COLOR_TEXT];
     combo->label_active     = table[NK_COLOR_TEXT];
-    combo->sym_normal       = NK_SYMBOL_TRIANGLE_DOWN; /* NK_SYMBOL_TRIANGLE_DOWN_SMALL */
-    combo->sym_hover        = NK_SYMBOL_TRIANGLE_DOWN; /* NK_SYMBOL_TRIANGLE_DOWN_SMALL */
-    combo->sym_active       = NK_SYMBOL_TRIANGLE_DOWN; /* NK_SYMBOL_TRIANGLE_DOWN_SMALL */
+    combo->sym_normal       = NK_SYMBOL_TRIANGLE_DOWN_SMALL;
+    combo->sym_hover        = NK_SYMBOL_TRIANGLE_DOWN_SMALL;
+    combo->sym_active       = NK_SYMBOL_TRIANGLE_DOWN_SMALL;
     combo->content_padding  = nk_vec2(4,4);
     combo->button_padding   = nk_vec2(0,4);
     combo->spacing          = nk_vec2(4,0);
@@ -18080,8 +18080,10 @@ nk_draw_symbol(struct nk_command_buffer *out, enum nk_symbol_type type,
         } else {
             /* circles: make the bounding box rectangular */
             content = nk_square_rect(content);
-            if (type == NK_SYMBOL_CIRCLE_SOLID_SMALL || type == NK_SYMBOL_CIRCLE_OUTLINE_SMALL)
-                content = nk_shrink_rect(content, 3);
+            if (type == NK_SYMBOL_CIRCLE_SOLID_SMALL || type == NK_SYMBOL_CIRCLE_OUTLINE_SMALL) {
+                content = nk_shrink_rect(content, content.w * 0.3f);
+                content.y += content.h * 0.3f;
+            }
             nk_fill_circle(out, content, foreground);
             if (type == NK_SYMBOL_CIRCLE_OUTLINE)
                 nk_fill_circle(out, nk_shrink_rect(content, 1), background);
@@ -18097,10 +18099,12 @@ nk_draw_symbol(struct nk_command_buffer *out, enum nk_symbol_type type,
         heading = (type == NK_SYMBOL_TRIANGLE_RIGHT) ? NK_RIGHT :
             (type == NK_SYMBOL_TRIANGLE_LEFT) ? NK_LEFT:
             (type == NK_SYMBOL_TRIANGLE_UP) ? NK_UP: NK_DOWN;
-        if (type == NK_SYMBOL_TRIANGLE_DOWN_SMALL)
-            nk_triangle_from_direction(points, content, 3, 3, heading);
-        else
+        if (type == NK_SYMBOL_TRIANGLE_DOWN_SMALL) {
+            float sz = NK_MIN(content.w, content.h);
+            nk_triangle_from_direction(points, content, sz * 0.1f, sz * 0.1f, heading);
+        } else {
           nk_triangle_from_direction(points, content, 0, 0, heading);
+        }
         nk_fill_triangle(out, points[0].x, points[0].y, points[1].x, points[1].y,
             points[2].x, points[2].y, foreground);
     } break;

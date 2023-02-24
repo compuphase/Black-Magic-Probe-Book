@@ -164,8 +164,8 @@ static void version(void)
         freopen("CONOUT$", "wb", stdout);
         freopen("CONOUT$", "wb", stderr);
       }
-      printf("Fortify: [%d] %s\n", type, str);
 #   endif
+    printf("Fortify: [%d] %s\n", type, str);
   }
 #endif
 
