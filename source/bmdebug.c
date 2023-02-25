@@ -57,6 +57,7 @@
 #endif
 #include <assert.h>
 #include <ctype.h>
+#include <errno.h>
 #include <limits.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -448,9 +449,25 @@ static void semihosting_add(STRINGLIST *root, const char *text, unsigned short f
   }
 }
 
-static const char *skip_string(const char *string)
+/** skip_string() skips a string between quotes, or a word.
+ *
+ *  \param string     Points to the start of the text to skip.
+ *  \param stopchars  A string with optional "stop characters" at which the
+ *                    parsing stops. This parameter may be NULL, in which case
+ *                    the single stop character is a space.
+ *
+ *  \return A pointer to the first character behind the string or word.
+ *
+ *  \note Parameter "stopchars" is a don't-care if parameter "string" points to
+ *        a string between double quotes.
+ *  \note In case "string" points to non-quoted text, all control characters
+ *        (below ASCII 32) are also stop characters.
+ */
+static const char *skip_string(const char *string, const char *stopchars)
 {
   assert(string != NULL);
+  if (stopchars == NULL)
+    stopchars = " ";
   if (*string == '"') {
     string++;
     while (*string != '"' && *string != '\0') {
@@ -461,7 +478,7 @@ static const char *skip_string(const char *string)
     if (*string == '"')
       string++;
   } else {
-    while (*string > ' ')
+    while (*string >= ' ' && strchr(stopchars, *string) == NULL)
       string++;
   }
   return string;
@@ -472,7 +489,7 @@ static const char *str_matchchar(const char *string, char match)
   assert(string != NULL);
   while (*string != '\0' && *string != match) {
     if (*string == '"')
-      string = skip_string(string);
+      string = skip_string(string, NULL);
     else
       string += 1;
   }
@@ -1656,7 +1673,7 @@ static bool sources_parse(const char *gdbresult, bool debugmode)
     head++;
     if (strncmp(head, "file=", 5) == 0) {
       head += 5;
-      sep = skip_string(head);
+      sep = skip_string(head, ",}");
       while (*sep != ',' && *sep != '}' && *sep != '\0')
         sep++;
       assert(*sep != '\0');
@@ -1670,21 +1687,16 @@ static bool sources_parse(const char *gdbresult, bool debugmode)
     }
     if (*sep == ',' && strncmp(sep + 1, "fullname=", 9) == 0) {
       head = sep + 9 + 1;
-      sep = skip_string(head);
-      while (*sep != '}' && *sep != '\0')
-        sep++;
-      assert(*sep != '\0');
+      sep = skip_string(head, ",}");
       len = (int)(sep - head);
       if (len >= sizearray(path))
         len = sizearray(path) - 1;
-      if (*head == '"' && head[len - 1] == '"') {
-        head++;
-        len -= 2;
-      }
       memcpy(path, head, len);
       path[len] = '\0';
       if (path[0] == '"' && path[len - 1] == '"')
         format_string(path);
+      while (*sep != '}' && *sep != '\0')
+        sep++;
     }
     if (strlen(path) == 0)
       strcpy(path, name);
@@ -1695,6 +1707,7 @@ static bool sources_parse(const char *gdbresult, bool debugmode)
       printf("SRC: %d: %s [%s] ", fileidx, basename, path);
     sources_add(fileidx, basename, path, debugmode);
     fileidx++;
+    assert(*sep != '\0');
     head = sep + 1;
     assert(*head == ',' || *head == ']');
     if (*head == ',')
@@ -1837,7 +1850,7 @@ static const char *fieldfind(const char *line, const char *field)
   ptr = line;
   while (*ptr != '\0') {
     if (*ptr == '"')
-      ptr = skip_string(ptr);
+      ptr = skip_string(ptr, NULL);
     else if (strncmp(ptr, field, len) == 0)
       return ptr;
     else
@@ -1857,7 +1870,7 @@ static const char *fieldvalue(const char *field, size_t *len)
   if (*ptr != '"')
     return NULL;
   if (len != NULL) {
-    const char *tail = skip_string(ptr);
+    const char *tail = skip_string(ptr, NULL);
     *len = tail - (ptr + 1) - 1;
   }
   return ptr + 1;
@@ -2564,7 +2577,7 @@ static bool watch_update_format(unsigned seqnr, const char *gdbresult)
     watch->format = FORMAT_OCTAL;
   else if (strncmp(start + 1, "binary", 6) == 0)
     watch->format = FORMAT_BINARY;
-  start = skip_string(start);
+  start = skip_string(start, NULL);
   if (*start == ',')
     start += 1;
   start = skipwhite(start);
@@ -7861,7 +7874,7 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
           assert(strncmp(head, "value=", 6) == 0);
           head = skipwhite(head + 6);
           assert(*head == '"');
-          tail = skip_string(head);
+          tail = skip_string(head, NULL);
           len = tail - head;
           if (len >= sizearray(state->ttipvalue))
             len = sizearray(state->ttipvalue) - 1;
