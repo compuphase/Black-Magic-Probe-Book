@@ -3570,10 +3570,6 @@ static void source_widget(struct nk_context *ctx, const char *id, float rowheigh
     if (lines == 0) {
       nk_layout_row_dynamic(ctx, rowheight, 1);
       nk_label(ctx, "NO SOURCE", NK_TEXT_CENTERED);
-      const char *basename = source_getname(source_cursorfile);
-      char msg[250];
-      sprintf(msg, "[%d] %s", source_cursorfile, (basename != NULL) ? basename : "unknown");
-      nk_label(ctx, msg, NK_TEXT_CENTERED);
     }
     nk_group_end(ctx);
     if (maxlen > 0)
@@ -5396,8 +5392,10 @@ enum {
 
 static int log_state(const APPSTATE *state)
 {
-  if (state->debugmode)
+  if (state->debugmode) {
     printf("State: %d (moved from %d)\n", state->curstate, state->prevstate);
+    fflush(stdout);
+  }
   return state->curstate;
 }
 
@@ -5419,6 +5417,7 @@ static void log_console_strings(const APPSTATE *state)
         skip++;
       }
     }
+    fflush(stdout);
   }
 }
 
