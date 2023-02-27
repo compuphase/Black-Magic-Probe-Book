@@ -3,7 +3,7 @@
  * for requirements of specific micro-controllers. At this moment, the utility
  * supports various ranges of the LPC family by NXP.
  *
- * Copyright 2015,2019-2022 CompuPhase
+ * Copyright 2015,2019-2023 CompuPhase
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -57,6 +57,7 @@
 
 #if defined _MSC_VER
 # define stricmp(s1,s2)    _stricmp((s1),(s2))
+# define strdup(s)         _strdup(s)
 #endif
 
 
@@ -708,9 +709,8 @@ int elf_load_symbols(FILE *fp,ELF_SYMBOL *symbols,unsigned *number)
 
 void elf_clear_symbols(ELF_SYMBOL *symbols,unsigned number)
 {
-  int i;
   assert(symbols!=NULL);
-  for (i=0; i<number; i++)
+  for (unsigned i=0; i<number; i++)
     if (symbols[i].name!=NULL)
       free((void*)symbols[i].name);
 }

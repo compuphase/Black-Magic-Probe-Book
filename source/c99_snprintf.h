@@ -1,5 +1,6 @@
 /* source: https://stackoverflow.com/a/8712996 */
 #include <stdarg.h>
+#include <stdio.h>
 
 #define snprintf c99_snprintf
 #define vsnprintf c99_vsnprintf

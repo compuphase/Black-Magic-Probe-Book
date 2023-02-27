@@ -49,10 +49,13 @@
 
 
 #if defined __linux__ || defined __FreeBSD__ || defined __APPLE__
-#  define stricmp(s1,s2)  strcasecmp((s1),(s2))
+# define stricmp(s1,s2)  strcasecmp((s1),(s2))
+#elif defined _MSC_VER
+# define strdup(s)         _strdup(s)
 #endif
+
 #if !defined sizearray
-#  define sizearray(e)    (sizeof(e) / sizeof((e)[0]))
+# define sizearray(e)    (sizeof(e) / sizeof((e)[0]))
 #endif
 
 

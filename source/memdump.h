@@ -2,7 +2,7 @@
  * Memory Dump widget and support functions, for the Black Magic Debugger
  * front-end based on the Nuklear GUI.
  *
- * Copyright 2021 CompuPhase
+ * Copyright 2021-2023 CompuPhase
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -38,6 +38,6 @@ void memdump_init(MEMDUMP *memdump);
 void memdump_cleanup(MEMDUMP *memdump);
 int memdump_validate(MEMDUMP *memdump);
 int memdump_parse(const char *gdbresult, MEMDUMP *memdump);
-void memdump_widget(struct nk_context *ctx, MEMDUMP *memdump, int widgetheight, int rowheight);
+void memdump_widget(struct nk_context *ctx, MEMDUMP *memdump, float widgetheight, float rowheight);
 
 #endif /* _MEMDUMP_H*/

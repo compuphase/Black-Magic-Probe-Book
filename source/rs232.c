@@ -33,6 +33,10 @@
 #endif
 #include "rs232.h"
 
+#if defined _MSC_VER
+# define strdup(s)   _strdup(s)
+#endif
+
 
 #if !defined sizearray
 # define sizearray(a)    (sizeof(a) / sizeof((a)[0]))

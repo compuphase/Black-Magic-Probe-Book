@@ -1,7 +1,7 @@
 /*  tcpip - networking portability layer for Windows and Linux, limited to the
  *  functions that the GDB RSP needs
  *
- *  Copyright 2020-2022, CompuPhase
+ *  Copyright 2020-2023, CompuPhase
  *
  *  Licensed under the Apache License, Version 2.0 (the "License"); you may not
  *  use this file except in compliance with the License. You may obtain a copy
@@ -21,6 +21,7 @@
 #include <errno.h>
 #include <string.h>
 #if defined WIN32 || defined _WIN32
+# define _WINSOCK_DEPRECATED_NO_WARNINGS
 #else
 # include <stdio.h>
 # include <fcntl.h>

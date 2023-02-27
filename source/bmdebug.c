@@ -33,6 +33,10 @@
 # elif defined _MSC_VER
 #   include "strlcpy.h"
 #   include <sys/stat.h>
+#   include "dirent.h"
+#   if _MSC_VER < 1900
+#     include "c99_snprintf.h"
+#   endif
 #   define stat _stat
 #   define access(p,m)       _access((p),(m))
 #   define memicmp(p1,p2,c)  _memicmp((p1),(p2),(c))
@@ -40,8 +44,7 @@
 #   define strdup(s)         _strdup(s)
 #   define stricmp(s1,s2)    _stricmp((s1),(s2))
 #   define strnicmp(s1,s2,c) _strnicmp((s1),(s2),(c))
-#   include "c99_snprintf.h"
-#   include "dirent.h"
+#   define strupr(s)         _strupr(s)
 # endif
 #elif defined __linux__
 # include <alloca.h>
@@ -313,7 +316,7 @@ static int helptext_add(STRINGLIST *root, char *text, int reformat)
       do {
         tokresult = strtokenize(tok, &toklen, '\n');
         if (toklen > 0) {
-          int len = strlen(linebuffer);
+          size_t len = strlen(linebuffer);
           if (len + toklen + 2 >= linebuf_size) {
             /* grow buffer size */
             linebuf_size *= 2;
@@ -887,7 +890,7 @@ static int console_autocomplete(char *text, size_t textsize, const DWARF_SYMBOLL
 
   /* first check whether the text is unmodified from the last cached string */
   if (cache_text != NULL && strcmp(text, cache_text) == 0) {
-    assert(cache_cutoff >= 0 && cache_cutoff < textsize);
+    assert(cache_cutoff >= 0 && (size_t)cache_cutoff < textsize);
     text[cache_cutoff] = '\0';
     cache_skip += 1;
   } else {
@@ -1026,7 +1029,7 @@ static int console_autocomplete(char *text, size_t textsize, const DWARF_SYMBOLL
               int prefix_len = strlen(svd_mcu_prefix());
               const char *sep;
               /* auto-complete prefix */
-              if (prefix_len > 0  && len < prefix_len && strncmp(word, svd_mcu_prefix(), len) == 0) {
+              if (prefix_len > 0  && len < (size_t)prefix_len && strncmp(word, svd_mcu_prefix(), len) == 0) {
                 strlcpy(word, svd_mcu_prefix(), textsize - (word - text));
                 result = 1;
               }
@@ -1035,7 +1038,7 @@ static int console_autocomplete(char *text, size_t textsize, const DWARF_SYMBOLL
                 sep += 2;
               else if ((sep = strchr(word, '.')) != NULL)
                 sep += 1;
-              if (!result && len >= prefix_len && sep == NULL) {
+              if (!result && len >= (size_t)prefix_len && sep == NULL) {
                 int iter;
                 const char *name;
                 word += prefix_len;
@@ -1231,7 +1234,7 @@ static const STRINGLIST *console_history_match(const STRINGLIST *root, const STR
 
   /* first check whether the text is unmodified from the last cached string */
   if (cache_text != NULL && strcmp(text, cache_text) == 0) {
-    assert(cache_cutoff >= 0 && cache_cutoff < textsize);
+    assert(cache_cutoff >= 0 && (size_t)cache_cutoff < textsize);
     text[cache_cutoff] = '\0';
   } else {
     cache_cutoff = strlen(text);
@@ -1241,7 +1244,7 @@ static const STRINGLIST *console_history_match(const STRINGLIST *root, const STR
   item = mark;
   while ((item = console_history_step(root, item, 0)) != NULL && item != mark) {
     assert(item->text != NULL);
-    if (strlen(item->text) > cache_cutoff && strncmp(item->text, text, cache_cutoff) == 0)
+    if ((int)strlen(item->text) > cache_cutoff && strncmp(item->text, text, cache_cutoff) == 0)
       break;  /* match found */
   }
 
@@ -2030,7 +2033,7 @@ enum {
   FORMAT_STRING,
 };
 
-static int change_integer_format(char *value, int size, int format)
+static int change_integer_format(char *value, size_t size, int format)
 {
   if (format == FORMAT_NATURAL)
     return 0;
@@ -2047,7 +2050,7 @@ static int change_integer_format(char *value, int size, int format)
       return 0;
     strlcpy(buffer, head + 1, size);
     value[0] = '"';
-    int idx = 1;
+    size_t idx = 1;
     char *tail;
     for (head = buffer; idx < (size - 1) && *head != '\0'; head = tail, idx++) {
       long c = strtol(head, &tail, 0);
@@ -2061,8 +2064,7 @@ static int change_integer_format(char *value, int size, int format)
     free((void*)buffer);
   } else {
     char *buffer = NULL;
-    int buf_count = 0;
-    int buf_idx = 0;
+    size_t buf_count = 0;
     union {
       long s;
       unsigned long u;
@@ -2133,6 +2135,7 @@ static int change_integer_format(char *value, int size, int format)
     }
 
     /* so this is a valid integer (signed or unsigned), or a valid buffer */
+    unsigned buf_idx = 0;
     do {
       if (buf_count > 0) {
         v.u = buffer[buf_idx];
@@ -2268,11 +2271,11 @@ static int locals_update(const char *gdbresult)
           /* copy the value in a temporary string */
 #         define LOCALVAR_MAX 32
           char valstr[LOCALVAR_MAX + 4]; /* +3 for "...", +1 for '\0' */
-          int copylen = (valuelen <= LOCALVAR_MAX) ? valuelen : LOCALVAR_MAX;
+          size_t copylen = (valuelen <= LOCALVAR_MAX) ? valuelen : LOCALVAR_MAX;
           if (*value == '\\' && *(value + 1) == '"') {
             /* parse strings in a special way, to handle escaped codes */
-            int value_idx = 2;
-            int idx = 0;
+            unsigned value_idx = 2;
+            unsigned idx = 0;
             valstr[idx++] = '"';
             while (idx < copylen && value_idx < valuelen) {
               if (value[value_idx] == '\\' && value[value_idx + 1] == '\\') {
@@ -3253,10 +3256,10 @@ static int is_idle(void)
 #define WINDOW_WIDTH    750     /* default window size (window is resizable) */
 #define WINDOW_HEIGHT   500
 #define FONT_HEIGHT     14      /* default font size */
-#define ROW_HEIGHT      (1.6 * opt_fontsize)  /* extra spaced rows (for controls) */
-#define COMBOROW_CY     (0.9 * opt_fontsize)
-#define BUTTON_WIDTH    (3.0 * opt_fontsize)
-#define BROWSEBTN_WIDTH (1.5 * opt_fontsize)
+#define ROW_HEIGHT      (1.6f * opt_fontsize)  /* extra spaced rows (for controls) */
+#define COMBOROW_CY     (0.9f * opt_fontsize)
+#define BUTTON_WIDTH    (3.0f * opt_fontsize)
+#define BROWSEBTN_WIDTH (1.5f * opt_fontsize)
 
 static float opt_fontsize = FONT_HEIGHT;
 
@@ -3300,7 +3303,7 @@ static int textview_widget(struct nk_context *ctx, const char *id,
           tail -= 1;  /* also skip the ' ' we stopped on */
         }
         if (indent > 0) {
-          nk_layout_row_push(ctx, indent);
+          nk_layout_row_push(ctx, (float)indent);
           nk_spacing(ctx, 1);
         }
         nk_layout_row_push(ctx, textwidth + 4);
@@ -4611,7 +4614,7 @@ static bool handle_x_cmd(const char *command, MEMDUMP *memdump)
     ptr += 1;
     while (*ptr > ' ') {
       if (isdigit(*ptr)) {
-        memdump->count = strtol(ptr, &ptr, 10);
+        memdump->count = (unsigned short)strtol(ptr, &ptr, 10);
       } else if (*ptr == 'x' || *ptr == 'd' || *ptr == 'u' || *ptr == 'o'
                  || *ptr == 't' || *ptr == 'f' || *ptr == 'c' || *ptr == 'a'
                  || *ptr == 'i' || *ptr == 's') {
@@ -5177,15 +5180,12 @@ static int handle_serial_cmd(const char *command, char *port, int *baud,
   }
 
   if (tsdlfile != NULL && tsdlmaxlen > 0) {
-    char stop;
-    int count;
+    char stop = ' ';
     if (*ptr == '"') {
       ptr++;
       stop = '"';
-    } else {
-      stop = ' ';
     }
-    count = 0;
+    unsigned count = 0;
     while (*ptr != stop && *ptr != '\0') {
       if (count < tsdlmaxlen - 1) /* -1 to make sure space is left for the terminating zero */
         tsdlfile[count++] = *ptr;
@@ -5332,6 +5332,7 @@ typedef struct tagAPPSTATE {
   unsigned long ctrl_c_tstamp;  /**< timestamp of Ctrl+C being pressed, to force a break */
   char ELFfile[_MAX_PATH];      /**< ELF file being debugged */
   char ParamFile[_MAX_PATH];    /**< debug parameters for the ELF file */
+  char sourcepath[_MAX_PATH];   /**< additional path where the sources may be found */
   char SVDfile[_MAX_PATH];      /**< target MCU definitions */
   char EntryPoint[64];          /**< name of the entry-point function (e.g. "main") */
   SWOSETTINGS swo;              /**< TRACESWO configuration */
@@ -5429,11 +5430,11 @@ static void help_popup(struct nk_context *ctx, APPSTATE *state, float canvas_wid
   float w = opt_fontsize * 40;
   if (w > canvas_width - 20)  /* clip "ideal" help window size of canvas size */
     w = canvas_width - 20;
-  float h = canvas_height * 0.75;
+  float h = canvas_height * 0.75f;
   struct nk_rect rc = nk_rect((canvas_width - w) / 2, (canvas_height - h) / 2, w, h);
   if (nk_popup_begin(ctx, NK_POPUP_STATIC, "Help", NK_WINDOW_NO_SCROLLBAR, rc)) {
-    static const float bottomrow_ratio[] = {0.15, 0.68, 0.17};
-    nk_layout_row_dynamic(ctx, h - 1.75*ROW_HEIGHT, 1);
+    static const float bottomrow_ratio[] = {0.15f, 0.68f, 0.17f};
+    nk_layout_row_dynamic(ctx, h - 1.75f*ROW_HEIGHT, 1);
     int rows = textview_widget(ctx, "help", helptext_root.next, opt_fontsize);
     nk_layout_row(ctx, NK_DYNAMIC, ROW_HEIGHT, 3, bottomrow_ratio);
     nk_label(ctx, (state->popup_active == POPUP_INFO) ? "More info" : "More help", NK_TEXT_LEFT);
@@ -5472,20 +5473,20 @@ static void help_popup(struct nk_context *ctx, APPSTATE *state, float canvas_wid
     else if (nk_input_is_key_pressed(&ctx->input, NK_KEY_DOWN))
       delta = opt_fontsize;
     else if (nk_input_is_key_pressed(&ctx->input, NK_KEY_SCROLL_UP))
-      delta = - (h - 2.5*ROW_HEIGHT);
+      delta = - (h - 2.5f*ROW_HEIGHT);
     else if (nk_input_is_key_pressed(&ctx->input, NK_KEY_SCROLL_DOWN))
-      delta = (h - 2.5*ROW_HEIGHT);
+      delta = (h - 2.5f*ROW_HEIGHT);
     else if (nk_input_is_key_pressed(&ctx->input, NK_KEY_SCROLL_TOP))
-      delta = INT_MIN;
+      delta = (float)INT_MIN;
     else if (nk_input_is_key_pressed(&ctx->input, NK_KEY_SCROLL_BOTTOM))
-      delta = INT_MAX;
+      delta = (float)INT_MAX;
     if (delta < -0.1 || delta > 0.1) {
       nk_uint xoffs, yoffs;
       nk_group_get_scroll(ctx, "help", &xoffs, &yoffs);
       if (delta < 0 && yoffs < -delta) {
         yoffs = 0;
       } else {
-        yoffs += delta;
+        yoffs += (int)delta;
         int maxscroll = (int)((rows + 1) * (opt_fontsize + 4) - (h - 2*ROW_HEIGHT - 2*SPACING));
         if (maxscroll < 0)
           yoffs = 0;
@@ -5572,7 +5573,7 @@ static void button_bar(struct nk_context *ctx, APPSTATE *state, float panel_widt
   float combo_width = panel_width - 6 * (BUTTON_WIDTH + 5);
   nk_layout_row_push(ctx, combo_width);
   if (state->sourcefiles_count > 0) {
-    if ((state->sourcefiles_index < 0 || state->sourcefiles_index > state->sourcefiles_count)) {
+    if ((state->sourcefiles_index < 0 || (unsigned)state->sourcefiles_index > state->sourcefiles_count)) {
       assert(state->sourcefiles != NULL);
       state->sourcefiles_index = 0;
       SOURCEFILE *src = source_fromindex(source_cursorfile);
@@ -5586,7 +5587,7 @@ static void button_bar(struct nk_context *ctx, APPSTATE *state, float panel_widt
         }
       }
     }
-    assert(state->sourcefiles_index >= 0 && state->sourcefiles_index < state->sourcefiles_count);
+    assert(state->sourcefiles_index >= 0 && (unsigned)state->sourcefiles_index < state->sourcefiles_count);
     int curfile = nk_combo(ctx, state->sourcefiles, state->sourcefiles_count,
                            state->sourcefiles_index,
                            (int)COMBOROW_CY, nk_vec2(combo_width, 10*ROW_HEIGHT));
@@ -5935,7 +5936,7 @@ static void panel_configuration(struct nk_context *ctx, APPSTATE *state,
   assert(tab_state != NULL);
 
   if (nk_tree_state_push(ctx, NK_TREE_TAB, "Configuration", tab_state)) {
-#   define LABEL_WIDTH (2.5 * opt_fontsize)
+#   define LABEL_WIDTH (2.5f * opt_fontsize)
     struct nk_rect bounds = nk_widget_bounds(ctx);
     float edtwidth = bounds.w - LABEL_WIDTH - BROWSEBTN_WIDTH - (2 * 5);
 
@@ -5945,7 +5946,7 @@ static void panel_configuration(struct nk_context *ctx, APPSTATE *state,
     nk_label(ctx, "Probe", NK_TEXT_ALIGN_LEFT | NK_TEXT_ALIGN_MIDDLE);
     nk_layout_row_push(ctx, edtwidth);
     bounds = nk_widget_bounds(ctx);
-    int newprobe = nk_combo(ctx, state->probelist, state->netprobe+1, state->probe, (int)COMBOROW_CY, nk_vec2(bounds.w, 4.5*ROW_HEIGHT));
+    int newprobe = nk_combo(ctx, state->probelist, state->netprobe+1, state->probe, (int)COMBOROW_CY, nk_vec2(bounds.w, 4.5f*ROW_HEIGHT));
     if (newprobe == state->netprobe) {
       int reconnect = 0;
       nk_layout_row_begin(ctx, NK_STATIC, ROW_HEIGHT, 3);
@@ -6071,7 +6072,7 @@ static void panel_configuration(struct nk_context *ctx, APPSTATE *state,
     strlcpy(tiptext, (strlen(state->SVDfile) > 0) ? state->SVDfile : "Path to an SVD file with the MCU description & registers", sizearray(tiptext));
     error = editctrl_cond_color(ctx, strlen(state->SVDfile) > 0 && access(state->SVDfile, 0) != 0, COLOUR_BG_DARKRED);
     res = editctrl_tooltip(ctx, NK_EDIT_FIELD|NK_EDIT_READ_ONLY,
-                     basename, sizearray(basename), nk_filter_ascii, tiptext);
+                           basename, sizearray(basename), nk_filter_ascii, tiptext);
     editctrl_reset_color(ctx, error);
     nk_layout_row_push(ctx, BROWSEBTN_WIDTH);
     if (nk_button_symbol(ctx, NK_SYMBOL_TRIPLE_DOT) || (res & NK_EDIT_BLOCKED)) {
@@ -6082,19 +6083,40 @@ static void panel_configuration(struct nk_context *ctx, APPSTATE *state,
                                  "CMSIS SVD files\0*.svd\0All files\0*.*\0",
                                  NULL, state->SVDfile, "Select CMSIS SVD file",
                                  guidriver_apphandle());
-      if (res) {
-        if (state->curstate > STATE_GET_SOURCES) {
-          svd_clear();
-          if (strlen(state->SVDfile) > 0)
-            svd_load(state->SVDfile);
-        }
+      if (res && state->curstate > STATE_GET_SOURCES) {
+        svd_clear();
+        if (strlen(state->SVDfile) > 0)
+          svd_load(state->SVDfile);
       }
       translate_path(state->SVDfile, 0);
     }
     nk_layout_row_end(ctx);
 
     /* source directory */
-    //??? enhancement: overrule directory where source files are found; -environment-directory -r path "path" ...
+#if 0
+    nk_layout_row_begin(ctx, NK_STATIC, ROW_HEIGHT, 3);
+    nk_layout_row_push(ctx, LABEL_WIDTH);
+    nk_label(ctx, "Sources", NK_TEXT_LEFT);
+    nk_layout_row_push(ctx, edtwidth);
+    res = editctrl_tooltip(ctx, NK_EDIT_FIELD|NK_EDIT_READ_ONLY,
+                           state->sourcepath, sizearray(state->sourcepath), nk_filter_ascii,
+                           "Path to the source files (in case these were moved after the build)");
+    nk_layout_row_push(ctx, BROWSEBTN_WIDTH);
+    if (nk_button_symbol(ctx, NK_SYMBOL_TRIPLE_DOT) || (res & NK_EDIT_BLOCKED)) {
+      nk_input_clear_mousebuttons(ctx);
+      //??? should have a directory selection dialog
+      res = noc_file_dialog_open(state->sourcepath, sizearray(state->sourcepath),
+                                 NOC_FILE_DIALOG_OPEN,
+                                 "Source files\0*.c\0All files\0*.*\0",
+                                 NULL, state->sourcepath, "Select path to source files",
+                                 guidriver_apphandle());
+      if (res && state->curstate > STATE_GET_SOURCES) {
+        //??? attempt to reload source files that were not yet loaded
+        //??? enhancement: overrule directory where source files are found; -environment-directory -r path "path" ...
+      }
+    }
+    nk_layout_row_end(ctx);
+#endif
 
     /* TPWR option */
     nk_layout_row_dynamic(ctx, ROW_HEIGHT, 1);
@@ -6556,15 +6578,14 @@ static void panel_serialmonitor(struct nk_context *ctx, APPSTATE *state,
       const char *text;
       sermon_rewind();
       while ((text = sermon_next()) != NULL) {
-        int textwidth, textlength;
         nk_layout_row_begin(ctx, NK_STATIC, opt_fontsize, 1);
         if (lineheight < 0.01) {
           struct nk_rect rcline = nk_layout_widget_bounds(ctx);
           lineheight = rcline.h;
         }
-        textlength = strlen(text);
+        size_t textlength = strlen(text);
         assert(font != NULL && font->width != NULL);
-        textwidth = (int)font->width(font->userdata, font->height, text, textlength) + 10;
+        float textwidth = font->width(font->userdata, font->height, text, textlength) + 10;
         nk_layout_row_push(ctx, textwidth);
         nk_text(ctx, text, textlength, NK_TEXT_LEFT);
         nk_layout_row_end(ctx);
@@ -6708,6 +6729,7 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
           else
             console_add("GDB failed to launch, check the configuration\n", STRFLG_ERROR);
         }
+		MARKSTATE(state);
         set_idle_time(1000); /* repeat scan on timeout (but don't sleep the GUI thread) */
       }
       break;
@@ -7934,10 +7956,10 @@ int main(int argc, char *argv[])
   ini_gets("Settings", "splitter", "", valstr, sizearray(valstr), txtConfigFile);
   splitter_hor.ratio = splitter_ver.ratio = 0.0;
   sscanf(valstr, "%f %f", &splitter_hor.ratio, &splitter_ver.ratio);
-  if (splitter_hor.ratio < 0.05 || splitter_hor.ratio > 0.95)
-    splitter_hor.ratio = 0.70;
-  if (splitter_ver.ratio < 0.05 || splitter_ver.ratio > 0.95)
-    splitter_ver.ratio = 0.70;
+  if (splitter_hor.ratio < 0.05f || splitter_hor.ratio > 0.95f)
+    splitter_hor.ratio = 0.70f;
+  if (splitter_ver.ratio < 0.05f || splitter_ver.ratio > 0.95f)
+    splitter_ver.ratio = 0.70f;
   nk_splitter_init(&splitter_hor, canvas_width - 2 * SPACING, SEPARATOR_HOR, splitter_hor.ratio);
   nk_splitter_init(&splitter_ver, canvas_height - 4 * SPACING, SEPARATOR_VER, splitter_ver.ratio);
   config_read_tabstate("configuration", &tab_states[TAB_CONFIGURATION], NULL, NK_MAXIMIZED, 5 * ROW_HEIGHT, txtConfigFile);
@@ -8128,9 +8150,9 @@ int main(int argc, char *argv[])
     /* GUI */
     guidriver_appsize(&canvas_width, &canvas_height);
     if (nk_begin(ctx, "MainPanel", nk_rect(0, 0, canvas_width, canvas_height), NK_WINDOW_NO_SCROLLBAR)) {
-      nk_splitter_resize(&splitter_hor, canvas_width - 2 * SPACING, RESIZE_TOPLEFT);
-      nk_splitter_resize(&splitter_ver, canvas_height - 4 * SPACING, RESIZE_TOPLEFT);
-      nk_hsplitter_layout(ctx, &splitter_hor, canvas_height - 2 * SPACING);
+      nk_splitter_resize(&splitter_hor, (float)canvas_width - 2 * SPACING, RESIZE_TOPLEFT);
+      nk_splitter_resize(&splitter_ver, (float)canvas_height - 4 * SPACING, RESIZE_TOPLEFT);
+      nk_hsplitter_layout(ctx, &splitter_hor, (float)canvas_height - 2 * SPACING);
 
       ctx->style.window.padding.x = 2;
       ctx->style.window.padding.y = 2;
@@ -8186,7 +8208,7 @@ int main(int argc, char *argv[])
       if (appstate.popup_active == POPUP_NONE)
         handle_kbdinput_main(ctx, &appstate);
       else
-        help_popup(ctx, &appstate, canvas_width, canvas_height);
+        help_popup(ctx, &appstate, (float)canvas_width, (float)canvas_height);
 
       /* mouse cursor shape */
       if (nk_is_popup_open(ctx))

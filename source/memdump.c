@@ -2,7 +2,7 @@
  * Memory Dump widget and support functions, for the Black Magic Debugger
  * front-end based on the Nuklear GUI.
  *
- * Copyright 2021 CompuPhase
+ * Copyright 2021-2023 CompuPhase
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -135,7 +135,7 @@ int memdump_parse(const char *gdbresult, MEMDUMP *memdump)
 
   /* check for error messages first */
   if (strncmp(gdbresult, "error", 5) == 0) {
-    int i, j;
+    unsigned i, j;
     memdump_cleanup(memdump); /* forget any existing data */
     if ((start = strstr(gdbresult, "msg=")) == NULL)
       return 0;
@@ -296,7 +296,7 @@ static void calc_layout(struct nk_context *ctx, struct nk_user_font const *font,
   }
 }
 
-void memdump_widget(struct nk_context *ctx, MEMDUMP *memdump, int widgetheight, int rowheight)
+void memdump_widget(struct nk_context *ctx, MEMDUMP *memdump, float widgetheight, float rowheight)
 {
   int fonttype;
   struct nk_user_font const *font;

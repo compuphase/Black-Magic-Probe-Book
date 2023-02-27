@@ -28,6 +28,9 @@
 #if defined __linux__ || defined __FreeBSD__ || defined __APPLE__
 # define stricmp(s1,s2)    strcasecmp((s1),(s2))
 # define strnicmp(s1,s2,n) strncasecmp((s1),(s2),(n))
+#elif defined _MSC_VER
+# define stricmp(s1,s2)    _stricmp((s1),(s2))
+# define strnicmp(s1,s2,c) _strnicmp((s1),(s2),(c))
 #endif
 #if !defined sizearray
 # define sizearray(e)    (sizeof(e) / sizeof((e)[0]))

@@ -2,7 +2,7 @@
  * information * in an ELF file. For the symbol table, only the function and
  * variable symbols are stored.
  *
- * Copyright (c) 2015,2019-2022 CompuPhase
+ * Copyright (c) 2015,2019-2023 CompuPhase
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.

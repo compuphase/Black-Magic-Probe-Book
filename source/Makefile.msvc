@@ -14,12 +14,12 @@
 #               Defines
 # -------------------------------------------------------------
 
-# preset for development version
-C_DEBUG =
-L_DEBUG =
-R_DEBUG =
-!ifdef NDEBUG
-    # retail version
+# default = retail version
+!ifdef DEBUG
+    C_DEBUG = /Zi
+    L_DEBUG = /DEBUG
+    R_DEBUG =
+!else
     C_DEBUG = /D NDEBUG
     L_DEBUG =
     R_DEBUG = /D NDEBUG
@@ -34,7 +34,9 @@ R_DEBUG =
 CL        = cl
 CC        = cl /c
 CFLAGS    = /nologo /MT /W1 /EHsc /D _WIN32 $(C_DEBUG) /D NOC_FILE_DIALOG_WIN32 /D _CRT_SECURE_NO_WARNINGS
-INCLUDE   =
+!ifndef INCLUDE
+    INCLUDE =
+!endif
 
 ####### Resource compiler
 RC        = rc
@@ -57,7 +59,7 @@ LFLAGS_C  = $(L_DEBUG) /NOLOGO /SUBSYSTEM:console
 	$(CC) $(CFLAGS) $(INCLUDE) /Fo$@ $<
 
 .rc.res :
-	$(RC) -r $(RCFLAGS) /Fo$@ $<
+	$(RC) -r $(RCFLAGS) $(INCLUDE) /Fo$@ $<
 
 .md.h :
 	$(QGP) -c $< $@
@@ -254,7 +256,7 @@ bmtrace.exe : $(OBJLIST_BMTRACE) bmtrace.res
 	$(LNK) $(LFLAGS_W) /ENTRY:mainCRTStartup /OUT:$@ $** advapi32.lib comdlg32.lib gdi32.lib gdiplus.lib user32.lib winmm.lib wsock32.lib shell32.lib shlwapi.lib setupapi.lib
 
 bmscan.exe : $(OBJLIST_BMSCAN)
-	$(LNK) $(LFLAGS_C) /OUT:$@ $** advapi32.lib wsock32.lib
+	$(LNK) $(LFLAGS_C) /OUT:$@ $** advapi32.lib wsock32.lib shell32.lib
 
 calltree.exe : $(OBJLIST_CALLTREE)
 	$(LNK) $(LFLAGS_C) /OUT:$@ $**

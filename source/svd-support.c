@@ -23,12 +23,16 @@
 #include "svd-support.h"
 #include "xmltractor.h"
 
-#if defined __MINGW32__ || defined __MINGW64__
+#if defined __MINGW32__ || defined __MINGW64__ || defined _MSC_VER
 # include "strlcpy.h"
 #elif defined __linux__
 # include <bsd/string.h>
-#elif defined(_MSC_VER) && _MSC_VER < 1900
-# include "c99_snprintf.h"
+#endif
+#if defined _MSC_VER
+# define strdup(s)   _strdup(s)
+# if _MSC_VER < 1900
+#   include "c99_snprintf.h"
+# endif
 #endif
 
 #if defined FORTIFY
@@ -53,8 +57,8 @@ typedef struct tagREGISTER {
   unsigned short range;         /* for arrays: top of the array range */
   unsigned short increment;     /* for arrays: increment in bytes */
   BITFIELD *field;
-  int field_count;
-  int field_size;
+  unsigned field_count;
+  unsigned field_size;
 } REGISTER;
 
 typedef struct tagPERIPHERAL {
@@ -63,8 +67,8 @@ typedef struct tagPERIPHERAL {
   unsigned long address;        /* base address */
   unsigned range;               /* size of the address block, for finding a peripheral on address */
   REGISTER *reg;
-  int reg_count;
-  int reg_size;
+  unsigned reg_count;
+  unsigned reg_size;
 } PERIPHERAL;
 
 #define INVALID_ADDRESS (unsigned long)(~0)
@@ -76,17 +80,15 @@ typedef struct tagPERIPHERAL {
 static char svd_prefix[50]= ""; /* "header prefix" as defined in SVD files */
 static int svd_regsize = 0;     /* width in bits of a register */
 static PERIPHERAL *peripheral = NULL;
-static int peripheral_count = 0;
-static int peripheral_size = 0;
+static unsigned peripheral_count = 0;
+static unsigned peripheral_size = 0;
 
 
 static PERIPHERAL *peripheral_find(const char *name)
 {
-  int idx;
-
   assert(name != NULL);
 
-  for (idx = 0; idx < peripheral_count; idx++) {
+  for (unsigned idx = 0; idx < peripheral_count; idx++) {
     assert(peripheral != NULL && peripheral[idx].name != NULL);
     if (strcmp(peripheral[idx].name, name) == 0)
       return &peripheral[idx];
@@ -146,12 +148,10 @@ static PERIPHERAL *peripheral_add(const char *name, const char *description, uns
 
 static REGISTER *register_find(const PERIPHERAL *per, const char *name)
 {
-  int idx;
-
   assert(per != NULL);
   assert(name != NULL);
 
-  for (idx = 0; idx < per->reg_count; idx++) {
+  for (unsigned idx = 0; idx < per->reg_count; idx++) {
     assert(per->reg != NULL && per->reg[idx].name != NULL);
     if (strcmp(per->reg[idx].name, name) == 0)
       return &per->reg[idx];
@@ -190,7 +190,7 @@ static REGISTER *register_add(PERIPHERAL *per, const char *name, const char *des
   /* grow array */
   assert(per->reg_count <= per->reg_size);
   if (per->reg_count >= per->reg_size) {
-    int newsize = (per->reg_size == 0) ? 8 : 2 * per->reg_size;
+    unsigned newsize = (per->reg_size == 0) ? 8 : 2 * per->reg_size;
     REGISTER *newlist = malloc(newsize * sizeof(REGISTER));
     if (newlist == NULL) {
       free((void*)entry.name);
@@ -198,8 +198,8 @@ static REGISTER *register_add(PERIPHERAL *per, const char *name, const char *des
         free((void*)entry.description);
       return NULL;        /* growing the array failed */
     }
-    /* copy and free old array  */
 
+    /* copy and free old array  */
     if (per->reg_size > 0) {
       assert(per->reg != NULL);
       memcpy(newlist, per->reg, per->reg_size * sizeof(REGISTER));
@@ -280,7 +280,7 @@ static BITFIELD *bitfield_add(REGISTER *reg, const char *name, const char *descr
   /* shift entries in the list up to keep the register list sorted on bit range */
   int top;
   for (top = reg->field_count; top > 0 && reg->field[top - 1].low_bit > entry.low_bit; top--)
-    memcpy(&reg->field[top], &reg->field[top - 1], sizeof(REGISTER));
+    memcpy(&reg->field[top], &reg->field[top - 1], sizeof(BITFIELD));
   reg->field[top] = entry;
   reg->field_count += 1;
 
@@ -335,17 +335,17 @@ static void reformat_description(char *string)
 
 void svd_clear(void)
 {
-  for (int p = 0; p < peripheral_count; p++) {
+  for (unsigned p = 0; p < peripheral_count; p++) {
     assert(peripheral != NULL && peripheral[p].name != NULL);
     free((void*)peripheral[p].name);
     if (peripheral[p].description != NULL)
       free((void*)peripheral[p].description);
-    for (int r = 0; r < peripheral[p].reg_count; r++) {
+    for (unsigned r = 0; r < peripheral[p].reg_count; r++) {
       assert(peripheral[p].reg != NULL && peripheral[p].reg[r].name != NULL);
       free((void*)peripheral[p].reg[r].name);
       if (peripheral[p].reg[r].description)
         free((void*)peripheral[p].reg[r].description);
-      for (int b = 0; b < peripheral[p].reg[r].field_count; b++) {
+      for (unsigned b = 0; b < peripheral[p].reg[r].field_count; b++) {
         assert(peripheral[p].reg[r].field != NULL && peripheral[p].reg[r].field[b].name != NULL);
         free((void*)peripheral[p].reg[r].field[b].name);
         if (peripheral[p].reg[r].field[b].description)
@@ -367,27 +367,22 @@ void svd_clear(void)
   svd_regsize = 0;
 }
 
-int svd_load(const char *filename)
+bool svd_load(const char *filename)
 {
-  FILE *fp;
-  char *buffer;
-  size_t filesize;
-  int idx;
-
   assert(filename != NULL);
   svd_clear();
 
-  fp = fopen(filename, "rt");
+  FILE *fp = fopen(filename, "rt");
   if (fp == NULL)
-    return 0;
+    return false;
   /* allocate memory for the entire file, plus a zero-terminator */
   fseek(fp, 0, SEEK_END);
-  filesize = ftell(fp);
-  buffer = malloc((filesize+1) * sizeof(char));
+  size_t filesize = ftell(fp);
+  char *buffer = malloc((filesize+1) * sizeof(char));
   if (buffer == NULL) {
     /* insufficient memory */
     fclose(fp);
-    return 0;
+    return false;
   }
   /* read the file as one long string (and terminate the string) */
   fseek(fp, 0, SEEK_SET);
@@ -400,7 +395,7 @@ int svd_load(const char *filename)
   if (xmlroot == NULL || xmlroot->szname != 6 || strncmp(xmlroot->name, "device", 6) != 0) {
     /* not an XML file, or not in the correct format */
     free(buffer);
-    return 0;
+    return false;
   }
 
   svd_regsize = 32; /* default register width for (ARM Cortex) */
@@ -503,13 +498,12 @@ int svd_load(const char *filename)
 
   /* set the "back-links" of the register definitions to the peripheral
      definitions; set the address range of each peripheral */
-  for (idx = 0; idx < peripheral_count; idx++) {
-    int ridx;
-    unsigned long top = 0;
+  for (unsigned idx = 0; idx < peripheral_count; idx++) {
     if (peripheral[idx].reg_count == 0)
       continue;
     assert(peripheral[idx].reg != NULL);
-    for (ridx = 0; ridx < peripheral[idx].reg_count; ridx++) {
+    unsigned long top = 0;
+    for (unsigned ridx = 0; ridx < peripheral[idx].reg_count; ridx++) {
       peripheral[idx].reg[ridx].peripheral = &peripheral[idx];
       assert(peripheral[idx].reg[ridx].range > 0);
       assert(peripheral[idx].reg[ridx].increment > 0);
@@ -520,7 +514,7 @@ int svd_load(const char *filename)
     peripheral[idx].range = top;
   }
 
-  return 1;
+  return true;
 }
 
 const char *svd_mcu_prefix(void)
@@ -643,7 +637,7 @@ static const REGISTER *register_parse(const char *symbol, const char **suffix)
   return reg;
 }
 
-int svd_xlate_name(const char *symbol, char *alias, size_t alias_size)
+bool svd_xlate_name(const char *symbol, char *alias, size_t alias_size)
 {
   const REGISTER *reg;
   const char *suffix;
@@ -652,7 +646,7 @@ int svd_xlate_name(const char *symbol, char *alias, size_t alias_size)
   assert(symbol != NULL);
   reg = register_parse(symbol, &suffix);
   if (reg == NULL)
-    return 0;
+    return false;
 
   assert(reg->peripheral != NULL);
   address = reg->peripheral->address + reg->offset;
@@ -677,31 +671,37 @@ int svd_xlate_name(const char *symbol, char *alias, size_t alias_size)
       regindex[len] = '\0';
     }
     if (strlen(regindex) == 0)
-      return 0;
+      return false;
     snprintf(alias, alias_size, "{unsigned}(0x%lx+%d*(%s))", address, reg->increment, regindex);
   } else {
     snprintf(alias, alias_size, "{unsigned}0x%lx", address);
   }
 
-  return 1;
+  return true;
 }
 
+/** svd_xlate_all_names() translate all register names in the "text" parameter
+ *  to their respective addresses.
+ *  \param text     [in/out] The text with register names.
+ *  \param maxsize  The size of the buffer that "text" points to.
+ *
+ *  \return The number of translated registers.
+ */
 int svd_xlate_all_names(char *text, size_t maxsize)
 {
-  char *head, *tail;
-  int count = 0;
-  char word[50], alias[50];
-
   assert(text != NULL);
-  head = text;
+  int count = 0;
+  char *head = text;
   while (*head != '\0') {
     unsigned len;
     /* extract next word */
     while (*head != '\0' && *head <= ' ')
       head += 1;
+    char *tail;
     for (tail = head; *tail > ' '; tail++)
       {}
     len = tail - head;
+    char word[50];
     if (len == 0 || len >= sizearray(word)) {
       /* no more words (but trailing white-space), or word too long -> skip */
       head = tail;
@@ -710,6 +710,7 @@ int svd_xlate_all_names(char *text, size_t maxsize)
     strncpy(word, head, len);
     word[len] = '\0';
     /* check to replace the register by a memory address */
+    char alias[50];
     if (svd_xlate_name(word, alias, sizearray(alias))) {
       /* delete word, then insert the alias */
       strdel(head, len);
@@ -757,7 +758,7 @@ int svd_lookup(const char *symbol, int index, const char **periph_name, const ch
     return 0; /* quick exit */
 
   /* check whether the symbol starts with the prefix, if so, skip the prefix */
-  int len = strlen(svd_prefix);
+  size_t len = strlen(svd_prefix);
   if (len > 0 && len < strlen(symbol) && strncmp(symbol, svd_prefix, len) == 0)
     symbol += len;
 
@@ -809,8 +810,7 @@ int svd_lookup(const char *symbol, int index, const char **periph_name, const ch
        register in any peripheral */
     assert(peripheral != NULL);
     count = 0;
-    int idx;
-    for (idx = 0; idx < peripheral_count; idx++)  {
+    for (unsigned idx = 0; idx < peripheral_count; idx++)  {
       const REGISTER *r = register_find(&peripheral[idx], r_name);
       if (r != NULL) {
         count += 1;
@@ -820,7 +820,7 @@ int svd_lookup(const char *symbol, int index, const char **periph_name, const ch
     }
     /* on failure, also check whether the register is in fact an array */
     strlcat(r_name, "%s", sizearray(r_name));
-    for (idx = 0; idx < peripheral_count; idx++) {
+    for (unsigned idx = 0; idx < peripheral_count; idx++) {
       const REGISTER *r = register_find(&peripheral[idx], r_name);
       if (r != NULL) {
         count += 1;

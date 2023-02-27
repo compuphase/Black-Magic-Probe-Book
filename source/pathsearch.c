@@ -20,12 +20,8 @@
 # define WIN32_LEAN_AND_MEAN
 # include <io.h>
 # include <malloc.h>
-# if defined __MINGW32__ || defined __MINGW64__
+# if defined __MINGW32__ || defined __MINGW64__ || defined _MSC_VER
 #   include "strlcpy.h"
-# elif defined _MSC_VER
-#   include "strlcpy.h"
-#   define access(p,m)       _access((p),(m))
-#   define strdup(s)         _strdup(s)
 # endif
 #elif defined __linux__
 # include <unistd.h>
@@ -35,6 +31,11 @@
 #include <stdlib.h>
 #include <string.h>
 #include "pathsearch.h"
+
+#if defined _MSC_VER
+# define access(p,m)       _access((p),(m))
+# define strdup(s)         _strdup(s)
+#endif
 
 #if defined FORTIFY
 # include <alloc/fortify.h>

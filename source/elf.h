@@ -3,7 +3,7 @@
  * for requirements of specific micro-controllers. At this moment, the utility
  * supports various ranges of the LPC family by NXP.
  *
- * Copyright 2015,2019-2022 CompuPhase
+ * Copyright 2015,2019-2023 CompuPhase
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.

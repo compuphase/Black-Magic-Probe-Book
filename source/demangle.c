@@ -1,6 +1,6 @@
 /* GNU C++ symbol name demangler
  *
- * Copyright 2022, CompuPhase
+ * Copyright 2022-2023, CompuPhase
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -25,13 +25,10 @@
 
 #if defined __POCC__ || defined __MINGW32__ || defined __MINGW64__
 # include <stdlib.h>
-#elif defined __MINGW32__ || defined __MINGW64__
+#elif defined __MINGW32__ || defined __MINGW64__ || defined _MSC_VER
 # include <malloc.h>
 #else
 # include <alloca.h>
-#endif
-#if defined _MSC_VER
-# define alloca(a)   _alloca(a)
 #endif
 
 #if defined FORTIFY

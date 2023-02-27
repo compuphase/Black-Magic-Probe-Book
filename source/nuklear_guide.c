@@ -2,7 +2,7 @@
  * A Nuklear control for displaying help texts in the QuickGuide Markup format
  * (a flavour of Markdown).
  *
- * Copyright 2022 CompuPhase
+ * Copyright 2022-2023 CompuPhase
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -167,7 +167,7 @@ static void strdel(char *string, int count)
   assert(string != NULL);
   if (count > 0) {
     size_t len = strlen(string);
-    if (count >= len)
+    if ((size_t)count >= len)
       *string = '\0';
     else
       memmove(string, string + count, (len - count + 1) * sizeof(char));
@@ -346,7 +346,7 @@ static bool getpage(struct nk_context *ctx, float pagewidth, const char *content
 
   /* find the level-1 heading with the topic */
   const char *block = content;
-  const char *sentinel;
+  const char *sentinel = NULL;
   while (*block != '\0') {
     sentinel = strchr(block, '\n');
     if (sentinel == NULL)
@@ -852,9 +852,9 @@ bool nk_guide(struct nk_context *ctx, struct nk_rect *viewport, float fontsize,
 
     /* handle ArrowUp/Down & PageUp/Down keys */
     if (pageheight > widgetbounds.h - NK_SPACING) {
-      unsigned xscroll, yscroll;
+      nk_uint xscroll, yscroll;
       nk_group_get_scroll(ctx, "guide_widget", &xscroll, &yscroll);
-      int new_y = yscroll;
+      nk_uint new_y = yscroll;
       float scrolldim = pageheight - widgetbounds.h - NK_SPACING;
       if (nk_input_is_key_pressed(&ctx->input, NK_KEY_DOWN))
         new_y = (yscroll + fontsize < scrolldim) ? yscroll + fontsize : scrolldim;

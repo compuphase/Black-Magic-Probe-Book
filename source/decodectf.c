@@ -2,7 +2,7 @@
  * Functions to decode a byte stream matching a trace stream description (TSDL
  * file). It uses data structures created by parsectf.
  *
- * Copyright 2019-2022 CompuPhase
+ * Copyright 2019-2023 CompuPhase
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -34,7 +34,6 @@
 #endif
 #if defined _MSC_VER
 # define strdup(s)   _strdup(s)
-# define alloca(a)   _alloca(a)
 #endif
 
 #include "demangle.h"

@@ -2,7 +2,7 @@
  * Functions for reading and parsing CMSIS SVD files with MCU-specific register
  * definitions.
  *
- * Copyright 2020-2021 CompuPhase
+ * Copyright 2020-2023 CompuPhase
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -19,9 +19,11 @@
 #ifndef _SVD_SUPPORT_H
 #define _SVD_SUPPORT_H
 
+#include <stdbool.h>
+
 void svd_clear(void);
-int  svd_load(const char *filename);
-int  svd_xlate_name(const char *symbol, char *alias, size_t alias_size);
+bool svd_load(const char *filename);
+bool svd_xlate_name(const char *symbol, char *alias, size_t alias_size);
 int  svd_xlate_all_names(char *text, size_t maxsize);
 
 const char *svd_mcu_prefix(void);

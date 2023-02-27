@@ -1,7 +1,7 @@
 /* ARM instruction decoder (disassembler)
  * Covers Thumb and Thumb2 (for Cortex M0 & Cortex M3), plus legacy ARM mode.
  *
- * Copyright 2022, CompuPhase
+ * Copyright 2022-2023, CompuPhase
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -21,6 +21,10 @@
 #include <stdio.h>
 #include <string.h>
 #include "armdisasm.h"
+
+#if defined _MSC_VER
+# define strdup(s)         _strdup(s)
+#endif
 
 #if defined FORTIFY
 # include <alloc/fortify.h>
