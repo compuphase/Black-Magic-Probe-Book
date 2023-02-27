@@ -82,3 +82,9 @@ windres -O coff -J rc -i file.rc -o file.res
 ```
 ### Windows with Visual C/C++
 The makefile for Visual C/C++ (`Makefile.msvc`) uses Microsoft's `nmake`, which is a bare-bones `make` clone.
+
+You may have to create a `makefile.cfg` file with the paths that the Visual C/C++ compiler should look in for the include files.
+```
+INCLUDE = /I "C:\Program Files (x86)\Windows Kits\10\Include\10.0.17763.0\um"
+```
+There are several include paths that you may need to append to that `INCLUDE` macro.
