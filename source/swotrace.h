@@ -1,7 +1,7 @@
 /*
  * Shared code for SWO Trace for the bmtrace and bmdebug utilities.
  *
- * Copyright 2019-2022 CompuPhase
+ * Copyright 2019-2023 CompuPhase
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.

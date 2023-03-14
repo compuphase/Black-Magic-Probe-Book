@@ -19,7 +19,6 @@
 
 #include <assert.h>
 #include <ctype.h>
-#include <stdbool.h>
 #include <stdlib.h>
 #include <string.h>
 #include "guidriver.h"
@@ -857,15 +856,15 @@ bool nk_guide(struct nk_context *ctx, struct nk_rect *viewport, float fontsize,
       nk_uint new_y = yscroll;
       float scrolldim = pageheight - widgetbounds.h - NK_SPACING;
       if (nk_input_is_key_pressed(&ctx->input, NK_KEY_DOWN))
-        new_y = (yscroll + fontsize < scrolldim) ? yscroll + fontsize : scrolldim;
+        new_y = (nk_uint)((yscroll + fontsize < scrolldim) ? yscroll + fontsize : scrolldim);
       else if (nk_input_is_key_pressed(&ctx->input, NK_KEY_UP))
-        new_y = (yscroll > fontsize) ? yscroll - fontsize : 0;
+        new_y = (nk_uint)((yscroll > fontsize) ? yscroll - fontsize : 0);
       else if (nk_input_is_key_pressed(&ctx->input, NK_KEY_SCROLL_TOP)
                || nk_input_is_key_pressed(&ctx->input, NK_KEY_SCROLL_START))
         new_y = 0;
       else if (nk_input_is_key_pressed(&ctx->input, NK_KEY_SCROLL_BOTTOM)
                || nk_input_is_key_pressed(&ctx->input, NK_KEY_SCROLL_END))
-        new_y = scrolldim;
+        new_y = (nk_uint)scrolldim;
       if (new_y != yscroll)
         nk_group_set_scroll(ctx, "guide_widget", xscroll, new_y);
     }
@@ -896,3 +895,9 @@ bool nk_guide(struct nk_context *ctx, struct nk_rect *viewport, float fontsize,
   return is_active;
 }
 
+/* only needed when exiting the program while "help" is still open */
+void nk_guide_cleanup(void)
+{
+  linelist_clear();
+  clear_stack();
+}

@@ -4,7 +4,7 @@
  * API is used, but note that libusbK also provides an implementation of the
  * WinUSB API.
  *
- * Copyright 2020-2022 CompuPhase
+ * Copyright 2020-2023 CompuPhase
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.

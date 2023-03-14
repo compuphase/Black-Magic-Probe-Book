@@ -1,7 +1,7 @@
 /*
  * Common styling & layout functions for the Nuklear GUI.
  *
- * Copyright 2021-2022 CompuPhase
+ * Copyright 2021-2023 CompuPhase
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -82,6 +82,12 @@ float *nk_ratio(int count, ...)
   return r_array;
 }
 
+/** editctrl_cond_color() sets the background colour of an edit control if
+ *  the condition is true. The original colours are pushed on the Nuklear stack,
+ *  and must be restored with editctrl_reset_color().
+ *
+ *  The function returns the "condition" parameter.
+ */
 bool editctrl_cond_color(struct nk_context *ctx, bool condition, struct nk_color color)
 {
   if (condition) {

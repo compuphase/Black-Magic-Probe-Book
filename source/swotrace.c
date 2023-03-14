@@ -2,7 +2,7 @@
  * Shared code for SWO Trace for the bmtrace and bmdebug utilities. It uses
  * WinUSB or libusbK on Microsoft Windows, and libusb 1.0 on Linux.
  *
- * Copyright 2019-2022 CompuPhase
+ * Copyright 2019-2023 CompuPhase
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -1293,14 +1293,13 @@ const char *tracelog_getstatusmsg(int idx)
 
 float tracelog_labelwidth(float rowheight)
 {
-  int idx;
-  float labelwidth = 0;
-  for (idx = 0; idx < NUM_CHANNELS; idx++) {
-    int len = strlen(channels[idx].name);
+  size_t labelwidth = 0;
+  for (int idx = 0; idx < NUM_CHANNELS; idx++) {
+    size_t len = strlen(channels[idx].name);
     if (labelwidth < len)
       labelwidth = len;
   }
-  return labelwidth * (rowheight / 2);
+  return (float)labelwidth * (rowheight / 2);
 }
 
 /* tracelog_widget() draws the text in the log window and scrolls to the last line
@@ -1309,20 +1308,19 @@ void tracelog_widget(struct nk_context *ctx, const char *id, float rowheight, in
                      int markline, const TRACEFILTER *filters, nk_flags widget_flags)
 {
   TRACESTRING *item;
-  int labelwidth, tstampwidth;
   struct nk_rect rcwidget = nk_layout_widget_bounds(ctx);
   struct nk_style_window *stwin = &ctx->style.window;
-  struct nk_style_button stbtn = ctx->style.button;
   struct nk_user_font const *font = ctx->style.font;
 
   /* preset common parts of the new button style */
+  struct nk_style_button stbtn = ctx->style.button;
   stbtn.border = 0;
   stbtn.rounding = 0;
   stbtn.padding.x = stbtn.padding.y = 0;
 
   /* check the length of the longest channel name, and the longest timestamp */
-  labelwidth = (int)tracelog_labelwidth(rowheight) + 10;
-  tstampwidth = 0;
+  int labelwidth = (int)tracelog_labelwidth(rowheight) + 10;
+  int tstampwidth = 0;
   for (item = tracestring_root.next; item != NULL; item = item->next)
     if (tstampwidth < item->timefmt_len)
       tstampwidth = item->timefmt_len;
@@ -1401,15 +1399,15 @@ void tracelog_widget(struct nk_context *ctx, const char *id, float rowheight, in
       else
         clrtxt = COLOUR_BG0;
       stbtn.text_normal = stbtn.text_active = stbtn.text_hover = clrtxt;
-      nk_layout_row_push(ctx, labelwidth);
+      nk_layout_row_push(ctx, (float)labelwidth);
       nk_button_label_styled(ctx, &stbtn, channels[item->channel].name);
       /* timestamp (relative time since previous trace) */
-      nk_layout_row_push(ctx, tstampwidth);
+      nk_layout_row_push(ctx, (float)tstampwidth);
       nk_label_colored(ctx, item->timefmt, NK_TEXT_RIGHT, COLOUR_FG_YELLOW);
       /* calculate size of the text */
       assert(font != NULL && font->width != NULL);
       int textwidth = (int)font->width(font->userdata, font->height, item->text, item->length) + 10;
-      nk_layout_row_push(ctx, textwidth);
+      nk_layout_row_push(ctx, (float)textwidth);
       if (lines == markline)
         nk_text_colored(ctx, item->text, item->length, NK_TEXT_LEFT, COLOUR_FG_YELLOW);
       else
@@ -1599,10 +1597,7 @@ void timeline_rebuild(int limitlines)
 double timeline_widget(struct nk_context *ctx, const char *id, float rowheight,
                        int limitlines, nk_flags widget_flags)
 {
-  int labelwidth;
   double click_time = -1.0;
-  struct nk_rect rcwidget;
-  struct nk_style_button stbtn;
 
   assert(ctx != NULL);
   assert(ctx->current != NULL);
@@ -1616,12 +1611,12 @@ double timeline_widget(struct nk_context *ctx, const char *id, float rowheight,
   }
 
   /* preset common parts of the new button style */
-  stbtn = ctx->style.button;
+  struct nk_style_button stbtn = ctx->style.button;
   stbtn.padding.x = stbtn.padding.y = 0;
 
   /* check the length of the longest channel name */
-  labelwidth = (int)tracelog_labelwidth(rowheight) + 10;
-  rcwidget = nk_layout_widget_bounds(ctx);
+  int labelwidth = (int)tracelog_labelwidth(rowheight) + 10;
+  struct nk_rect rcwidget = nk_layout_widget_bounds(ctx);
 
   /* no spacing & black background on group */
   nk_style_push_vec2(ctx, &ctx->style.window.spacing, nk_vec2(0, 0));
@@ -1687,7 +1682,7 @@ double timeline_widget(struct nk_context *ctx, const char *id, float rowheight,
     }
     rc = nk_layout_widget_bounds(ctx);
     nk_stroke_line(&win->buffer, rc.x, rc.y + rc.h, rc.x + rc.w - HORPADDING, rc.y + rc.h, 1, COLOUR_FG_GRAY);
-    rc.w = labelwidth;
+    rc.w = (float)labelwidth;
     rc.h -= 1;
     nk_fill_rect(&win->buffer, rc, 0.0f, COLOUR_BG0);
     nk_spacing(ctx, 1);
@@ -1726,7 +1721,7 @@ double timeline_widget(struct nk_context *ctx, const char *id, float rowheight,
 
     /* remaining rows collected in two groups: labels and graph */
     nk_layout_row_begin(ctx, NK_STATIC, rcwidget.h - rowheight - 2 * VERPADDING, 2);
-    nk_layout_row_push(ctx, labelwidth + HORPADDING);
+    nk_layout_row_push(ctx, (float)labelwidth + HORPADDING);
     sprintf(valstr, "%s_label", id);
     if (nk_group_begin(ctx, valstr, NK_WINDOW_NO_SCROLLBAR)) {
       /* labels */

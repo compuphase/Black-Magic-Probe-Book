@@ -17,8 +17,8 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#ifndef _ELF__H
-#define _ELF__H
+#ifndef _ELF_H
+#define _ELF_H
 
 #if defined __cplusplus
   extern "C" {
@@ -31,6 +31,7 @@ enum {
   ELFERR_FILEFORMAT,    /* unsupported file format */
   ELFERR_NOMATCH,       /* no matching section / segment */
   ELFERR_MEMORY,        /* insufficient memory */
+  ELFERR_CHKSUMERR,     /* checksum failed */
 };
 
 /* segment types */
@@ -74,6 +75,7 @@ int elf_section_by_address(FILE *fp,unsigned long baseaddr,
 int elf_load_symbols(FILE *fp,ELF_SYMBOL *symbols,unsigned *number);
 void elf_clear_symbols(ELF_SYMBOL *symbols,unsigned number);
 
+int elf_check_vecttable(FILE *fp);
 int elf_patch_vecttable(FILE *fp,const char *driver,unsigned *checksum);
 int elf_check_crp(FILE *fp,int *crp);
 

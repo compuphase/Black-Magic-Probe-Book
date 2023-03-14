@@ -57,12 +57,12 @@
 #include "gdb-rsp.h"
 #include "mcu-info.h"
 #include "minIni.h"
-#include "noc_file_dialog.h"
 #include "nuklear_guide.h"
 #include "nuklear_mousepointer.h"
 #include "nuklear_splitter.h"
 #include "nuklear_style.h"
 #include "nuklear_tooltip.h"
+#include "osdialog.h"
 #include "rs232.h"
 #include "specialfolder.h"
 #include "tcpip.h"
@@ -113,9 +113,9 @@ static DWARF_PATHLIST dwarf_filetable = { NULL };
 #define WINDOW_WIDTH    700     /* default window size (window is resizable) */
 #define WINDOW_HEIGHT   400
 #define FONT_HEIGHT     14      /* default font size */
-#define ROW_HEIGHT      (1.6 * opt_fontsize)
-#define COMBOROW_CY     (0.9 * opt_fontsize)
-#define BROWSEBTN_WIDTH (1.5 * opt_fontsize)
+#define ROW_HEIGHT      (1.6f * opt_fontsize)
+#define COMBOROW_CY     (0.9f * opt_fontsize)
+#define BROWSEBTN_WIDTH (1.5f * opt_fontsize)
 static float opt_fontsize = FONT_HEIGHT;
 
 
@@ -393,10 +393,10 @@ static bool load_settings(const char *filename, APPSTATE *state,
   ini_gets("Settings", "splitter", "", valstr, sizearray(valstr), filename);
   splitter_hor->ratio = splitter_ver->ratio = 0.0;
   sscanf(valstr, "%f %f", &splitter_hor->ratio, &splitter_ver->ratio);
-  if (splitter_hor->ratio < 0.05 || splitter_hor->ratio > 0.95)
-    splitter_hor->ratio = 0.70;
-  if (splitter_ver->ratio < 0.05 || splitter_ver->ratio > 0.95)
-    splitter_ver->ratio = 0.70;
+  if (splitter_hor->ratio < 0.05f || splitter_hor->ratio > 0.95f)
+    splitter_hor->ratio = 0.70f;
+  if (splitter_ver->ratio < 0.05f || splitter_ver->ratio > 0.95f)
+    splitter_ver->ratio = 0.70f;
 
   for (int idx = 0; idx < TAB_COUNT; idx++) {
     char key[40];
@@ -414,7 +414,7 @@ static bool load_settings(const char *filename, APPSTATE *state,
 
 static void probe_set_options(APPSTATE *state)
 {
-  if (bmp_isopen()) {
+  if (bmp_isopen() && state->monitor_cmds != NULL) {
     char cmd[100];
     if (bmp_expand_monitor_cmd(cmd, sizearray(cmd), "connect", state->monitor_cmds)) {
       strlcat(cmd, " ", sizearray(cmd));
@@ -546,7 +546,7 @@ static void panel_options(struct nk_context *ctx, APPSTATE *state,
       nk_label(ctx, "Mode", NK_TEXT_ALIGN_LEFT | NK_TEXT_ALIGN_MIDDLE);
       nk_layout_row_push(ctx, VALUE_WIDTH);
       int result = state->swomode - MODE_MANCHESTER;
-      result = nk_combo(ctx, mode_strings, NK_LEN(mode_strings), result, opt_fontsize, nk_vec2(VALUE_WIDTH,4.5*opt_fontsize));
+      result = nk_combo(ctx, mode_strings, NK_LEN(mode_strings), result, (int)opt_fontsize, nk_vec2(VALUE_WIDTH,4.5*opt_fontsize));
       if (state->swomode != result + MODE_MANCHESTER) {
         /* mode is 1-based, the result of nk_combo() is 0-based, which is
            why MODE_MANCHESTER is added (MODE_MANCHESTER == 1) */
@@ -596,7 +596,7 @@ static void panel_options(struct nk_context *ctx, APPSTATE *state,
     nk_layout_row_push(ctx, VALUE_WIDTH);
     bounds = nk_widget_bounds(ctx);
     int result = state->datasize;
-    state->datasize = nk_combo(ctx, datasize_strings, NK_LEN(datasize_strings), state->datasize, opt_fontsize, nk_vec2(VALUE_WIDTH,5.5*opt_fontsize));
+    state->datasize = nk_combo(ctx, datasize_strings, NK_LEN(datasize_strings), state->datasize, (int)opt_fontsize, nk_vec2(VALUE_WIDTH,5.5*opt_fontsize));
     if (state->datasize != result) {
       trace_setdatasize((state->datasize == 3) ? 4 : (short)state->datasize);
       tracestring_clear();
@@ -625,16 +625,12 @@ static void panel_options(struct nk_context *ctx, APPSTATE *state,
     nk_layout_row_push(ctx, BROWSEBTN_WIDTH);
     if (nk_button_symbol(ctx, NK_SYMBOL_TRIPLE_DOT)) {
       nk_input_clear_mousebuttons(ctx);
-#     if defined _WIN32
-        const char *filter = "TSDL files\0*.tsdl;*.ctf\0All files\0*.*\0";
-#     else
-        const char *filter = "TSDL files\0*.tsdl\0All files\0*\0";
-#     endif
-      int res = noc_file_dialog_open(state->TSDLfile, sizearray(state->TSDLfile),
-                                     NOC_FILE_DIALOG_OPEN, filter,
-                                     NULL, state->TSDLfile, "Select metadata file for CTF",
-                                     guidriver_apphandle());
-      if (res) {
+      osdialog_filters *filters = osdialog_filters_parse("TSDL files:tsdl,ctf;All files:*");
+      char *fname = osdialog_file(OSDIALOG_OPEN, "Select Metadata file for CTF", NULL, state->TSDLfile, filters);
+      osdialog_filters_free(filters);
+      if (fname != NULL) {
+        strlcpy(state->TSDLfile, fname, sizearray(state->TSDLfile));
+        free(fname);
         state->clear_channels = true;
         state->reload_format = true;
       }
@@ -654,17 +650,14 @@ static void panel_options(struct nk_context *ctx, APPSTATE *state,
     nk_layout_row_push(ctx, BROWSEBTN_WIDTH);
     if (nk_button_symbol(ctx, NK_SYMBOL_TRIPLE_DOT)) {
       nk_input_clear_mousebuttons(ctx);
-#     if defined _WIN32
-        const char *filter = "ELF Executables\0*.elf;*.\0All files\0*.*\0";
-#     else
-        const char *filter = "ELF Executables\0*.elf\0All files\0*\0";
-#     endif
-      int res = noc_file_dialog_open(state->ELFfile, sizearray(state->ELFfile),
-                                     NOC_FILE_DIALOG_OPEN, filter,
-                                     NULL, state->ELFfile, "Select ELF Executable",
-                                     guidriver_apphandle());
-      if (res)
+      osdialog_filters *filters = osdialog_filters_parse("ELF Executables:elf;All files:*");
+      char *fname = osdialog_file(OSDIALOG_OPEN, "Select ELF Executable", NULL, state->ELFfile, filters);
+      osdialog_filters_free(filters);
+      if (fname != NULL) {
+        strlcpy(state->ELFfile, fname, sizearray(state->ELFfile));
+        free(fname);
         state->reload_format = true;
+      }
     }
     nk_layout_row_end(ctx);
 
@@ -728,7 +721,7 @@ static void filter_options(struct nk_context *ctx, APPSTATE *state,
     assert(state->filterlistsize == 0 || state->filtercount < state->filterlistsize);
     assert(state->filterlistsize == 0 || (state->filterlist[state->filtercount].expr == NULL && !state->filterlist[state->filtercount].enabled));
     struct nk_rect bounds = nk_widget_bounds(ctx);
-    int txtwidth = bounds.w - 2 * BROWSEBTN_WIDTH - (2 * 5);
+    float txtwidth = bounds.w - 2 * BROWSEBTN_WIDTH - (2 * 5);
     for (int idx = 0; idx < state->filtercount; idx++) {
       nk_layout_row_begin(ctx, NK_STATIC, ROW_HEIGHT, 3);
       nk_layout_row_push(ctx, BROWSEBTN_WIDTH);
@@ -847,9 +840,9 @@ static void channel_options(struct nk_context *ctx, APPSTATE *state,
         /* we want a contextual pop-up (that you can simply click away
            without needing a close button), so we simulate a right-mouse
            click */
-        nk_input_motion(ctx, bounds.x, bounds.y + bounds.h - 1);
-        nk_input_button(ctx, NK_BUTTON_RIGHT, bounds.x, bounds.y + bounds.h - 1, 1);
-        nk_input_button(ctx, NK_BUTTON_RIGHT, bounds.x, bounds.y + bounds.h - 1, 0);
+        nk_input_motion(ctx, (int)bounds.x, (int)(bounds.y + bounds.h - 1));
+        nk_input_button(ctx, NK_BUTTON_RIGHT, (int)bounds.x, (int)(bounds.y + bounds.h - 1), 1);
+        nk_input_button(ctx, NK_BUTTON_RIGHT, (int)bounds.x, (int)(bounds.y + bounds.h - 1), 0);
       }
       tooltip(ctx, bounds, "Channel name & colour; click to change");
       nk_layout_row_end(ctx);
@@ -923,11 +916,14 @@ static void button_bar(struct nk_context *ctx, APPSTATE *state)
   if (nk_button_label(ctx, "Search") || nk_input_is_key_pressed(&ctx->input, NK_KEY_FIND))
     state->find_popup = 1;
   if (nk_button_label(ctx, "Save") || nk_input_is_key_pressed(&ctx->input, NK_KEY_SAVE)) {
-    char path[_MAX_PATH];
-    int res = noc_file_dialog_open(path, sizearray(path), NOC_FILE_DIALOG_SAVE,
-                                   "CSV files\0*.csv\0All files\0*.*\0",
-                                   NULL, NULL, NULL, guidriver_apphandle());
-    if (res) {
+    osdialog_filters *filters = osdialog_filters_parse("CSV files:csv;All files:*");
+    char *fname = osdialog_file(OSDIALOG_SAVE, "Save to CSV file", NULL, NULL, filters);
+    osdialog_filters_free(filters);
+    if (fname != NULL) {
+      /* copy to local path, so that default extension can be appended */
+      char path[_MAX_PATH];
+      strlcpy(path, fname, sizearray(path));
+      free(fname);
       const char *ext;
       if ((ext = strrchr(path, '.')) == NULL || strchr(ext, DIRSEP_CHAR) != NULL)
         strlcat(path, ".csv", sizearray(path)); /* default extension .csv */
@@ -984,9 +980,9 @@ static void handle_stateaction(APPSTATE *state)
            loaded) */
         if (bmp_runscript("partid", state->mcu_family, state->mcu_architecture, params, 1)) {
           state->mcu_partid = params[0];
-          const MCUINFO *info = mcuinfo_lookup(state->mcu_family, state->mcu_partid);
-          if (info != NULL && info->mcuname != NULL) {
-            strlcpy(state->mcu_family, info->mcuname, sizearray(state->mcu_family));
+          const char *mcuname = mcuinfo_lookup(state->mcu_family, state->mcu_partid);
+          if (mcuname != NULL) {
+            strlcpy(state->mcu_family, mcuname, sizearray(state->mcu_family));
             bmscript_clear();
           }
         }
@@ -1163,9 +1159,9 @@ int main(int argc, char *argv[])
     canvas_height = WINDOW_HEIGHT;
   }
 
-# define SEPARATOR_HOR 4
-# define SEPARATOR_VER 4
-# define SPACING       4
+# define SEPARATOR_HOR 4.0f
+# define SEPARATOR_VER 4.0f
+# define SPACING       4.0f
   nk_splitter_init(&splitter_hor, canvas_width - 3 * SPACING, SEPARATOR_HOR, splitter_hor.ratio);
   nk_splitter_init(&splitter_ver, canvas_height - (ROW_HEIGHT + 8 * SPACING), SEPARATOR_VER, splitter_ver.ratio);
 
@@ -1268,7 +1264,7 @@ int main(int argc, char *argv[])
 
     /* GUI */
     guidriver_appsize(&canvas_width, &canvas_height);
-    if (nk_begin(ctx, "MainPanel", nk_rect(0, 0, canvas_width, canvas_height), NK_WINDOW_NO_SCROLLBAR)) {
+    if (nk_begin(ctx, "MainPanel", nk_rect(0, 0, (float)canvas_width, (float)canvas_height), NK_WINDOW_NO_SCROLLBAR)) {
       nk_splitter_resize(&splitter_hor, canvas_width - 3 * SPACING, RESIZE_TOPLEFT);
       nk_splitter_resize(&splitter_ver, canvas_height - (ROW_HEIGHT + 6 * SPACING), RESIZE_TOPLEFT);
       nk_hsplitter_layout(ctx, &splitter_hor, canvas_height - 2 * SPACING);
@@ -1313,8 +1309,8 @@ int main(int argc, char *argv[])
       }
 
       /* popup dialogs */
-      find_popup(ctx, &appstate, nk_hsplitter_colwidth(&splitter_hor, 0), canvas_height);
-      help_popup(ctx, &appstate, canvas_width, canvas_height);
+      find_popup(ctx, &appstate, nk_hsplitter_colwidth(&splitter_hor, 0), (float)canvas_height);
+      help_popup(ctx, &appstate, (float)canvas_width, (float)canvas_height);
 
       /* mouse cursor shape */
       if (nk_is_popup_open(ctx))
@@ -1355,6 +1351,7 @@ int main(int argc, char *argv[])
   dwarf_cleanup(&dwarf_linetable, &dwarf_symboltable, &dwarf_filetable);
   bmp_disconnect();
   tcpip_cleanup();
+  nk_guide_cleanup();
   return EXIT_SUCCESS;
 }
 

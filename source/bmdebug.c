@@ -79,11 +79,11 @@
 #include "mcu-info.h"
 #include "memdump.h"
 #include "minIni.h"
-#include "noc_file_dialog.h"
 #include "nuklear_mousepointer.h"
 #include "nuklear_style.h"
 #include "nuklear_splitter.h"
 #include "nuklear_tooltip.h"
+#include "osdialog.h"
 #include "pathsearch.h"
 #include "serialmon.h"
 #include "specialfolder.h"
@@ -118,15 +118,17 @@
 
 #if defined WIN32 || defined _WIN32
 # define DIRSEP_CHAR '\\'
+# define DIRSEP_STR  "\\"
 # define IS_OPTION(s)  ((s)[0] == '-' || (s)[0] == '/')
 #else
 # define DIRSEP_CHAR '/'
+# define DIRSEP_STR  "/"
 # define IS_OPTION(s)  ((s)[0] == '-')
 #endif
 
 
 static const char *lastdirsep(const char *path);
-static char *translate_path(char *path, int native);
+static char *translate_path(char *path, bool native);
 static const char *source_getname(unsigned idx);
 static time_t file_timestamp(const char *path);
 
@@ -846,6 +848,7 @@ static int console_autocomplete(char *text, size_t textsize, const DWARF_SYMBOLL
     { "cond", NULL, NULL },
     { "continue", "c", NULL },
     { "delete", NULL, NULL },
+    { "directory", "dir", "%dir" },
     { "disable", NULL, NULL },
     { "disassemble", "disas", "off on" },
     { "display", NULL, "%var %reg" },
@@ -1094,19 +1097,19 @@ static int console_autocomplete(char *text, size_t textsize, const DWARF_SYMBOLL
                   }
                 }
               }
-            } else if (strcmp(ptr, "%path") == 0) {
+            } else if (strcmp(ptr, "%path") == 0 || strcmp(ptr, "%dir") == 0) {
+              bool dir_only = (strcmp(ptr, "%dir") == 0);
               char *dirname = strdup(word);
               if (dirname != NULL) {
                 const char dirseparator[] = { DIRSEP_CHAR, '\0' };
-                char *base;
-                DIR *dir;
-                base = strrchr(dirname, DIRSEP_CHAR);
+                char *base = strrchr(dirname, DIRSEP_CHAR);
 #               if defined _WIN32
                   if (base == NULL)
                     base = strrchr(dirname, '/');
                   else if (strchr(base, '/') != NULL)
                     base = strrchr(base, '/');
 #               endif
+                DIR *dir;
                 if (base != NULL) {
                   *base = '\0'; /* cut off directory name at the slash */
                   dir = opendir((strlen(dirname) > 0) ? dirname : dirseparator);
@@ -1134,6 +1137,8 @@ static int console_autocomplete(char *text, size_t textsize, const DWARF_SYMBOLL
                       strlcpy(filename, entry->d_name, sizearray(filename));
                       if (IS_DIR(entry))  /* for directory, append slash */
                         strlcat(filename, dirseparator, textsize - (word - text));
+                      else if (dir_only)
+                        continue;         /* directory requested, skip names of normal files */
                       if (first == NULL) {
                         strcpy(firstfile, filename);
                         first = firstfile;
@@ -1651,6 +1656,78 @@ static void sources_clear(bool free_sym)
     elf_symbols = NULL;
     elf_symbol_count = 0;
   }
+}
+
+static int sources_reload(const char *sourcepath, bool debugmode)
+{
+  int count = 0;
+
+  char path[_MAX_PATH] = "";
+  size_t pathlen = 0;
+  if (sourcepath != NULL && strlen(sourcepath) > 0) {
+    /* copy the source path, then check:
+       - whether it has an ".elf" file extension, in which case the filename is
+         stripped off;
+       - whether it ends with a directory separator (which is added)
+     */
+    strlcpy(path, sourcepath, sizearray(path));
+    translate_path(path, true);
+    pathlen = strlen(path);
+    if (pathlen > 4 && strcmp(path + pathlen - 4, ".elf") == 0) {
+      char *ptr = strrchr(path, DIRSEP_CHAR);
+      if (ptr != NULL)
+        *(ptr + 1) = '\0';  /* strip off name behind the '\' or '/' */
+      else
+        path[0] = '\0';
+    }
+    if (pathlen > 0 && sourcepath[pathlen - 1] != DIRSEP_CHAR) {
+      strlcat(path, DIRSEP_STR, sizearray(path));
+      pathlen = strlen(path);
+    }
+  }
+
+  for (SOURCEFILE *src = sources_root.next; src != NULL; src = src->next) {
+    if (src->root.next != NULL)
+      continue; /* source for this file was already loaded */
+    assert(src->basename != NULL && strlen(src->basename) > 0);
+    /* check whether a partial (relative) path exists in the path returned
+       from GDB */
+    bool relative_path = false;
+    if (src->path != NULL) {
+      char fname[_MAX_PATH];
+      strlcpy(fname, src->path, sizearray(fname));
+      translate_path(fname, false);
+      char *ptr = strstr(fname, "/./"); /* signals the presence of a relative path */
+      if (ptr != NULL) {
+        path[pathlen] = '\0'; /* truncate "source path" to only the directory */
+        strlcat(path, ptr + 3, sizearray(path));
+        translate_path(path, true);
+        if (access(path, 0) == 0)
+          relative_path = true;
+      }
+    }
+    if (!relative_path) {
+      path[pathlen] = '\0';   /* truncate "source path" to only the directory */
+      strlcat(path, src->basename, sizearray(path));
+      translate_path(path, true);
+    }
+    /* attempt to load from this path */
+    FILE *fp = fopen(path, "rt");
+    if (fp != NULL) {
+      sourcefile_load(fp, &src->root);
+      fclose(fp);
+      /* set (or replace) path for this source */
+      translate_path(path, false);
+      if (src->path != NULL)
+        free((void*)src->path);
+      src->path = strdup(path);
+      if (debugmode)
+        printf("SRC: %d: %s [%s] re-loaded\n", src->srcindex[0], src->basename, src->path);
+      count++;
+    }
+  }
+
+  return count;
 }
 
 static bool sources_parse(const char *gdbresult, bool debugmode)
@@ -2749,7 +2826,7 @@ static int ctf_findmetadata(const char *target, char *metadata, size_t metadata_
     path[len] = DIRSEP_CHAR;
     path[len + 1] = '\0';
     strlcat(path, basename, sizearray(path));
-    translate_path(path, 1);
+    translate_path(path, true);
     if (access(path, 0) == 0) {
       strlcpy(metadata, path, metadata_len);
       return 1;
@@ -2766,7 +2843,7 @@ static int ctf_findmetadata(const char *target, char *metadata, size_t metadata_
       path[len] = DIRSEP_CHAR;
       path[len + 1] = '\0';
       strlcat(path, basename, sizearray(path));
-      translate_path(path, 1);
+      translate_path(path, true);
       if (access(path, 0) == 0) {
         strlcpy(metadata, path, metadata_len);
         return 1;
@@ -3050,7 +3127,7 @@ int task_stderr(TASK *task, char *text, size_t maxlength)
  *                  (required by GDB)
  *  \return A pointer to the translated name (parameter "path").
  */
-static char *translate_path(char *path, int native)
+static char *translate_path(char *path, bool native)
 {
   char *p;
   assert(path != NULL);
@@ -3217,7 +3294,7 @@ unsigned long GetTickCount(void)
   return tv.tv_sec * 1000 + tv.tv_usec / 1000;
 }
 
-static char *translate_path(char *path, int native)
+static char *translate_path(char *path, bool native)
 {
   (void)native;
   return path;
@@ -3828,102 +3905,6 @@ enum {
 };
 
 
-static bool save_targetoptions(const char *filename, const char *entrypoint,
-                          int tpwr, int connect_srst, int autodownload,
-                          const char *svdfile, const SWOSETTINGS *swo)
-{
-  int idx;
-
-  if (filename == NULL || strlen(filename) == 0)
-    return false;
-
-  assert(entrypoint != NULL);
-  ini_puts("Target", "entrypoint", entrypoint, filename);
-  ini_puts("Target", "cmsis-svd", svdfile, filename);
-
-  ini_putl("Settings", "tpwr", tpwr, filename);
-  ini_putl("Settings", "connect_srst", connect_srst, filename);
-
-  ini_putl("Flash", "auto-download", autodownload, filename);
-
-  ini_putl("SWO trace", "mode", swo->mode, filename);
-  ini_putl("SWO trace", "bitrate", swo->bitrate, filename);
-  ini_putl("SWO trace", "clock", swo->clock, filename);
-  ini_putl("SWO trace", "datasize", swo->datasize * 8, filename);
-  ini_putl("SWO trace", "enabled", swo->enabled, filename);
-  ini_puts("SWO trace", "ctf", swo->metadata, filename);
-  for (idx = 0; idx < NUM_CHANNELS; idx++) {
-    char key[32], value[128];
-    struct nk_color color = channel_getcolor(idx);
-    sprintf(key, "chan%d", idx);
-    sprintf(value, "%d #%06x %s", channel_getenabled(idx),
-            ((int)color.r << 16) | ((int)color.g << 8) | color.b,
-            channel_getname(idx, NULL, 0));
-    ini_puts("SWO trace", key, value, filename);
-  }
-
-  ini_putl("Serial monitor", "mode", sermon_isopen(), filename);
-  ini_puts("Serial monitor", "port", sermon_getport(0), filename);
-  ini_putl("Serial monitor", "baud", sermon_getbaud(), filename);
-
-  return access(filename, 0) == 0;
-}
-
-static bool load_targetoptions(const char *filename, char *entrypoint, size_t entrypoint_sz,
-                          int *tpwr, int *connect_srst, int *autodownload,
-                          char *svdfile, size_t svdfile_sz, SWOSETTINGS *swo)
-{
-  int idx, mode;
-
-  if (filename == NULL || strlen(filename) == 0 || access(filename, 0) != 0)
-    return false;
-
-  assert(entrypoint != NULL);
-  ini_gets("Target", "entrypoint", "main", entrypoint, entrypoint_sz, filename);
-  ini_gets("Target", "cmsis-svd", "", svdfile, svdfile_sz, filename);
-
-  assert(tpwr != NULL);
-  *tpwr =(int)ini_getl("Settings", "tpwr", 0, filename);
-  assert(connect_srst != NULL);
-  *connect_srst = (int)ini_getl("Settings", "connect_srst", 0, filename);
-
-  assert(autodownload != NULL);
-  *autodownload = (int)ini_getl("Flash", "auto-download", 1, filename);
-
-  swo->mode = (unsigned)ini_getl("SWO trace", "mode", SWOMODE_NONE, filename);
-  swo->bitrate = (unsigned)ini_getl("SWO trace", "bitrate", 100000, filename);
-  swo->clock = (unsigned)ini_getl("SWO trace", "clock", 48000000, filename);
-  swo->datasize = (unsigned)ini_getl("SWO trace", "datasize", 8, filename) / 8;
-  swo->enabled = (unsigned)ini_getl("SWO trace", "enabled", 0, filename);
-  swo->force_plain = 0;
-  swo->init_status = 0;
-  ini_gets("SWO trace", "ctf", "", swo->metadata, sizearray(swo->metadata), filename);
-  for (idx = 0; idx < NUM_CHANNELS; idx++) {
-    char key[41], value[128];
-    /* preset: port 0 is enabled by default, others disabled by default */
-    channel_set(idx, (idx == 0), NULL, SWO_TRACE_DEFAULT_COLOR);
-    sprintf(key, "chan%d", idx);
-    unsigned clr;
-    int enabled;
-    ini_gets("SWO trace", key, "", value, sizearray(value), filename);
-    int result = sscanf(value, "%d #%x %40s", &enabled, &clr, key);
-    if (result >= 2)
-      channel_set(idx, enabled, (result >= 3) ? key : NULL, nk_rgb(clr >> 16,(clr >> 8) & 0xff, clr & 0xff));
-  }
-
-  mode = ini_getl("Serial monitor", "mode", 0, filename);
-  if (mode) {
-    char portname[64];
-    int baud;
-    ini_gets("Serial monitor", "port", "", portname, sizearray(portname), filename);
-    baud = ini_getl("Serial monitor", "baud", 0, filename);
-    sermon_open(portname, baud);
-    sermon_setmetadata(swo->metadata);
-  }
-
-  return true;
-}
-
 static void svd_info(const char *params, STRINGLIST *textroot)
 {
   stringlist_append(textroot, "System View Description", 0);
@@ -4482,7 +4463,7 @@ static int handle_file_load_reset(const char *command, char *filename, size_t na
     const char *ptr = strchr(command, ' ');
     if (ptr != NULL) {
       strlcpy(filename, skipwhite(ptr), namelength);
-      translate_path(filename, 1);
+      translate_path(filename, true);
     }
     return RESET_FILE;
   } else if (TERM_EQU(command, "reset", 5)) {
@@ -4502,7 +4483,7 @@ static int handle_file_load_reset(const char *command, char *filename, size_t na
     const char *ptr = strchr(command, ' ');
     if (ptr != NULL) {
       strlcpy(filename, skipwhite(ptr), namelength);
-      translate_path(filename, 1);
+      translate_path(filename, true);
       return LOAD_FILE_ELF;
     }
     /* check if source files have changed, if so -> reload sources when
@@ -5037,6 +5018,61 @@ static int handle_trace_cmd(const char *command, SWOSETTINGS *swo)
   return 1; /* assume entire protocol changed */
 }
 
+/** handle_semihosting_cmd()
+ *  \param command    [in] command string.
+ *
+ *  \return false=not a "semihosting" command, true=ok (command handled).
+ */
+static bool handle_semihosting_cmd(const char *command)
+{
+  assert(command != NULL);
+  command = skipwhite(command);
+  if (!TERM_EQU(command, "semihosting", 11))
+    return false;
+  const char *ptr = (char*)skipwhite(command + 11);
+  if (TERM_EQU(ptr, "clear", 5)) {
+    stringlist_clear(&semihosting_root);
+  }
+
+  return true;
+}
+
+/** handle_directory_cmd()
+ *  \param command      [in] command string.
+ *  \param sourcepath   [in/out] search path for source files.
+ *  \param maxlen       maximum size of the "sourcepath" buffer.
+ *
+ *  \return false=not a "directory" command, true=ok (command handled).
+ */
+static bool handle_directory_cmd(const char *command, char *sourcepath, size_t maxlen)
+{
+  const char *ptr = NULL;
+  assert(command != NULL);
+  command = skipwhite(command);
+  if (TERM_EQU(command, "directory", 9))
+    ptr = (char*)skipwhite(command + 9);
+  else if (TERM_EQU(command, "dir", 3))
+    ptr = (char*)skipwhite(command + 3);
+  else
+    return false;
+
+  assert(sourcepath != NULL);
+  if (*ptr == '\0') {
+    char msg[_MAX_PATH + 5];
+    if (*sourcepath == '\0') {
+      strlcpy(msg, "(none)", sizearray(msg));
+    } else {
+      strlcpy(msg, sourcepath, sizearray(msg));
+      strlcat(msg, "\n", sizearray(msg));
+    }
+    console_add(msg, STRFLG_STATUS);
+  } else {
+    strlcpy(sourcepath, ptr, maxlen);
+    sources_reload(sourcepath, false);
+  }
+  return true;
+}
+
 static void serial_info_mode(STRINGLIST *textroot)
 {
   char msg[_MAX_PATH + 20];
@@ -5075,25 +5111,6 @@ static void serial_info_mode(STRINGLIST *textroot)
       }
     }
   }
-}
-
-/** handle_semihosting_cmd()
- *  \param command    [in] command string.
- *
- *  \return 0=not "semihosting" command, 1=ok
- */
-static int handle_semihosting_cmd(const char *command)
-{
-  assert(command != NULL);
-  command = skipwhite(command);
-  if (!TERM_EQU(command, "semihosting", 11))
-    return 0;
-  const char *ptr = (char*)skipwhite(command + 11);
-  if (TERM_EQU(ptr, "clear", 5)) {
-    stringlist_clear(&semihosting_root);
-  }
-
-  return 1;
 }
 
 /** handle_serial_cmd()
@@ -5422,6 +5439,93 @@ static void log_console_strings(const APPSTATE *state)
   }
 }
 
+static bool save_targetoptions(const char *filename, const APPSTATE *state)
+{
+  if (filename == NULL || strlen(filename) == 0)
+    return false;
+
+  assert(state != NULL);
+  ini_puts("Target", "entrypoint", state->EntryPoint, filename);
+  ini_puts("Target", "cmsis-svd", state->SVDfile, filename);
+  ini_puts("Target", "source-path", state->sourcepath, filename);
+
+  ini_putl("Settings", "tpwr", state->tpwr, filename);
+  ini_putl("Settings", "connect_srst", state->connect_srst, filename);
+
+  ini_putl("Flash", "auto-download", state->autodownload, filename);
+
+  ini_putl("SWO trace", "mode", state->swo.mode, filename);
+  ini_putl("SWO trace", "bitrate", state->swo.bitrate, filename);
+  ini_putl("SWO trace", "clock", state->swo.clock, filename);
+  ini_putl("SWO trace", "datasize", state->swo.datasize * 8, filename);
+  ini_putl("SWO trace", "enabled", state->swo.enabled, filename);
+  ini_puts("SWO trace", "ctf", state->swo.metadata, filename);
+  for (unsigned idx = 0; idx < NUM_CHANNELS; idx++) {
+    char key[32], value[128];
+    struct nk_color color = channel_getcolor(idx);
+    sprintf(key, "chan%d", idx);
+    sprintf(value, "%d #%06x %s", channel_getenabled(idx),
+            ((int)color.r << 16) | ((int)color.g << 8) | color.b,
+            channel_getname(idx, NULL, 0));
+    ini_puts("SWO trace", key, value, filename);
+  }
+
+  ini_putl("Serial monitor", "mode", sermon_isopen(), filename);
+  ini_puts("Serial monitor", "port", sermon_getport(0), filename);
+  ini_putl("Serial monitor", "baud", sermon_getbaud(), filename);
+
+  return access(filename, 0) == 0;
+}
+
+static bool load_targetoptions(const char *filename, APPSTATE *state)
+{
+  if (filename == NULL || strlen(filename) == 0 || access(filename, 0) != 0)
+    return false;
+
+  assert(state != NULL);
+  ini_gets("Target", "entrypoint", "main", state->EntryPoint, sizearray(state->EntryPoint), filename);
+  ini_gets("Target", "cmsis-svd", "", state->SVDfile, sizearray(state->SVDfile), filename);
+  ini_gets("Target", "source-path", "", state->sourcepath, sizearray(state->sourcepath), filename);
+
+  state->tpwr =(int)ini_getl("Settings", "tpwr", 0, filename);
+  state->connect_srst = (int)ini_getl("Settings", "connect_srst", 0, filename);
+
+  state->autodownload = (int)ini_getl("Flash", "auto-download", 1, filename);
+
+  state->swo.mode = (unsigned)ini_getl("SWO trace", "mode", SWOMODE_NONE, filename);
+  state->swo.bitrate = (unsigned)ini_getl("SWO trace", "bitrate", 100000, filename);
+  state->swo.clock = (unsigned)ini_getl("SWO trace", "clock", 48000000, filename);
+  state->swo.datasize = (unsigned)ini_getl("SWO trace", "datasize", 8, filename) / 8;
+  state->swo.enabled = (unsigned)ini_getl("SWO trace", "enabled", 0, filename);
+  state->swo.force_plain = 0;
+  state->swo.init_status = 0;
+  ini_gets("SWO trace", "ctf", "", state->swo.metadata, sizearray(state->swo.metadata), filename);
+  for (unsigned idx = 0; idx < NUM_CHANNELS; idx++) {
+    char key[41], value[128];
+    /* preset: port 0 is enabled by default, others disabled by default */
+    channel_set(idx, (idx == 0), NULL, SWO_TRACE_DEFAULT_COLOR);
+    sprintf(key, "chan%d", idx);
+    unsigned clr;
+    int enabled;
+    ini_gets("SWO trace", key, "", value, sizearray(value), filename);
+    int result = sscanf(value, "%d #%x %40s", &enabled, &clr, key);
+    if (result >= 2)
+      channel_set(idx, enabled, (result >= 3) ? key : NULL, nk_rgb(clr >> 16,(clr >> 8) & 0xff, clr & 0xff));
+  }
+
+  int mode = ini_getl("Serial monitor", "mode", 0, filename);
+  if (mode) {
+    char portname[64];
+    int baud;
+    ini_gets("Serial monitor", "port", "", portname, sizearray(portname), filename);
+    baud = ini_getl("Serial monitor", "baud", 0, filename);
+    sermon_open(portname, baud);
+    sermon_setmetadata(state->swo.metadata);
+  }
+
+  return true;
+}
+
 static void help_popup(struct nk_context *ctx, APPSTATE *state, float canvas_width, float canvas_height)
 {
   assert(ctx != NULL);
@@ -5516,8 +5620,7 @@ static void button_bar(struct nk_context *ctx, APPSTATE *state, float panel_widt
   if (button_tooltip(ctx, "reset", NK_KEY_CTRL_F2, (state->curstate != STATE_RUNNING),
                      "Reload and restart the program (Ctrl+F2)")) {
     if (strlen(state->ELFfile) > 0 && access(state->ELFfile, 0) == 0)
-      save_targetoptions(state->ParamFile, state->EntryPoint, state->tpwr, state->connect_srst,
-                    state->autodownload, state->SVDfile, &state->swo);
+      save_targetoptions(state->ParamFile, state);
     RESETSTATE(state, STATE_FILE);
   }
   nk_layout_row_push(ctx, BUTTON_WIDTH);
@@ -5780,9 +5883,7 @@ static void console_view(struct nk_context *ctx, APPSTATE *state,
              switching to the new file (new options are loaded in the
              STATE_FILE case) */
           if (strlen(state->ELFfile) > 0 && access(state->ELFfile, 0) == 0)
-            save_targetoptions(state->ParamFile, state->EntryPoint, state->tpwr,
-                          state->connect_srst, state->autodownload, state->SVDfile,
-                          &state->swo);
+            save_targetoptions(state->ParamFile, state);
         } else if ((result = handle_serial_cmd(state->console_edit,
                                                state->port_sermon, &state->sermon_baud,
                                                state->swo.metadata, sizearray(state->swo.metadata))) != 0) {
@@ -5841,7 +5942,8 @@ static void console_view(struct nk_context *ctx, APPSTATE *state,
                    && !handle_find_cmd(state->console_edit)
                    && !handle_info_cmd(state->console_edit, &helptext_root, &state->popup_active, &state->reformat_help, &state->swo)
                    && !handle_disasm_cmd(state->console_edit, &state->disassemble_mode)
-                   && !handle_semihosting_cmd(state->console_edit))
+                   && !handle_semihosting_cmd(state->console_edit)
+                   && !handle_directory_cmd(state->console_edit, state->sourcepath, sizearray(state->sourcepath)))
         {
           char translated[sizearray(state->console_edit)];
           /* check monitor command, to avoid that the output should goes
@@ -5936,7 +6038,7 @@ static void panel_configuration(struct nk_context *ctx, APPSTATE *state,
   assert(tab_state != NULL);
 
   if (nk_tree_state_push(ctx, NK_TREE_TAB, "Configuration", tab_state)) {
-#   define LABEL_WIDTH (2.5f * opt_fontsize)
+#   define LABEL_WIDTH (5.0f * opt_fontsize)
     struct nk_rect bounds = nk_widget_bounds(ctx);
     float edtwidth = bounds.w - LABEL_WIDTH - BROWSEBTN_WIDTH - (2 * 5);
 
@@ -5948,7 +6050,7 @@ static void panel_configuration(struct nk_context *ctx, APPSTATE *state,
     bounds = nk_widget_bounds(ctx);
     int newprobe = nk_combo(ctx, state->probelist, state->netprobe+1, state->probe, (int)COMBOROW_CY, nk_vec2(bounds.w, 4.5f*ROW_HEIGHT));
     if (newprobe == state->netprobe) {
-      int reconnect = 0;
+      bool reconnect = false;
       nk_layout_row_begin(ctx, NK_STATIC, ROW_HEIGHT, 3);
       nk_layout_row_push(ctx, LABEL_WIDTH);
       nk_label(ctx, "IP", NK_TEXT_ALIGN_LEFT | NK_TEXT_ALIGN_MIDDLE);
@@ -5956,8 +6058,8 @@ static void panel_configuration(struct nk_context *ctx, APPSTATE *state,
       int result = editctrl_tooltip(ctx, NK_EDIT_FIELD|NK_EDIT_SIG_ENTER,
                                     state->IPaddr, sizearray(state->IPaddr), nk_filter_ascii,
                                     "IP address of the ctxLink");
-      if ((result & NK_EDIT_COMMITED) != 0 && is_ip_address(state->IPaddr))
-        reconnect = 1;
+      if ((result & (NK_EDIT_COMMITED|NK_EDIT_DEACTIVATED)) != 0 && is_ip_address(state->IPaddr))
+        reconnect = true;
       nk_layout_row_push(ctx, BROWSEBTN_WIDTH);
       if (button_symbol_tooltip(ctx, NK_SYMBOL_TRIPLE_DOT, NK_KEY_NONE, nk_true, "Scan network for ctxLink probes.")) {
 #       if defined WIN32 || defined _WIN32
@@ -5971,7 +6073,7 @@ static void panel_configuration(struct nk_context *ctx, APPSTATE *state,
         if (count == 1) {
           sprintf(state->IPaddr, "%lu.%lu.%lu.%lu",
                  addr & 0xff, (addr >> 8) & 0xff, (addr >> 16) & 0xff, (addr >> 24) & 0xff);
-          reconnect = 1;
+          reconnect = true;
         } else {
           strlcpy(state->IPaddr, "none found", sizearray(state->IPaddr));
         }
@@ -5988,30 +6090,31 @@ static void panel_configuration(struct nk_context *ctx, APPSTATE *state,
     char tiptext[_MAX_PATH];
     char basename[_MAX_PATH], *p;
     p = strrchr(state->GDBpath, DIRSEP_CHAR);
-    strlcpy(basename,(p == NULL)? state->GDBpath : p + 1, sizearray(basename));
+    strlcpy(basename, (p == NULL) ? state->GDBpath : p + 1, sizearray(basename));
+    strlcpy(tiptext, (strlen(basename) > 0) ? state->GDBpath : "Path to the GDB executable", sizearray(tiptext));
     nk_layout_row_begin(ctx, NK_STATIC, ROW_HEIGHT, 3);
     nk_layout_row_push(ctx, LABEL_WIDTH);
     nk_label(ctx, "GDB", NK_TEXT_LEFT);
     nk_layout_row_push(ctx, edtwidth);
-    strlcpy(tiptext, (strlen(state->GDBpath) > 0) ? state->GDBpath : "Path to the GDB executable", sizearray(tiptext));
     bool error = editctrl_cond_color(ctx, !task_isrunning(&state->gdb_task), COLOUR_BG_DARKRED);
     int res = editctrl_tooltip(ctx, NK_EDIT_FIELD|NK_EDIT_READ_ONLY,
                                basename, sizearray(basename), nk_filter_ascii, tiptext);
     editctrl_reset_color(ctx, error);
     nk_layout_row_push(ctx, BROWSEBTN_WIDTH);
-    if (nk_button_symbol(ctx, NK_SYMBOL_TRIPLE_DOT) || (res & NK_EDIT_BLOCKED)) {
+    if (nk_button_symbol(ctx, NK_SYMBOL_TRIPLE_DOT) || (res & NK_EDIT_BLOCKED) != 0) {
       nk_input_clear_mousebuttons(ctx);
 #     if defined _WIN32
-        const char *filter = "Executables\0*.exe;*.\0All files\0*.*\0";
+        osdialog_filters *filters = osdialog_filters_parse("Executables:exe;All files:*");
 #     else
-        const char *filter = "Executables\0*\0All files\0*\0";
+        osdialog_filters *filters = osdialog_filters_parse("Executables:*;All files:*");
 #     endif
-      res = noc_file_dialog_open(state->GDBpath, sizearray(state->GDBpath),
-                                 NOC_FILE_DIALOG_OPEN, filter,
-                                 NULL, state->GDBpath, "Select GDB program",
-                                 guidriver_apphandle());
-      if (res) {
-        task_close(&state->gdb_task);  /* terminate running instance of GDB (if any) */
+      char *fname = osdialog_file(OSDIALOG_OPEN, "Select GDB program", NULL, state->GDBpath, filters);
+      osdialog_filters_free(filters);
+      if (fname != NULL) {
+        strlcpy(state->GDBpath, fname, sizearray(state->GDBpath));
+        free(fname);
+        /* terminate running instance of GDB (if any), and restart */
+        task_close(&state->gdb_task);
         RESETSTATE(state, STATE_INIT);
       }
     }
@@ -6022,7 +6125,7 @@ static void panel_configuration(struct nk_context *ctx, APPSTATE *state,
     strlcpy(basename, (p == NULL) ? state->ELFfile : p + 1, sizearray(basename));
     nk_layout_row_begin(ctx, NK_STATIC, ROW_HEIGHT, 3);
     nk_layout_row_push(ctx, LABEL_WIDTH);
-    nk_label(ctx, "File", NK_TEXT_LEFT);
+    nk_label(ctx, "ELF file", NK_TEXT_LEFT);
     nk_layout_row_push(ctx, edtwidth);
     strlcpy(tiptext, (strlen(state->ELFfile) > 0) ? state->ELFfile : "Path to the target ELF file", sizearray(tiptext));
     error = editctrl_cond_color(ctx, strlen(state->ELFfile) == 0 || access(state->ELFfile, 0) != 0, COLOUR_BG_DARKRED);
@@ -6032,21 +6135,17 @@ static void panel_configuration(struct nk_context *ctx, APPSTATE *state,
     nk_layout_row_push(ctx, BROWSEBTN_WIDTH);
     if (nk_button_symbol(ctx, NK_SYMBOL_TRIPLE_DOT) || (res & NK_EDIT_BLOCKED)) {
       nk_input_clear_mousebuttons(ctx);
-      translate_path(state->ELFfile, 1);
-#     if defined _WIN32
-        const char *filter = "ELF Executables\0*.elf;*.\0All files\0*.*\0";
-#     else
-        const char *filter = "ELF Executables\0*.elf\0All files\0*\0";
-#     endif
-      res = noc_file_dialog_open(state->ELFfile, sizearray(state->ELFfile),
-                                 NOC_FILE_DIALOG_OPEN, filter,
-                                 NULL, state->ELFfile, "Select ELF Executable",
-                                 guidriver_apphandle());
-      translate_path(state->ELFfile, 0);
-      if (res) {
+      translate_path(state->ELFfile, true);
+      osdialog_filters *filters = osdialog_filters_parse("ELF Executables:elf;All files:*");
+      char *fname = osdialog_file(OSDIALOG_OPEN, "Select ELF executable", NULL, state->ELFfile, filters);
+      osdialog_filters_free(filters);
+      if (fname != NULL) {
+        strlcpy(state->ELFfile, fname, sizearray(state->ELFfile));
+        free(fname);
         if (state->curstate > STATE_FILE)
           RESETSTATE(state, STATE_FILE);
       }
+      translate_path(state->ELFfile, false);
     }
     nk_layout_row_end(ctx);
 
@@ -6063,6 +6162,7 @@ static void panel_configuration(struct nk_context *ctx, APPSTATE *state,
       state->console_activate = 0;
 
     /* CMSIS SVD file */
+    bool reload_svd = false;
     p = strrchr(state->SVDfile, '/');
     strlcpy(basename, (p == NULL) ? state->SVDfile : p + 1, sizearray(basename));
     nk_layout_row_begin(ctx, NK_STATIC, ROW_HEIGHT, 3);
@@ -6071,52 +6171,66 @@ static void panel_configuration(struct nk_context *ctx, APPSTATE *state,
     nk_layout_row_push(ctx, edtwidth);
     strlcpy(tiptext, (strlen(state->SVDfile) > 0) ? state->SVDfile : "Path to an SVD file with the MCU description & registers", sizearray(tiptext));
     error = editctrl_cond_color(ctx, strlen(state->SVDfile) > 0 && access(state->SVDfile, 0) != 0, COLOUR_BG_DARKRED);
-    res = editctrl_tooltip(ctx, NK_EDIT_FIELD|NK_EDIT_READ_ONLY,
-                           basename, sizearray(basename), nk_filter_ascii, tiptext);
+    res = editctrl_tooltip(ctx, NK_EDIT_FIELD|NK_EDIT_SIG_ENTER, basename, sizearray(basename),
+                           nk_filter_ascii, tiptext);
     editctrl_reset_color(ctx, error);
+    if (res & NK_EDIT_ACTIVATED)
+      state->console_activate = 0;
+    if ((res & (NK_EDIT_COMMITED|NK_EDIT_DEACTIVATED)) != 0)
+      reload_svd = true;
     nk_layout_row_push(ctx, BROWSEBTN_WIDTH);
-    if (nk_button_symbol(ctx, NK_SYMBOL_TRIPLE_DOT) || (res & NK_EDIT_BLOCKED)) {
+    if (nk_button_symbol(ctx, NK_SYMBOL_TRIPLE_DOT)) {
       nk_input_clear_mousebuttons(ctx);
-      translate_path(state->SVDfile, 1);
-      res = noc_file_dialog_open(state->SVDfile, sizearray(state->SVDfile),
-                                 NOC_FILE_DIALOG_OPEN,
-                                 "CMSIS SVD files\0*.svd\0All files\0*.*\0",
-                                 NULL, state->SVDfile, "Select CMSIS SVD file",
-                                 guidriver_apphandle());
-      if (res && state->curstate > STATE_GET_SOURCES) {
-        svd_clear();
-        if (strlen(state->SVDfile) > 0)
-          svd_load(state->SVDfile);
+      translate_path(state->SVDfile, true);
+      osdialog_filters *filters = osdialog_filters_parse("CMSIS SVD files:svd;All files:*");
+      char *fname = osdialog_file(OSDIALOG_OPEN, "Select CMSIS SVD file", NULL, state->SVDfile, filters);
+      osdialog_filters_free(filters);
+      if (fname != NULL) {
+        strlcpy(state->SVDfile, fname, sizearray(state->SVDfile));
+        free(fname);
+        if (state->curstate > STATE_FILE)
+          reload_svd = true;
       }
-      translate_path(state->SVDfile, 0);
+      translate_path(state->SVDfile, false);
     }
     nk_layout_row_end(ctx);
+    if (reload_svd) {
+      svd_clear();
+      if (strlen(state->SVDfile) > 0) {
+        translate_path(state->SVDfile, true);
+        svd_load(state->SVDfile);
+        translate_path(state->SVDfile, false);
+      }
+    }
 
     /* source directory */
-#if 0
+    bool reload_sources = false;
     nk_layout_row_begin(ctx, NK_STATIC, ROW_HEIGHT, 3);
     nk_layout_row_push(ctx, LABEL_WIDTH);
     nk_label(ctx, "Sources", NK_TEXT_LEFT);
     nk_layout_row_push(ctx, edtwidth);
-    res = editctrl_tooltip(ctx, NK_EDIT_FIELD|NK_EDIT_READ_ONLY,
+    res = editctrl_tooltip(ctx, NK_EDIT_FIELD|NK_EDIT_SIG_ENTER,
                            state->sourcepath, sizearray(state->sourcepath), nk_filter_ascii,
                            "Path to the source files (in case these were moved after the build)");
+    if (res & NK_EDIT_ACTIVATED)
+      state->console_activate = 0;
+    if ((res & (NK_EDIT_COMMITED|NK_EDIT_DEACTIVATED)) != 0)
+      reload_sources = true;
     nk_layout_row_push(ctx, BROWSEBTN_WIDTH);
-    if (nk_button_symbol(ctx, NK_SYMBOL_TRIPLE_DOT) || (res & NK_EDIT_BLOCKED)) {
+    if (nk_button_symbol(ctx, NK_SYMBOL_TRIPLE_DOT)) {
       nk_input_clear_mousebuttons(ctx);
-      //??? should have a directory selection dialog
-      res = noc_file_dialog_open(state->sourcepath, sizearray(state->sourcepath),
-                                 NOC_FILE_DIALOG_OPEN,
-                                 "Source files\0*.c\0All files\0*.*\0",
-                                 NULL, state->sourcepath, "Select path to source files",
-                                 guidriver_apphandle());
-      if (res && state->curstate > STATE_GET_SOURCES) {
-        //??? attempt to reload source files that were not yet loaded
-        //??? enhancement: overrule directory where source files are found; -environment-directory -r path "path" ...
+      char *fname = osdialog_file(OSDIALOG_OPEN_DIR, "Path to Source files", NULL, state->sourcepath, NULL);
+      if (fname != NULL) {
+        strlcpy(state->sourcepath, fname, sizearray(state->sourcepath));
+        free(fname);
+        //??? also pass on the GDB: -environment-directory -r path "path" ...
+        if (state->curstate > STATE_GET_SOURCES)
+          reload_sources = true;
       }
     }
     nk_layout_row_end(ctx);
-#endif
+    if (reload_sources)
+      sources_reload(state->sourcepath, state->debugmode);
 
     /* TPWR option */
     nk_layout_row_dynamic(ctx, ROW_HEIGHT, 1);
@@ -6729,7 +6843,7 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
           else
             console_add("GDB failed to launch, check the configuration\n", STRFLG_ERROR);
         }
-		MARKSTATE(state);
+        MARKSTATE(state);
         set_idle_time(1000); /* repeat scan on timeout (but don't sleep the GUI thread) */
       }
       break;
@@ -6812,9 +6926,7 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
         /* create parameter filename from target filename, then read target-specific settings */
         strlcpy(state->ParamFile, state->ELFfile, sizearray(state->ParamFile));
         strlcat(state->ParamFile, ".bmcfg", sizearray(state->ParamFile));
-        load_targetoptions(state->ParamFile, state->EntryPoint, sizearray(state->EntryPoint),
-                      &state->tpwr, &state->connect_srst, &state->autodownload,
-                      state->SVDfile, sizearray(state->SVDfile), &state->swo);
+        load_targetoptions(state->ParamFile, state);
         /* load target filename in GDB */
         snprintf(state->cmdline, CMD_BUFSIZE, "-file-exec-and-symbols %s\n",
                  enquote(temp, state->ELFfile, sizeof(temp)));
@@ -7147,6 +7259,8 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
       } else if (gdbmi_isresult() != NULL) {
         if (strncmp(gdbmi_isresult(), "done,", 5) == 0) {
           sources_parse(gdbmi_isresult() + 5, state->debugmode);      /* + 5 to skip "done" and comma */
+          sources_reload(state->sourcepath, state->debugmode);        /* load missing sources from alternate path (if set) */
+          sources_reload(state->ELFfile, state->debugmode);
           state->sourcefiles = sources_getnames(&state->sourcefiles_count); /* create array with names for the dropdown */
           state->warn_source_tstamps = !elf_up_to_date(state->ELFfile);     /* check timestamps of sources against elf file */
           MOVESTATE(state, STATE_MEMACCESS_1);
@@ -7234,9 +7348,9 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
           if (sscanf(item->text, "$%*d = 0x%lx", &id) == 1) {
             state->mcu_partid = id;
             /* see whether to translate the mcu_family name, and to reload the scripts */
-            const MCUINFO *info = mcuinfo_lookup(state->mcu_family, state->mcu_partid);
-            if (info != NULL && info->mcuname != NULL) {
-              strlcpy(state->mcu_family, info->mcuname, sizearray(state->mcu_family));
+            const char *mcuname = mcuinfo_lookup(state->mcu_family, state->mcu_partid);
+            if (mcuname != NULL) {
+              strlcpy(state->mcu_family, mcuname, sizearray(state->mcu_family));
               bmscript_clear();
               bmscript_load(state->mcu_family, state->mcu_architecture);
             }
@@ -7960,8 +8074,8 @@ int main(int argc, char *argv[])
     splitter_hor.ratio = 0.70f;
   if (splitter_ver.ratio < 0.05f || splitter_ver.ratio > 0.95f)
     splitter_ver.ratio = 0.70f;
-  nk_splitter_init(&splitter_hor, canvas_width - 2 * SPACING, SEPARATOR_HOR, splitter_hor.ratio);
-  nk_splitter_init(&splitter_ver, canvas_height - 4 * SPACING, SEPARATOR_VER, splitter_ver.ratio);
+  nk_splitter_init(&splitter_hor, (float)canvas_width - 2 * SPACING, SEPARATOR_HOR, splitter_hor.ratio);
+  nk_splitter_init(&splitter_ver, (float)canvas_height - 4 * SPACING, SEPARATOR_VER, splitter_ver.ratio);
   config_read_tabstate("configuration", &tab_states[TAB_CONFIGURATION], NULL, NK_MAXIMIZED, 5 * ROW_HEIGHT, txtConfigFile);
   config_read_tabstate("breakpoints", &tab_states[TAB_BREAKPOINTS], &appstate.sizerbar_breakpoints, NK_MAXIMIZED, 5 * ROW_HEIGHT, txtConfigFile);
   config_read_tabstate("locals", &tab_states[TAB_LOCALS], &appstate.sizerbar_locals, NK_MAXIMIZED, 5 * ROW_HEIGHT, txtConfigFile);
@@ -8008,6 +8122,13 @@ int main(int argc, char *argv[])
         return EXIT_SUCCESS;
       case 'd':
         appstate.debugmode = true;
+#       if defined _WIN32  /* fix console output on Windows */
+          if (AttachConsole(ATTACH_PARENT_PROCESS)) {
+            freopen("CONOUT$", "wb", stdout);
+            freopen("CONOUT$", "wb", stderr);
+          }
+          printf("\n");
+#       endif
         break;
       case 'f':
         ptr = &argv[idx][2];
@@ -8042,10 +8163,11 @@ int main(int argc, char *argv[])
       }
     } else {
       /* filename on the command line must be in native format (using backslashes
-         on Windows) */
+         on Windows), otherwise access() fails; the path is translated to Unix
+         format (as used internally by GDB) */
       if (access(argv[idx], 0) == 0) {
         strlcpy(appstate.ELFfile, argv[idx], sizearray(appstate.ELFfile));
-        translate_path(appstate.ELFfile, 0);
+        translate_path(appstate.ELFfile, false);
       }
     }
   }
@@ -8053,11 +8175,11 @@ int main(int argc, char *argv[])
     ini_gets("Session", "recent", "", appstate.ELFfile, sizearray(appstate.ELFfile), txtConfigFile);
     /* filename from the configuration file is stored in the GDB format (convert
        it to native format to test whether it exists) */
-    translate_path(appstate.ELFfile, 1);
+    translate_path(appstate.ELFfile, true);
     if (access(appstate.ELFfile, 0) != 0)
       appstate.ELFfile[0] = '\0';
     else
-      translate_path(appstate.ELFfile, 0); /* convert back to GDB format */
+      translate_path(appstate.ELFfile, false); /* convert back to GDB format */
   }
   assert(strchr(appstate.ELFfile, '\\') == 0); /* backslashes should already have been replaced */
   /* if a target filename is known, create the parameter filename from target
@@ -8070,10 +8192,8 @@ int main(int argc, char *argv[])
   if (strlen(appstate.ELFfile) > 0) {
     strlcpy(appstate.ParamFile, appstate.ELFfile, sizearray(appstate.ParamFile));
     strlcat(appstate.ParamFile, ".bmcfg", sizearray(appstate.ParamFile));
-    translate_path(appstate.ParamFile, 1);
-    load_targetoptions(appstate.ParamFile, appstate.EntryPoint, sizearray(appstate.EntryPoint), &appstate.tpwr,
-                  &appstate.connect_srst, &appstate.autodownload, appstate.SVDfile, sizearray(appstate.SVDfile),
-                  &appstate.swo);
+    translate_path(appstate.ParamFile, true);
+    load_targetoptions(appstate.ParamFile, &appstate);
   }
   if (appstate.swo.mode == SWOMODE_NONE || !appstate.swo.enabled)
     tracelog_statusmsg(TRACESTATMSG_BMP, "Disabled", -1);
@@ -8149,7 +8269,7 @@ int main(int argc, char *argv[])
 
     /* GUI */
     guidriver_appsize(&canvas_width, &canvas_height);
-    if (nk_begin(ctx, "MainPanel", nk_rect(0, 0, canvas_width, canvas_height), NK_WINDOW_NO_SCROLLBAR)) {
+    if (nk_begin(ctx, "MainPanel", nk_rect(0, 0, (float)canvas_width, (float)canvas_height), NK_WINDOW_NO_SCROLLBAR)) {
       nk_splitter_resize(&splitter_hor, (float)canvas_width - 2 * SPACING, RESIZE_TOPLEFT);
       nk_splitter_resize(&splitter_ver, (float)canvas_height - 4 * SPACING, RESIZE_TOPLEFT);
       nk_hsplitter_layout(ctx, &splitter_hor, (float)canvas_height - 2 * SPACING);
@@ -8237,8 +8357,7 @@ int main(int argc, char *argv[])
 
   /* save parameter file */
   if (strlen(appstate.ELFfile) > 0 && access(appstate.ELFfile, 0) == 0)
-    save_targetoptions(appstate.ParamFile, appstate.EntryPoint, appstate.tpwr, appstate.connect_srst,
-                  appstate.autodownload, appstate.SVDfile, &appstate.swo);
+    save_targetoptions(appstate.ParamFile, &appstate);
 
   /* save settings */
   ini_puts("Settings", "gdb", appstate.GDBpath, txtConfigFile);

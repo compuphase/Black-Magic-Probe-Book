@@ -287,7 +287,7 @@ static void calc_layout(struct nk_context *ctx, struct nk_user_font const *font,
   }
   memdump->item_width = (maxlen + 0.5) * char_width;
 
-  memdump->columns = (widget_width - memdump->addr_width) / memdump->item_width;
+  memdump->columns = (int)((widget_width - memdump->addr_width) / memdump->item_width);
   for (int idx = 1; idx < 8; idx++) { /* round # columns down to the nearest power of 2 below it */
     if (memdump->columns < (1 << idx)) {
       memdump->columns = 1 << (idx - 1);

@@ -23,4 +23,7 @@
 #
 # partid  - to return the part-ID code (if any)
 #       $ = return value
+#
+# flashsize  - to return the size of Flash memory
+#       $ = return value
 

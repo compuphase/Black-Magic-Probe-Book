@@ -8,7 +8,9 @@
 #
 # -------------------------------------------------------------
 
-# !include makefile.cfg
+# Options to set in makefile.cfg
+#  o  INCLUDE   all (additional) include directories to pass to the C/C++ compiler
+!include makefile.cfg
 
 # -------------------------------------------------------------
 #               Defines
@@ -16,13 +18,13 @@
 
 # default = retail version
 !ifdef DEBUG
-    C_DEBUG = /Zi
-    L_DEBUG = /DEBUG
-    R_DEBUG =
+C_DEBUG= /Zi
+L_DEBUG= /DEBUG
+R_DEBUG=
 !else
-    C_DEBUG = /D NDEBUG
-    L_DEBUG =
-    R_DEBUG = /D NDEBUG
+C_DEBUG= /D NDEBUG
+L_DEBUG=
+R_DEBUG= /D NDEBUG
 !endif
 
 
@@ -33,7 +35,7 @@
 ####### C compiler
 CL        = cl
 CC        = cl /c
-CFLAGS    = /nologo /MT /W1 /EHsc /D _WIN32 $(C_DEBUG) /D NOC_FILE_DIALOG_WIN32 /D _CRT_SECURE_NO_WARNINGS
+CFLAGS    = /nologo /MT /W1 /EHsc /D _WIN32 $(C_DEBUG) /D _CRT_SECURE_NO_WARNINGS
 !ifndef INCLUDE
     INCLUDE =
 !endif
@@ -61,54 +63,55 @@ LFLAGS_C  = $(L_DEBUG) /NOLOGO /SUBSYSTEM:console
 .rc.res :
 	$(RC) -r $(RCFLAGS) $(INCLUDE) /Fo$@ $<
 
-.md.h :
-	$(QGP) -c $< $@
 
 # -------------------------------------------------------------
 #               Project
 # -------------------------------------------------------------
 
 OBJLIST_BMDEBUG = bmdebug.obj armdisasm.obj bmcommon.obj bmp-scan.obj bmp-script.obj \
-                  c11threads_win32.obj demangle.obj dirent.obj dwarf.obj elf.obj guidriver.obj mcu-info.obj memdump.obj \
-                  minIni.obj nuklear_mousepointer.obj nuklear_splitter.obj nuklear_style.obj \
-                  nuklear_tooltip.obj pathsearch.obj rs232.obj serialmon.obj specialfolder.obj \
-                  svd-support.obj swotrace.obj tcpip.obj xmltractor.obj decodectf.obj parsetsdl.obj \
-                  strlcpy.obj usb-support.obj \
-                  nuklear.obj nuklear_gdip.obj noc_file_dialog.obj
+                  c11threads_win32.obj decodectf.obj demangle.obj dwarf.obj elf.obj \
+                  guidriver.obj mcu-info.obj memdump.obj minIni.obj nuklear.obj \
+                  nuklear_mousepointer.obj nuklear_splitter.obj nuklear_style.obj \
+                  nuklear_tooltip.obj osdialog.obj parsetsdl.obj pathsearch.obj \
+                  rs232.obj serialmon.obj specialfolder.obj svd-support.obj \
+                  swotrace.obj tcpip.obj xmltractor.obj \
+                  dirent.obj nuklear_gdip.obj osdialog_win.obj strlcpy.obj usb-support.obj
 
 OBJLIST_BMFLASH = bmflash.obj bmcommon.obj bmp-scan.obj bmp-script.obj bmp-support.obj \
-                  c11threads_win32.obj cksum.obj crc32.obj elf.obj gdb-rsp.obj guidriver.obj ident.obj minIni.obj \
-                  nuklear_guide.obj nuklear_mousepointer.obj nuklear_style.obj nuklear_tooltip.obj \
-                  rs232.obj specialfolder.obj tcl.obj tcpip.obj xmltractor.obj \
-                  strlcpy.obj \
-                  nuklear.obj nuklear_gdip.obj noc_file_dialog.obj
+                  c11threads_win32.obj cksum.obj crc32.obj elf.obj fileloader.obj \
+                  gdb-rsp.obj guidriver.obj ident.obj mcu-info.obj minIni.obj \
+                  nuklear.obj nuklear_guide.obj nuklear_mousepointer.obj \
+                  nuklear_style.obj nuklear_tooltip.obj osdialog.obj rs232.obj \
+                  specialfolder.obj tcl.obj tcpip.obj xmltractor.obj \
+                  nuklear_gdip.obj osdialog_win.obj strlcpy.obj
 
 OBJLIST_BMPROFILE = bmprofile.obj bmcommon.obj bmp-scan.obj bmp-script.obj \
-                    bmp-support.obj c11threads_win32.obj crc32.obj decodectf.obj demangle.obj dwarf.obj \
-                    elf.obj gdb-rsp.obj guidriver.obj mcu-info.obj minIni.obj \
-                    parsetsdl.obj rs232.obj specialfolder.obj swotrace.obj \
-                    tcpip.obj xmltractor.obj nuklear_guide.obj nuklear_mousepointer.obj \
-                    nuklear_splitter.obj nuklear_style.obj nuklear_tooltip.obj \
-                    strlcpy.obj usb-support.obj \
-                    nuklear.obj nuklear_gdip.obj noc_file_dialog.obj
+                    bmp-support.obj c11threads_win32.obj crc32.obj decodectf.obj \
+                    demangle.obj dwarf.obj elf.obj fileloader.obj gdb-rsp.obj \
+                    guidriver.obj mcu-info.obj minIni.obj nuklear.obj nuklear_guide.obj \
+                    nuklear_mousepointer.obj nuklear_splitter.obj nuklear_style.obj \
+                    nuklear_tooltip.obj osdialog.obj parsetsdl.obj rs232.obj \
+                    specialfolder.obj swotrace.obj tcpip.obj xmltractor.obj \
+                    nuklear_gdip.obj osdialog_win.obj strlcpy.obj usb-support.obj
 
-OBJLIST_BMSERIAL = bmserial.obj guidriver.obj minIni.obj rs232.obj \
-                   specialfolder.obj noc_file_dialog.obj \
-                   nuklear_guide.obj nuklear_mousepointer.obj nuklear_splitter.obj \
-                   nuklear_style.obj nuklear_tooltip.obj tcl.obj \
-                   strlcpy.obj lodepng.obj nuklear.obj nuklear_gdip.obj
+OBJLIST_BMSERIAL = bmserial.obj guidriver.obj minIni.obj nuklear.obj nuklear_guide.obj \
+                   nuklear_mousepointer.obj nuklear_splitter.obj nuklear_style.obj \
+                   nuklear_tooltip.obj osdialog.obj rs232.obj specialfolder.obj tcl.obj \
+                   nuklear_gdip.obj osdialog_win.obj strlcpy.obj
 
 OBJLIST_BMTRACE = bmtrace.obj bmcommon.obj bmp-scan.obj bmp-script.obj bmp-support.obj \
-                  c11threads_win32.obj crc32.obj demangle.obj dwarf.obj elf.obj gdb-rsp.obj guidriver.obj mcu-info.obj \
-                  minIni.obj nuklear_guide.obj nuklear_mousepointer.obj nuklear_splitter.obj \
-                  nuklear_style.obj nuklear_tooltip.obj rs232.obj specialfolder.obj \
-                  swotrace.obj tcpip.obj xmltractor.obj decodectf.obj parsetsdl.obj \
-                  strlcpy.obj usb-support.obj \
-                  nuklear.obj nuklear_gdip.obj noc_file_dialog.obj
+                  c11threads_win32.obj crc32.obj decodectf.obj demangle.obj dwarf.obj \
+                  elf.obj fileloader.obj gdb-rsp.obj guidriver.obj mcu-info.obj \
+                  minIni.obj nuklear.obj nuklear_guide.obj nuklear_mousepointer.obj \
+                  nuklear_splitter.obj nuklear_style.obj nuklear_tooltip.obj \
+                  osdialog.obj parsetsdl.obj rs232.obj specialfolder.obj swotrace.obj \
+                  tcpip.obj xmltractor.obj \
+                  nuklear_gdip.obj osdialog_win.obj strlcpy.obj usb-support.obj
 
-OBJLIST_BMSCAN = bmscan.obj bmp-scan.obj bmp-script.obj bmp-support.obj c11threads_win32.obj \
-                 crc32.obj elf.obj gdb-rsp.obj rs232.obj specialfolder.obj strlcpy.obj tcpip.obj \
-                 xmltractor.obj
+OBJLIST_BMSCAN = bmscan.obj bmp-scan.obj bmp-script.obj bmp-support.obj \
+                 c11threads_win32.obj crc32.obj elf.obj fileloader.obj gdb-rsp.obj \
+                 rs232.obj specialfolder.obj tcpip.obj xmltractor.obj \
+                 strlcpy.obj
 
 OBJLIST_CALLTREE = calltree.obj strlcpy.obj
 
@@ -117,11 +120,11 @@ OBJLIST_POSTLINK = elf-postlink.obj elf.obj strlcpy.obj
 OBJLIST_TRACEGEN = tracegen.obj parsetsdl.obj strlcpy.obj
 
 
-project : bmdebug.exe bmflash.exe bmprofile.exe bmscan.exe bmserial.exe bmtrace.exe \
-          calltree.exe elf-postlink.exe tracegen.exe
+project : bmdebug.exe bmflash.exe bmprofile.exe bmscan.exe bmserial.exe \
+          bmtrace.exe calltree.exe elf-postlink.exe tracegen.exe
 
 depend :
-	makedepend -b -e -o.obj -sort -fmakefile.dep $(OBJLIST_BMDEBUG:.obj=.c) $(OBJLIST_BMFLASH:.obj=.c) \
+	makedepend -b -e -o.obj -fmakefile.dep $(OBJLIST_BMDEBUG:.obj=.c) $(OBJLIST_BMFLASH:.obj=.c) \
                    $(OBJLIST_BMPROFILE:.obj=.c) $(OBJLIST_BMSCAN:.obj=.c) \
                    $(OBJLIST_BMSERIAL:.obj=.c) $(OBJLIST_BMTRACE:.obj=.c) \
                    $(OBJLIST_CALLTREE:.obj=.c) $(OBJLIST_POSTLINK:.obj=.c) \
@@ -172,6 +175,8 @@ elf.obj : elf.c
 
 elf-postlink.obj : elf-postlink.c
 
+fileloader.obj : fileloader.c
+
 gdb-rsp.obj : gdb-rsp.c
 
 guidriver.obj : guidriver.c
@@ -184,7 +189,9 @@ memdump.obj : memdump.c
 
 minIni.obj : minIni.c
 
-noc_file_dialog.obj : noc_file_dialog.c
+osdialog.obj : osdialog.c
+
+osdialog_win.obj : osdialog_win.c
 
 nuklear_guide.obj : nuklear_guide.c
 
@@ -212,9 +219,9 @@ svd-support.obj : svd-support.c
 
 swotrace.obj : swotrace.c
 
-tcpip.obj : tcpip.c
-
 tcl.obj : tcl.c
+
+tcpip.obj : tcpip.c
 
 tracegen.obj : tracegen.c
 

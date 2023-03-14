@@ -651,7 +651,7 @@ static bool thumb_cmp_branch(ARMSTATE *state, uint32_t instr)
 
 static bool thumb_push(ARMSTATE *state, uint32_t instr)
 {
-  /* 1011 010 xxxx xxxx - push register list */
+  /* 1011 010x xxxx xxxx - push register list */
   strcpy(state->text, "push");
   padinstr(state->text);
   int list = FIELD(instr, 0, 8);
@@ -666,7 +666,7 @@ static bool thumb_push(ARMSTATE *state, uint32_t instr)
 
 static bool thumb_pop(ARMSTATE *state, uint32_t instr)
 {
-  /* 1011 110 xxxx xxxx - pop register list */
+  /* 1011 110x xxxx xxxx - pop register list */
   strcpy(state->text, "pop");
   padinstr(state->text);
   int list = FIELD(instr, 0, 8);

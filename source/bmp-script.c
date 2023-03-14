@@ -3,7 +3,7 @@
  * automatically handle device-specific settings. It can use the GDB-RSP serial
  * interface, or the GDB-MI console interface.
  *
- * Copyright 2019-2022 CompuPhase
+ * Copyright 2019-2023 CompuPhase
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -104,6 +104,7 @@ static const REG_DEF register_defaults[] = {
   { "PART_ID",              0x400483F8, 4, "LPC8xx,LPC11U3x,LPC11xx-XL" },      /**< DEVICE_ID register, LPC Cortex M0 series */
   { "PART_ID",              0x400743F8, 4, "LPC15xx" },                         /**< DEVICE_ID register, LPC15xx series */
   { "PART_ID",              0x40043200, 4, "LPC43xx" },                         /**< CHIP_ID register, LPC43xx series */
+  { "PART_ID",              0x40000FF8, 4, "LPC546xx" },                        /**< DEVICE_ID0 register, LPC546xx series */
 
   { "RCC_APB2ENR",          0x40021018, 4, "STM32F1*" },                        /**< STM32F1 APB2 Peripheral Clock Enable Register */
   { "AFIO_MAPR",            0x40010004, 4, "STM32F1*" },                        /**< STM32F1 AF remap and debug I/O configuration */
@@ -118,6 +119,14 @@ static const REG_DEF register_defaults[] = {
   { "DBGMCU_CR",            0xE0042004, 4, "STM32F03,STM32F05,STM32F07,STM32F09,"
                                            "STM32F1*,STM32F2*,STM32F3*,STM32F4*,"
                                            "STM32F7*,GD32F1*,GD32F3*,GD32E230" },   /**< STM32 Debug MCU Configuration Register */
+  { "FLASHSIZE",            0x1FFFF7E0, 4, "STM32F1*" },
+  { "FLASHSIZE",            0x1FFFF7CC, 4, "STM32F3*" },
+  { "FLASHSIZE",            0x1FFF7A22, 4, "STM32F4*" },
+  { "FLASHSIZE",            0x1FF07A22, 4, "STM32F72*,STM32F73*"},
+  { "FLASHSIZE",            0x1FF0F442, 4, "STM32F74*,STM32F76*"},
+  { "FLASHSIZE",            0x1FF8007C, 4, "STM32L0*" },
+  { "FLASHSIZE",            0x1FFFF7CC, 4, "GD32F0*" },
+  { "FLASHSIZE",            0x1FFFF7E0, 4, "GD32F1*,GD32F3*,GD32E230" },
 
   { "TRACECLKDIV",          0x400480AC, 4, "LPC13xx" },
   { "TRACECLKDIV",          0x400740D8, 4, "LPC15xx" },
@@ -253,8 +262,14 @@ static const SCRIPT_DEF script_defaults[] = {
   { "partid", "STM32F*",
     "$ = DBGMCU_IDCODE \n"
   },
-  { "partid", "LPC8*,LPC11*,LPC12*,LPC13*,LPC15*,LPC43*",
+  { "partid", "LPC8*,LPC11*,LPC12*,LPC13*,LPC15*,LPC43*,LPC546*",
     "$ = PART_ID \n"
+  },
+
+  /* reading the amount of Flash memory, on microcontrollers that support this */
+  { "flashsize", "STM32F1*,STM32F3*,STM32F4*,STM32F72*,STM32F73*,STM32F74*,"
+                 "STM32F76*,STM32L0*,GD32F0*,GD32F1*,GD32F3*,GD32E230",
+    "$ = FLASHSIZE \n"
   },
 
 };
@@ -281,8 +296,9 @@ static const char *skiptrailing(const char *base, const char *end)
 }
 
 /** architecture_match() compares two MCU "family" strings, where an "x" in the
- *  "architecture" string is a wildcard. The comparison is case-insensitive
- *  (but the "x" must be lower case).
+ *  "architecture" string is a wildcard. A single "x" matches any single
+ *  character, a double "xx" matches anything that follows. The comparison is
+ *  case-insensitive (but the "x" must be lower case).
  */
 bool architecture_match(const char *architecture, const char *mcufamily)
 {
@@ -293,6 +309,8 @@ bool architecture_match(const char *architecture, const char *mcufamily)
        wild-card; otherwise the comparison is case-insensitive */
     if (architecture[i] != 'x' && toupper(architecture[i]) != toupper(mcufamily[i]))
       return false;
+    if (architecture[i] == 'x' && architecture[i+1] == 'x' && architecture[i+2] == '\0')
+      return true;
   }
   return architecture[i] == '\0' && mcufamily[i] == '\0';
 }
@@ -512,9 +530,9 @@ static const char *parseline(const char *line, const REG_DEF *registers, size_t 
  *
  *  Scripts can be matched on MCU family name, or on architecture name.
  *
- *  \param mcu    The MCU family name. This parameter must be valid.
- *  \param arch   The Cortex architecture name (M0, M3, etc.). This parameter
- *                may be NULL.
+ *  \param mcu    [in] The MCU family name. This parameter must be valid.
+ *  \param arch   [in] The Cortex architecture name (M0, M3, etc.). This
+ *                parameter may be NULL.
  *
  *  \return The number of scripts that are loaded.
  */

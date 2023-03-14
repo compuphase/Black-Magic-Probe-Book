@@ -56,7 +56,6 @@
 #include <time.h>
 
 #include "guidriver.h"
-#include "noc_file_dialog.h"
 #include "nuklear_guide.h"
 #include "nuklear_mousepointer.h"
 #include "nuklear_style.h"
@@ -68,9 +67,12 @@
 #include "c11threads.h"
 #include "cksum.h"
 #include "elf.h"
+#include "fileloader.h"
 #include "gdb-rsp.h"
 #include "ident.h"
+#include "mcu-info.h"
 #include "minIni.h"
+#include "osdialog.h"
 #include "rs232.h"
 #include "specialfolder.h"
 #include "svnrev.h"
@@ -107,11 +109,12 @@
 
 #define FONT_HEIGHT     14              /* default font size */
 #define WINDOW_WIDTH    (34 * opt_fontsize)
-#define WINDOW_HEIGHT   (26 * opt_fontsize)
+#define WINDOW_HEIGHT   (28 * opt_fontsize)
 #define ROW_HEIGHT      (2 * opt_fontsize)
 #define COMBOROW_CY     (0.9 * opt_fontsize)
 #define BROWSEBTN_WIDTH (1.5 * opt_fontsize)
-#define LOGVIEW_ROWS    6
+#define SPACING         2.0f
+#define LOGVIEW_HEIGHT  (22 * opt_fontsize)
 
 static float opt_fontsize = FONT_HEIGHT;
 
@@ -139,14 +142,23 @@ static char *log_addstring(const char *text)
      this function, which is why mutex protection is needed */
   mtx_lock(&logmutex);
   int len = 0;
-  if (logtext != NULL)
-    len += strlen(logtext);
+  char *base = logtext;
+  if (base != NULL) {     /* drop lines from the top if the log buffer becomes long */
+    len = strlen(base);
+    while (len > 2048) {
+      while (*base != '\0' && *base != '\n')
+        base++;
+      if (*base == '\n')
+        base++;
+      len = strlen(base);
+    }
+  }
   len += strlen(text) + 1;  /* +1 for the \0 */
   char *buf = malloc(len * sizeof(char));
   if (buf != NULL) {
     *buf = '\0';
-    if (logtext != NULL)
-      strcat(buf, logtext);
+    if (base != NULL)
+      strcpy(buf, base);
     strcat(buf, text);
 
     if (logtext != NULL)
@@ -240,58 +252,28 @@ static int bmp_callback(int code, const char *message)
   return code >= 0;
 }
 
-static int copyfile(FILE *fdest, FILE *fsrc)
-{
-  unsigned char *buffer;
-  size_t filesize, bytes, written;
-
-  assert(fdest != NULL && fsrc != NULL);
-  fseek(fsrc, 0, SEEK_END);
-  filesize = ftell(fsrc);
-  buffer = malloc(filesize);
-  if (buffer == 0) {
-    log_addstring("^1Memory allocation error\n");
-    return 0;
-  }
-
-  fseek(fsrc, 0, SEEK_SET);
-  bytes = fread(buffer, 1, filesize, fsrc);
-  fseek(fdest, 0, SEEK_SET);
-  written = fwrite(buffer, 1, bytes, fdest);
-  fseek(fsrc, 0, SEEK_SET);
-  fseek(fdest, 0, SEEK_SET);
-  free(buffer);
-
-  if (bytes != filesize || written != bytes) {
-    log_addstring("^1Failed to create work copy of ELF file\n");
-    return 0;
-  }
-
-  return 1;
-}
-
-static int patch_vecttable(FILE *fp, const char *mcutype)
+static bool patch_vecttable(const char *mcutype)
 {
   char msg[100];
   unsigned int chksum;
-  int err = elf_patch_vecttable(fp, mcutype, &chksum);
+  int err = filesection_patch_vecttable(mcutype, &chksum);
   switch (err) {
-  case ELFERR_NONE:
+  case FSERR_NONE:
     sprintf(msg, "Checksum adjusted to %08x\n", chksum);
     log_addstring(msg);
     break;
-  case ELFERR_CHKSUMSET:
+  case FSERR_CHKSUMSET:
     sprintf(msg, "Checksum already correct (%08x)\n", chksum);
     log_addstring(msg);
     break;
-  case ELFERR_UNKNOWNDRIVER:
-    log_addstring("^1Unsupported MCU type (internal error)\n");
-    return 0;
-  case ELFERR_FILEFORMAT:
-    log_addstring("^1Not a 32-bit ELF file\n");
-    return 0;
+  case FSERR_NO_DRIVER:
+    log_addstring("^1Unsupported MCU type\n");
+    return false;
+  case FSERR_NO_VECTTABLE:
+    log_addstring("^1Vector table not present\n");
+    return false;
   }
-  return 1;
+  return true;
 }
 
 static int serialize_fmtoutput(unsigned char *buffer, int size, int serialnum, int format)
@@ -422,85 +404,85 @@ static size_t serialize_parsepattern(unsigned char *output, size_t output_size,
   return buflength;
 }
 
-static int serialize_address(FILE *fp, const char *section, unsigned long address,
-                             unsigned char *data, int datasize)
+static bool serialize_address(const char *filename, const char *section,
+                              unsigned long address, unsigned char *data, int datasize)
 {
-  unsigned long offset;
-
   /* find section, if provided */
-  assert(fp != NULL);
+  assert(filename != NULL);
+  assert(section != NULL);
   if (strlen(section) > 0) {
-    unsigned long length;
-    int err = elf_section_by_name(fp, section, &offset, NULL, &length);
+    int err = ELFERR_NOMATCH;
+    unsigned long elf_address = 0;
+    FILE *fp = fopen(filename, "rb");
+    if (fp != NULL)
+      err = elf_section_by_name(fp, section, NULL, &elf_address, NULL);
     if (err == ELFERR_NOMATCH) {
       log_addstring("^1Serialization section not found\n");
-      return 0;
-    } else if (address + datasize > length) {
-      log_addstring("^1Serialization address exceeds section\n");
-      return 0;
+      return false;
     }
-  } else {
-    offset = 0;
+    address += elf_address;
   }
 
-  assert(data != NULL);
-  assert(datasize != 0);
-  fseek(fp, offset + address, SEEK_SET);
-  fwrite(data, 1, datasize, fp);
-  fseek(fp, 0, SEEK_SET);
+  /* find file section that the address points in */
+  unsigned long base_address, length;
+  unsigned char *memblock;
+  for (int idx = 0; filesection_getdata(idx, &base_address, &memblock, &length, NULL); idx++) {
+    if (base_address <= address && address < base_address + length) {
+      unsigned long offset = address - base_address;
+      if (offset + datasize > length) {
+        log_addstring("^1Serialization address exceeds section\n");
+        return false;
+      }
+      memcpy(memblock + offset, data, datasize);
+      return true;
+    }
+  }
 
-  return 1;
+  log_addstring("^1Address out of range\n");
+  return false;
 }
 
-static int serialize_match(FILE *fp, const char *match, const char *prefix,
-                           unsigned char *data, int datasize)
+static bool serialize_match(const char *match, const char *prefix,
+                            unsigned char *data, int datasize)
 {
-  unsigned char matchbuf[100], prefixbuf[100];
-  size_t matchbuf_len, prefixbuf_len;
-  unsigned char *buffer;
-  size_t bytes;
-  size_t fileoffs, filesize;
-
-  /* create buffer to match from the string */
+  /* create match & prefix buffers from the strings */
   assert(match != NULL);
-  matchbuf_len = serialize_parsepattern(matchbuf, sizearray(matchbuf), match, "match");
+  unsigned char matchbuf[100];
+  size_t matchbuf_len = serialize_parsepattern(matchbuf, sizearray(matchbuf), match, "match");
   assert(prefix != NULL);
-  prefixbuf_len = serialize_parsepattern(prefixbuf, sizearray(prefixbuf), prefix, "prefix");
+  unsigned char prefixbuf[100];
+  size_t prefixbuf_len = serialize_parsepattern(prefixbuf, sizearray(prefixbuf), prefix, "prefix");
   if (matchbuf_len == (size_t)~0 || prefixbuf_len == (size_t)~0)
-    return 0; /* error message already given */
+    return false;   /* error message already given */
   if (matchbuf_len == 0) {
     log_addstring("^1Serialization match text is empty\n");
-    return 0;
+    return false;
   }
 
-  /* find the buffer in the file */
-  assert(fp != NULL);
-  fseek(fp, 0, SEEK_END);
-  filesize = ftell(fp);
-  buffer = malloc(filesize);
-  if (buffer == 0) {
-    log_addstring("^1Memory allocation error\n");
-    return 0;
+  /* find the match buffer in the file (in memory) */
+  int matchcount = 0;
+  unsigned long length;
+  unsigned char *memblock;
+  for (int idx = 0; filesection_getdata(idx, NULL, &memblock, &length, NULL); idx++) {
+    if (length < matchbuf_len)
+      continue;
+    for (unsigned offset = 0; offset <= length - matchbuf_len; offset++) {
+      if (memblock[offset] == matchbuf[0] && memcmp(memblock + offset, matchbuf, matchbuf_len) == 0) {
+        memcpy(memblock + offset, prefixbuf, prefixbuf_len);
+        memcpy(memblock + offset + prefixbuf_len, data, datasize);
+        matchcount++;
+      }
+    }
   }
-  fseek(fp, 0, SEEK_SET);
-  bytes = fread(buffer, 1, filesize, fp);
-  for (fileoffs = 0; fileoffs < bytes - matchbuf_len; fileoffs++) {
-    if (buffer[fileoffs] == matchbuf[0] && memcmp(buffer + fileoffs, matchbuf, matchbuf_len) == 0)
-      break;
-  }
-  free(buffer);
-  if (fileoffs >= bytes - matchbuf_len) {
+
+  if (matchcount == 0) {
     log_addstring("^1Match string not found\n");
-    return 0;
+    return false;
   }
+  if (matchcount > 1)
+    log_addstring("^3Match string found multiple times\n");
 
-  /* patch the prefix string and serial data at the position where the match was found */
-  fseek(fp, fileoffs, SEEK_SET);
-  fwrite(prefixbuf, 1, prefixbuf_len, fp);
-  fwrite(data, 1, datasize, fp);
-  fseek(fp, 0, SEEK_SET);
-
-  return 1;
+  return true;
 }
 
 static const char *skipwhite(const char *str)
@@ -564,16 +546,16 @@ static int writelog(const char *filename, const char *serial)
   strftime(substr, sizeof(substr), "%Y-%m-%d %H:%M:%S, ", localtime(&tstamp));
   strlcat(line, substr, sizearray(line));
 
-  /* ELF file date/time */
+  /* target file date/time */
   stat(filename, &fstat);
   strftime(substr, sizeof(substr), "%Y-%m-%d %H:%M:%S, ", localtime(&fstat.st_mtime));
   strlcat(line, substr, sizearray(line));
 
-  /* ELF file size */
+  /* target file size */
   sprintf(substr, "%ld, ", fstat.st_size);
   strlcat(line, substr, sizearray(line));
 
-  /* ELF file CRC32 */
+  /* target file CRC32 */
   fpElf = fopen(filename, "rb");
   if (fpElf != NULL) {
     uint32_t crc = cksum(fpElf);
@@ -585,7 +567,7 @@ static int writelog(const char *filename, const char *serial)
   }
   strlcat(line, substr, sizearray(line));
 
-  /* RCS identification string in the ELF file */
+  /* RCS identification string in the target file (only works on ELF files) */
   strcpy(substr,"-, "); /* preset, for the case the "ident" string cannot be read */
   if (fpElf != NULL) {
     char key[32], value[128];
@@ -694,10 +676,11 @@ enum {
   TOOL_OPEN = -1,
   TOOL_CLOSE,
   TOOL_RESCAN,
-  TOOL_FULLERASE,
-  TOOL_OPTIONERASE,
-  TOOL_STM32PROTECT,
   TOOL_VERIFY,
+  TOOL_OPTIONERASE,
+  TOOL_FULLERASE,
+  TOOL_BLANKCHECK,
+  TOOL_DUMPFLASH,
 };
 
 static int tools_popup(struct nk_context *ctx, const struct nk_rect *anchor_button)
@@ -707,7 +690,7 @@ static int tools_popup(struct nk_context *ctx, const struct nk_rect *anchor_butt
   static int prev_active = TOOL_CLOSE;
   int is_active = TOOL_OPEN;
   struct nk_rect rc;
-  float height = 4 * MENUROWHEIGHT + 2 * MARGIN;
+  float height = 6 * MENUROWHEIGHT + 2 * MARGIN;
   struct nk_style_button stbtn = ctx->style.button;
   struct nk_style_window *stwin = &ctx->style.window;
   struct nk_vec2 item_spacing;
@@ -738,15 +721,16 @@ static int tools_popup(struct nk_context *ctx, const struct nk_rect *anchor_butt
     nk_layout_row_dynamic(ctx, MENUROWHEIGHT, 1);
     if (nk_button_label_styled(ctx, &stbtn, "Re-scan Probe List"))
       is_active = TOOL_RESCAN;
-    if (nk_button_label_styled(ctx, &stbtn, "Full Flash Erase"))
-      is_active = TOOL_FULLERASE;
-    if (nk_button_label_styled(ctx, &stbtn, "Erase Option Bytes"))
-      is_active = TOOL_OPTIONERASE;
-    if (nk_button_label_styled(ctx, &stbtn, "Set CRP Option"))
-      is_active = TOOL_STM32PROTECT;
     if (nk_button_label_styled(ctx, &stbtn, "Verify Download"))
       is_active = TOOL_VERIFY;
-    //??? enhancement: add "Blank Check" (or make that a special result of "Verify Download")
+    if (nk_button_label_styled(ctx, &stbtn, "Erase Option Bytes"))
+      is_active = TOOL_OPTIONERASE;
+    if (nk_button_label_styled(ctx, &stbtn, "Full Flash Erase"))
+      is_active = TOOL_FULLERASE;
+    if (nk_button_label_styled(ctx, &stbtn, "Blank Check"))
+      is_active = TOOL_BLANKCHECK;
+    if (nk_button_label_styled(ctx, &stbtn, "Dump Flash to File"))
+      is_active = TOOL_DUMPFLASH;
     if (is_active != TOOL_OPEN)
       nk_popup_close(ctx);
     nk_popup_end(ctx);
@@ -899,16 +883,17 @@ typedef struct tagAPPSTATE {
   int netprobe;                 /**< index for the IP address (pseudo-probe) */
   const char **probelist;       /**< list of detected probes */
   char mcufamily[32];           /**< name of the target driver */
-  int architecture;             /**< MCU architecture (index) */
   const char *monitor_cmds;     /**< list of "monitor" commands (target & probe dependent) */
+  unsigned partid;              /**< target MCU part id (or chip id); 0 if not supported */
   bool set_probe_options;       /**< whether option in the debug probe must be set/updated */
   nk_bool tpwr;                 /**< option: tpwr (target power) */
   nk_bool connect_srst;         /**< option: keep in reset during connect */
   nk_bool fullerase;            /**< option: erase entire flash before download */
   nk_bool write_log;            /**< option: record downloads in log file */
   nk_bool print_time;           /**< option: print download time */
-  int skip_download;            /**< do download+verify procedure without actually downloading */
+  bool skip_download;           /**< do download+verify procedure without actually downloading */
   char IPaddr[64];              /**< IP address for network probe */
+  int crp_level;                /**< code read protection level */
   int serialize;                /**< serialization option */
   int SerialFmt;                /**< serialization: format */
   char Section[32];             /**< serialization: name of the ELF section */
@@ -918,13 +903,13 @@ typedef struct tagAPPSTATE {
   char Serial[32];              /**< serialization: serial number */
   char SerialSize[32];          /**< serialization: size (in bytes of characters) */
   char SerialIncr[32];          /**< serialization: increment */
-  char ELFfile[_MAX_PATH];      /**< ELF path/filename (target) */
+  char TargetFile[_MAX_PATH];   /**< ELF/HEX/BIN path/filename to download into the target */
   char ParamFile[_MAX_PATH];    /**< configuration file for the target */
+  int TargetFileType;           /**< ELF, HEX, BIN */
+  char DownloadAddress[32];     /**< address in Flash memory where the target file is downloaded to */
   char SerialFile[_MAX_PATH];   /**< optional file for serialization settings */
-  char PostProcess[_MAX_PATH];  /**< path to post-process script */
-  nk_bool PostProcessFailures;  /**< whether to execute the post-process script on failed uploads too */
-  FILE *fpTgt;                  /**< target file */
-  FILE *fpWork;                 /**< intermediate work file */
+  char ScriptFile[_MAX_PATH];   /**< path to post-process script */
+  nk_bool ScriptOnFailures;     /**< whether to execute the post-process script on failed uploads too */
   struct tcl tcl;               /**< Tcl context */
   char *tcl_script;             /**< Tcl script (loaded from file) */
   thrd_t thrd_download;         /**< thread id for downloading firmware */
@@ -967,15 +952,16 @@ enum {
   STATE_SAVE,
   STATE_ATTACH,
   STATE_PRE_DOWNLOAD,
-  STATE_PATCH_ELF,
+  STATE_PATCH_FILE,
   STATE_CLEARFLASH,
   STATE_DOWNLOAD,
   STATE_VERIFY,
   STATE_FINISH,
   STATE_POSTPROCESS,
   STATE_ERASE_OPTBYTES,
-  STATE_SET_CRP,
   STATE_FULLERASE,
+  STATE_BLANKCHECK,
+  STATE_DUMPFLASH,
 };
 
 static int tcl_cmd_exec(struct tcl *tcl, struct tcl_value *args, void *arg)
@@ -1094,7 +1080,7 @@ static int tcl_thread(void *arg)
 static bool tcl_preparescript(APPSTATE *state)
 {
   /* load the script file */
-  FILE *fp = fopen(state->PostProcess,"rt");
+  FILE *fp = fopen(state->ScriptFile,"rt");
   if (fp == NULL) {
     log_addstring("^1Tcl script file not found.\n");
     return false;
@@ -1115,10 +1101,10 @@ static bool tcl_preparescript(APPSTATE *state)
   assert(line - state->tcl_script < sz);
   fclose(fp);
   /* set variables */
-  tcl_var(&state->tcl, "filename", tcl_value(state->ELFfile, strlen(state->ELFfile)));
+  tcl_var(&state->tcl, "filename", tcl_value(state->TargetFile, strlen(state->TargetFile)));
   const char *serial = (state->serialize != SER_NONE) ? state->Serial : "";
   tcl_var(&state->tcl, "serial", tcl_value(serial, strlen(serial)));
-  fp = fopen(state->ELFfile, "rb");
+  fp = fopen(state->TargetFile, "rb");
   if (fp != NULL) {
     uint32_t crc = cksum(fp);
     char key[32], value[128];
@@ -1138,10 +1124,10 @@ static bool tcl_preparescript(APPSTATE *state)
 
 static int download_thread(void *arg)
 {
-  pointer_setstyle(CURSOR_WAIT);
   APPSTATE *state = (APPSTATE*)arg;
   assert(state != NULL);
-  bool result = bmp_download((state->fpWork != NULL) ? state->fpWork : state->fpTgt);
+  pointer_setstyle(CURSOR_WAIT);
+  bool result = bmp_download();
   state->isrunning_download = THRD_COMPLETED;
   return result;
 }
@@ -1166,40 +1152,47 @@ static char *getpath(char *path, size_t pathlength, const char *basename, const 
   return path;
 }
 
-static const char *architectures[] = { "Standard", "LPC8xx", "LPC11xx", "LPC15xx",
-                                       "LPC17xx", "LPC21xx", "LPC22xx", "LPC23xx",
-                                       "LPC24xx", "LPC43xx" };
-
 static bool load_targetparams(const char *filename, APPSTATE *state)
 {
   assert(filename != NULL);
   assert(state != NULL);
-  if (access(filename, 0) != 0)
+  if (access(filename, 0) != 0) {
+    /* use defaults for all settings */
+    state->connect_srst = nk_false;
+    state->write_log = nk_false;
+    state->print_time = nk_false;
+    state->tpwr = nk_false;
+    state->fullerase = nk_false;
+    state->crp_level = 0;
+    state->DownloadAddress[0] = '\0';
+    state->ScriptFile[0] = '\0';
+    state->ScriptOnFailures = nk_false;
+    state->serialize = 0;
+    state->Section[0] = '\0';
+    state->Address[0] = '\0';
+    state->Match[0] = '\0';
+    state->Prefix[0] = '\0';
     return false;
+  }
 
   state->connect_srst = (nk_bool)ini_getl("Settings", "connect-srst", 0, filename);
   state->write_log = (nk_bool)ini_getl("Settings", "write-log", 0, filename);
   state->print_time = (nk_bool)ini_getl("Settings", "print-time", 0, filename);
 
-  char field[_MAX_PATH];
-  ini_gets("Flash", "architecture", "", field, sizearray(field), filename);
-  for (state->architecture = 0; state->architecture < sizearray(architectures); state->architecture++)
-    if (architecture_match(architectures[state->architecture], field))
-      break;
-  if (state->architecture >= sizearray(architectures))
-    state->architecture = 0;
   state->tpwr = (nk_bool)ini_getl("Flash", "tpwr", 0, filename);
   state->fullerase = (nk_bool)ini_getl("Flash", "full-erase", 0, filename);
-  ini_gets("Flash", "postprocess", "", state->PostProcess, sizearray(state->PostProcess), filename);
-  state->PostProcessFailures = (nk_bool)ini_getl("Flash", "postprocess-failures", 0, filename);
+  state->crp_level = (int)ini_getl("Flash", "crp-level", 0, filename);
+  ini_gets("Flash", "download-address", "", state->DownloadAddress, sizearray(state->DownloadAddress), filename);
+  ini_gets("Flash", "postprocess", "", state->ScriptFile, sizearray(state->ScriptFile), filename);
+  state->ScriptOnFailures = (nk_bool)ini_getl("Flash", "postprocess-failures", 0, filename);
 
-  strlcpy(state->SerialFile, filename, sizearray(state->SerialFile));
   ini_gets("Serialize", "file", "", state->SerialFile, sizearray(state->SerialFile), filename);
   char serialfile[_MAX_PATH];
   strlcpy(serialfile, filename, sizearray(serialfile));
   if (strlen(state->SerialFile) > 0)
     getpath(serialfile, sizearray(serialfile), state->SerialFile, filename);
 
+  char field[_MAX_PATH];
   state->serialize = (int)ini_getl("Serialize", "option", 0, serialfile);
   ini_gets("Serialize", "address", ".text:0", field, sizearray(field), serialfile);
   char *ptr;
@@ -1238,19 +1231,19 @@ static bool save_targetparams(const char *filename, const APPSTATE *state)
 {
   assert(filename != NULL);
   assert(state != NULL);
+  if (strlen(filename) == 0)
+    return false;
 
   ini_putl("Settings", "connect-srst", state->connect_srst, filename);
   ini_putl("Settings", "write-log", state->write_log, filename);
   ini_putl("Settings", "print-time", state->print_time, filename);
 
-  char field[200] = "";
-  if (state->architecture > 0 && state->architecture < sizearray(architectures))
-    strcpy(field, architectures[state->architecture]);
-  ini_puts("Flash", "architecture", field, filename);
   ini_putl("Flash", "tpwr", state->tpwr, filename);
   ini_putl("Flash", "full-erase", state->fullerase, filename);
-  ini_puts("Flash", "postprocess", state->PostProcess, filename);
-  ini_putl("Flash", "postprocess-failures", state->PostProcessFailures, filename);
+  ini_putl("Flash", "crp-level", state->crp_level, filename);
+  ini_puts("Flash", "download-address", state->DownloadAddress, filename);
+  ini_puts("Flash", "postprocess", state->ScriptFile, filename);
+  ini_putl("Flash", "postprocess-failures", state->ScriptOnFailures, filename);
 
   ini_puts("Serialize", "file", state->SerialFile, filename);
   char serialfile[_MAX_PATH];
@@ -1258,6 +1251,7 @@ static bool save_targetparams(const char *filename, const APPSTATE *state)
   if (strlen(state->SerialFile) > 0)
     getpath(serialfile, sizearray(serialfile), state->SerialFile, filename);
   ini_putl("Serialize", "option", state->serialize, serialfile);
+  char field[150];
   sprintf(field, "%s:%s", state->Section, state->Address);
   ini_puts("Serialize", "address", field, serialfile);
   sprintf(field, "%s:%s", state->Match, state->Prefix);
@@ -1270,8 +1264,9 @@ static bool save_targetparams(const char *filename, const APPSTATE *state)
 
 static bool probe_set_options(APPSTATE *state)
 {
+  assert(state != NULL);
   bool ok = bmp_isopen();
-  if (ok && state->set_probe_options) {
+  if (ok && state->set_probe_options && state->monitor_cmds != NULL) {
     char cmd[100];
     if (bmp_expand_monitor_cmd(cmd, sizearray(cmd), "connect", state->monitor_cmds)) {
       strlcat(cmd, " ", sizearray(cmd));
@@ -1299,6 +1294,118 @@ static bool probe_set_options(APPSTATE *state)
   return ok;
 }
 
+static const char *match_target(const char *mcufamily, const char *drivers[], unsigned numdrivers)
+{
+  /* try exact match first */
+  int arch;
+  for (int arch = 0; arch < numdrivers; arch++)
+    if (architecture_match(drivers[arch], mcufamily))
+      return drivers[arch];
+  /* try prefix match */
+  for (arch = 0; arch < numdrivers; arch++) {
+    int len = strlen(drivers[arch]);
+    char pattern[32];
+    strcpy(pattern, mcufamily);
+    pattern[len] = '\0';
+    if (architecture_match(drivers[arch], pattern))
+      return drivers[arch];
+  }
+  return NULL;
+}
+
+static const char *target_is_lpc(const char *mcufamily)
+{
+  static const char *drivers[] = { "LPC8xx", "LPC11xx", "LPC13xx", "LPC15xx",
+                                   "LPC17xx", "LPC21xx", "LPC22xx", "LPC23xx",
+                                   "LPC24xx", "LPC43xx", "LPC546xx" };
+  return match_target(mcufamily, drivers, sizearray(drivers));
+}
+
+static const char *target_is_stm32(const char *mcufamily)
+{
+  static const char *drivers[] = { "STM32F0xx", "STM32F1xx", "STM32F3xx",
+                                   "STM32L0x", "STM32L1x", "STM32L4xx",
+                                   "STM32L5xx", "STM32WBxx", "STM32WLxx",
+                                   "STM32G4xx", "STM32G0x/x" };
+  return match_target(mcufamily, drivers, sizearray(drivers));
+}
+
+static const char *target_is_gd32(const char *mcufamily)
+{
+  static const char *drivers[] = { "GD32F0xx", "GD32F1xx", "GD32F3xx", "GD32E230" };
+  return match_target(mcufamily, drivers, sizearray(drivers));
+}
+
+static bool target_partid(APPSTATE *state)
+{
+  assert(state != NULL);
+  state->partid = 0;
+  if (state->is_attached) {
+    unsigned long params[4];
+    if (bmp_runscript("partid", state->mcufamily, NULL, params, 1)) {
+      state->partid = params[0];
+      return true;
+    }
+  }
+  return false;
+}
+
+static bool target_flashsize(APPSTATE *state, unsigned *size)
+{
+  assert(state != NULL);
+  assert(size != NULL);
+  if (state->partid != 0) {
+    const MCUINFO *info = mcuinfo_data(state->mcufamily, state->partid);
+    if (info != NULL && info->flash != ~0) {
+     *size = info->flash;
+     return true;
+    }
+    if (state->is_attached && (target_is_stm32(state->mcufamily) || target_is_gd32(state->mcufamily))) {
+      unsigned long params[4];
+      if (bmp_runscript("flashsize", state->mcufamily, NULL, params, 1)) {
+        *size = (params[0] & 0xffff) * 1024;
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+static void check_crp_level(APPSTATE *state)
+{
+  if (state->TargetFileType != FILETYPE_ELF)
+    return;
+
+  FILE *fp = fopen(state->TargetFile, "rb");
+  if (fp == NULL)
+    return; /* should not happen, because filetype was already established */
+  int lpc_crp_level;
+  int result = elf_check_crp(fp, &lpc_crp_level);
+  assert(result == ELFERR_NONE);  /* it has already been tested that the file is ELF */
+  bool lpc_cksum = (elf_check_vecttable(fp) == ELFERR_NONE);
+  fclose(fp);
+
+  if (0 < lpc_crp_level && lpc_crp_level < 4 && state->crp_level != lpc_crp_level) {
+    char msg[100];
+    sprintf(msg, "^3Code Read Protection (CRP%d) is hardcoded in the ELF file\n", lpc_crp_level);
+    log_addstring(msg);
+    if (state->crp_level == 0) {
+      log_addstring("^1Option mismatch: CRP option is not set (CRP will be removed).\n");
+    } else {
+      sprintf(msg, "^1Option mismatch: CRP option is set to level %d.\n", state->crp_level);
+      log_addstring(msg);
+    }
+  } else if (state->crp_level != 0) {
+    char msg[100];
+    sprintf(msg, "^3Code Read Protection level %d is set\n", state->crp_level);
+    log_addstring(msg);
+    if (lpc_crp_level == 4)
+      log_addstring("^1Cannot set CRP because NO-ISP signature is set\n");
+    else if (lpc_cksum && lpc_crp_level == 0 )
+      log_addstring("^1Cannot set CRP because the signature is missing\n");
+  }
+}
+
 static void panel_options(struct nk_context *ctx, APPSTATE *state,
                           enum nk_collapse_states tab_states[TAB_COUNT])
 {
@@ -1306,12 +1413,11 @@ static void panel_options(struct nk_context *ctx, APPSTATE *state,
   assert(state != NULL);
   assert(tab_states != NULL);
   if (nk_tree_state_push(ctx, NK_TREE_TAB, "Options", &tab_states[TAB_OPTIONS])) {
-    struct nk_rect rcwidget;
     assert(state->probelist != NULL);
     bool reconnect = false;
     nk_layout_row(ctx, NK_DYNAMIC, ROW_HEIGHT * 0.8, 2, nk_ratio(2, 0.45, 0.55));
     nk_label(ctx, "Black Magic Probe", NK_TEXT_ALIGN_LEFT | NK_TEXT_ALIGN_MIDDLE);
-    rcwidget = nk_widget_bounds(ctx);
+    struct nk_rect rcwidget = nk_widget_bounds(ctx);
     int select = nk_combo(ctx, state->probelist, state->netprobe+1, state->probe,
                           (int)COMBOROW_CY, nk_vec2(rcwidget.w, 4.5*ROW_HEIGHT));
     if (select != state->probe) {
@@ -1351,35 +1457,26 @@ static void panel_options(struct nk_context *ctx, APPSTATE *state,
       state->curstate = STATE_IDLE;
     }
 
-    nk_layout_row(ctx, NK_DYNAMIC, ROW_HEIGHT * 0.8, 2, nk_ratio(2, 0.45, 0.55));
-    nk_label(ctx, "MCU Family", NK_TEXT_ALIGN_LEFT | NK_TEXT_ALIGN_MIDDLE);
-    rcwidget = nk_widget_bounds(ctx);
-    state->architecture = nk_combo(ctx, architectures, NK_LEN(architectures), state->architecture,
-                                   (int)COMBOROW_CY, nk_vec2(rcwidget.w, 4.5*ROW_HEIGHT));
-
-    nk_layout_row(ctx, NK_DYNAMIC, ROW_HEIGHT, 3, nk_ratio(3, 0.45, 0.497, 0.053));
-    nk_label(ctx, "Post-process", NK_TEXT_ALIGN_LEFT | NK_TEXT_ALIGN_MIDDLE);
-    bool error = editctrl_cond_color(ctx, strlen(state->PostProcess) > 0 && access(state->PostProcess, 0) != 0, COLOUR_BG_DARKRED);
-    editctrl_tooltip(ctx, NK_EDIT_FIELD,
-                     state->PostProcess, sizearray(state->PostProcess),
-                     nk_filter_ascii, "Tcl script to run after a successful download");
-    editctrl_reset_color(ctx, error);
-    if (button_symbol_tooltip(ctx, NK_SYMBOL_TRIPLE_DOT, NK_KEY_NONE, nk_true, "Browse...")) {
-      nk_input_clear_mousebuttons(ctx);
-#     if defined _WIN32
-        const char *filter = "Tcl scripts\0*.tcl\0All files\0*.*\0";
-#     else
-        const char *filter = "Tcl scripts\0*.tcl\0All files\0*\0";
-#     endif
-      noc_file_dialog_open(state->PostProcess, sizearray(state->PostProcess),
-                           NOC_FILE_DIALOG_OPEN, filter,
-                           NULL, state->PostProcess,
-                           "Select Tcl script", guidriver_apphandle());
+    nk_layout_row(ctx, NK_DYNAMIC, ROW_HEIGHT * 0.8, 4, nk_ratio(4, 0.45, 0.15, 0.10, 0.30));
+    int crp_level = state->crp_level;
+    nk_bool crp_enabled = (state->crp_level > 0);
+    checkbox_tooltip(ctx, "Code Read Protection", &crp_enabled, NK_TEXT_LEFT,
+                     "Protect code from being extracted or modified");
+    if (crp_enabled) {
+      nk_label(ctx, "Level", NK_TEXT_ALIGN_LEFT | NK_TEXT_ALIGN_MIDDLE);
+      if (state->crp_level == 0)
+        state->crp_level = 1;
+      static const char *levels[3] = { "1", "2", "3" };
+      rcwidget = nk_widget_bounds(ctx);
+      int select = nk_combo(ctx, levels, 3, state->crp_level - 1,
+                            (int)COMBOROW_CY, nk_vec2(rcwidget.w, 3*ROW_HEIGHT));
+      state->crp_level = select + 1;
+    } else {
+      state->crp_level = 0;
+      nk_spacing(ctx, 1);
     }
-    nk_layout_row(ctx, NK_DYNAMIC, ROW_HEIGHT * 0.8, 2, nk_ratio(2, 0.45, 0.55));
-    nk_spacing(ctx, 1);
-    checkbox_tooltip(ctx, "Post-process on failed downloads", &state->PostProcessFailures, NK_TEXT_LEFT,
-                     "Also run the post-process script after a failed download");
+    if (state->crp_level != crp_level)
+      check_crp_level(state); /* test for conflicts with loaded ELF file (NXP LPC series) */
 
     nk_layout_row_dynamic(ctx, ROW_HEIGHT, 1);
     if (checkbox_tooltip(ctx, "Power Target (3.3V)", &state->tpwr, NK_TEXT_LEFT,
@@ -1392,8 +1489,30 @@ static void panel_options(struct nk_context *ctx, APPSTATE *state,
       state->set_probe_options = true;
     checkbox_tooltip(ctx, "Keep Log of downloads", &state->write_log, NK_TEXT_LEFT,
                      "Write successful downloads to a log file");
-    checkbox_tooltip(ctx, "Print Download Time", &state->print_time, NK_TEXT_LEFT,
-                     "Print how long the download took upon completion");
+    checkbox_tooltip(ctx, "Show Download Time", &state->print_time, NK_TEXT_LEFT,
+                     "Print after each download, how many seconds it took");
+
+    nk_layout_row(ctx, NK_DYNAMIC, ROW_HEIGHT, 3, nk_ratio(3, 0.45, 0.497, 0.053));
+    nk_label(ctx, "Post-processing script (Tcl)", NK_TEXT_ALIGN_LEFT | NK_TEXT_ALIGN_MIDDLE);
+    bool error = editctrl_cond_color(ctx, strlen(state->ScriptFile) > 0 && access(state->ScriptFile, 0) != 0, COLOUR_BG_DARKRED);
+    editctrl_tooltip(ctx, NK_EDIT_FIELD,
+                     state->ScriptFile, sizearray(state->ScriptFile),
+                     nk_filter_ascii, "Tcl script to run after a successful download");
+    editctrl_reset_color(ctx, error);
+    if (button_symbol_tooltip(ctx, NK_SYMBOL_TRIPLE_DOT, NK_KEY_NONE, nk_true, "Browse...")) {
+      nk_input_clear_mousebuttons(ctx);
+      osdialog_filters *filters = osdialog_filters_parse("Tcl scripts:tcl;All files:*");
+      char *fname = osdialog_file(OSDIALOG_OPEN, "Select Tcl script", NULL, state->ScriptFile, filters);
+      osdialog_filters_free(filters);
+      if (fname != NULL) {
+        strlcpy(state->ScriptFile, fname, sizearray(state->ScriptFile));
+        free(fname);
+      }
+    }
+    nk_layout_row(ctx, NK_DYNAMIC, ROW_HEIGHT * 0.8, 2, nk_ratio(2, 0.45, 0.55));
+    nk_spacing(ctx, 1);
+    checkbox_tooltip(ctx, "Post-process on failed downloads", &state->ScriptOnFailures, NK_TEXT_LEFT,
+                     "Also run the post-process script after a failed download");
 
     nk_tree_state_pop(ctx);
   }
@@ -1410,7 +1529,7 @@ static void panel_serialize(struct nk_context *ctx, APPSTATE *state,
     if (nk_option_label(ctx, "Address", (state->serialize == SER_ADDRESS), NK_TEXT_LEFT))
       state->serialize = SER_ADDRESS;
     editctrl_tooltip(ctx, NK_EDIT_FIELD, state->Section, sizearray(state->Section),
-                     nk_filter_ascii, "The name of the section in the ELF file");
+                     nk_filter_ascii, "The name of the section in the ELF file\n(ignored for HEX & BIN files)");
     nk_label(ctx, "offset", NK_TEXT_ALIGN_RIGHT | NK_TEXT_ALIGN_MIDDLE);
     editctrl_tooltip(ctx, NK_EDIT_FIELD, state->Address, sizearray(state->Address),
                      nk_filter_hex, "The offset in hexadecimal");
@@ -1476,35 +1595,30 @@ static bool handle_stateaction(APPSTATE *state, enum nk_collapse_states tab_stat
     break;
 
   case STATE_IDLE:
-    if (state->fpTgt != NULL) {
-      fclose(state->fpTgt);
-      state->fpTgt = NULL;
-    }
-    if (state->fpWork != NULL) {
-      fclose(state->fpWork);
-      state->fpWork = NULL;
-    }
+    filesection_clearall();
     if (state->is_attached) {
-      bmp_detach(1);  /* if currently attached, detach */
+      bmp_detach(false);    /* if currently attached, detach */
       state->is_attached = false;
     }
+    if (state->set_probe_options && bmp_isopen())
+      probe_set_options(state);
     gdbrsp_clear();
-    state->skip_download = 0;
+    state->skip_download = false;
     break;
 
   case STATE_SAVE:
     tab_states[TAB_OPTIONS] = NK_MINIMIZED;
     tab_states[TAB_SERIALIZATION] = NK_MINIMIZED;
     tab_states[TAB_STATUS] = NK_MAXIMIZED;
-    if (access(state->ELFfile, 0) == 0) {
-      /* save settings in cache file */
-      strlcpy(state->ParamFile, state->ELFfile, sizearray(state->ParamFile));
+    if (access(state->TargetFile, 0) == 0) {
+      /* save settings in config file */
+      strlcpy(state->ParamFile, state->TargetFile, sizearray(state->ParamFile));
       strlcat(state->ParamFile, ".bmcfg", sizearray(state->ParamFile));
       save_targetparams(state->ParamFile, state);
       state->curstate = STATE_ATTACH;
       state->tstamp_start = timestamp();
     } else {
-      log_addstring("^1Failed to open the ELF file\n");
+      log_addstring("^1Failed to open the target file (ELF/HEX/BIN)\n");
       state->curstate = STATE_IDLE;
     }
     waitidle = false;
@@ -1519,31 +1633,11 @@ static bool handle_stateaction(APPSTATE *state, enum nk_collapse_states tab_stat
       probe_set_options(state);
       state->is_attached = bmp_attach(false, state->mcufamily, sizearray(state->mcufamily), NULL, 0);
       if (state->is_attached) {
-        /* check for particular architectures, try exact match first */
-        int arch;
-        for (arch = 0; arch < sizearray(architectures); arch++)
-          if (architecture_match(architectures[arch], state->mcufamily))
-            break;
-        if (arch >= sizearray(architectures)) {
-          /* try prefix match */
-          for (arch = 0; arch < sizearray(architectures); arch++) {
-            int len = strlen(architectures[arch]);
-            char pattern[32];
-            strcpy(pattern, state->mcufamily);
-            pattern[len] = '\0';
-            if (architecture_match(architectures[arch], pattern))
-              break;
-          }
-        }
-        if (arch >= sizearray(architectures))
-          arch = 0;
-        if (arch != state->architecture) {
-          char msg[128];
-          sprintf(msg, "^3Detected MCU family %s (check options)\n", architectures[arch]);
-          log_addstring(msg);
-        }
+        char msg[128];
+        sprintf(msg, "Target found: %s\n", state->mcufamily);
+        log_addstring(msg);
       }
-      if (bmp_flashtotal() == 0)
+      if (bmp_flashtotal(NULL, NULL) == 0)
         result = 0; /* no use downloading firmware to a chip that has no Flash */
     }
     state->curstate = (result && state->is_attached) ? STATE_PRE_DOWNLOAD : STATE_IDLE;
@@ -1551,31 +1645,56 @@ static bool handle_stateaction(APPSTATE *state, enum nk_collapse_states tab_stat
     break;
 
   case STATE_PRE_DOWNLOAD:
-    /* open the working file */
-    state->fpTgt = fopen(state->ELFfile, "rb");
-    if (state->fpTgt == NULL) {
-      log_addstring("^1Failed to load the target file\n");
+    if (!filesection_loadall(state->TargetFile)) {
+      log_addstring("^1Failed to read the target file into memory\n");
+      if (state->TargetFileType == FILETYPE_UNKNOWN) {
+        unsigned long addr;
+        if (strlen(state->DownloadAddress) == 0)
+          bmp_flashtotal(&addr, NULL);
+        else
+          addr = strtoul(state->DownloadAddress, NULL, 0);
+        if (addr != 0) {
+          filesection_relocate(addr);
+          char msg[128];
+          sprintf(msg, "BIN file relocated to 0x%08lx\n", addr);
+          log_addstring(msg);
+        }
+      }
       state->curstate = STATE_IDLE;
     } else {
-      state->curstate = STATE_PATCH_ELF;
+      state->curstate = STATE_PATCH_FILE;
     }
     waitidle = false;
     break;
 
-  case STATE_PATCH_ELF:
-    /* verify whether to patch the ELF file (create a temporary file) */
-    if (state->architecture > 0 || state->serialize != SER_NONE) {
-      assert(state->fpTgt != NULL);
-      state->fpWork = tmpfile();
-      if (state->fpWork == NULL) {
-        log_addstring("^1Failed to process the target file\n");
-        state->curstate = STATE_IDLE;
-        waitidle = false;
-        break;
+  case STATE_PATCH_FILE:
+    /* verify whether to patch the ELF file (already in memory) */
+    if (target_is_lpc(state->mcufamily) != NULL || state->serialize != SER_NONE) {
+      assert(filesection_filetype() != FILETYPE_NONE);  /* target file must already be in memory */
+      const char *tgtdriver = target_is_lpc(state->mcufamily);
+      bool result = true;
+      if (tgtdriver != NULL) {
+        result = patch_vecttable(tgtdriver);
+        if (result) {
+          int old_level = filesection_get_crp();
+          int set_level = (state->crp_level > 0) ? state->crp_level : 9;
+          result = filesection_set_crp(set_level);  /* fails if the ELF file was not prepared for CRP */
+          char msg[100] = "";
+          if (result) {
+            assert(old_level > 0);
+            if ((old_level == 9 || old_level == set_level) && set_level < 9)
+              sprintf(msg, "^4Code Read Protection is set, level %d\n", set_level);
+            else if (old_level < 9 && set_level == 9)
+              sprintf(msg, "^4Code Read Protection is reset to level 0\n");
+            else if (old_level != set_level && set_level != 9)
+              sprintf(msg, "^4Code Read Protection is overruled to level %d\n", set_level);
+          } else if (state->crp_level > 0) {
+            sprintf(msg, "^1Failure setting CRP level %d\n", state->crp_level);
+          }
+          if (strlen(msg) > 0 && !state->skip_download)
+            log_addstring(msg);
+        }
       }
-      result = copyfile(state->fpWork, state->fpTgt);
-      if (result && state->architecture > 0)
-        result = patch_vecttable(state->fpWork, architectures[state->architecture]);
       if (result && state->serialize != SER_NONE) {
         /* create replacement buffer, depending on format */
         unsigned char data[50];
@@ -1583,10 +1702,10 @@ static bool handle_stateaction(APPSTATE *state, enum nk_collapse_states tab_stat
         serialize_fmtoutput(data, datasize, serial_get(state->Serial), state->SerialFmt);
         //??? enhancement: run a script, because the serial number may include a check digit
         if (state->serialize == SER_ADDRESS)
-          result = serialize_address(state->fpWork, state->Section, strtoul(state->Address,NULL,16), data, datasize);
+          result = serialize_address(state->TargetFile, state->Section, strtoul(state->Address,NULL,16), data, datasize);
         else if (state->serialize == SER_MATCH)
-          result = serialize_match(state->fpWork, state->Match, state->Prefix, data, datasize);
-        if (result) {
+          result = serialize_match(state->Match, state->Prefix, data, datasize);
+        if (result && !state->skip_download) {
           char msg[100];
           sprintf(msg, "^4Serial adjusted to %d\n", serial_get(state->Serial));
           log_addstring(msg);
@@ -1601,9 +1720,13 @@ static bool handle_stateaction(APPSTATE *state, enum nk_collapse_states tab_stat
 
   case STATE_CLEARFLASH:
     if (!state->skip_download && state->fullerase) {
-      if (state->architecture > 0)
-        bmp_runscript("memremap", architectures[state->architecture], NULL, NULL, 0);
-      result = bmp_fullerase();
+      unsigned flashsize = UINT_MAX;
+      target_partid(state);
+      target_flashsize(state, &flashsize);
+      const char *tgtdriver = target_is_lpc(state->mcufamily);
+      if (tgtdriver != NULL)
+        bmp_runscript("memremap", tgtdriver, NULL, NULL, 0);
+      result = bmp_fullerase(flashsize);
       state->curstate = result ? STATE_DOWNLOAD : STATE_IDLE;
     } else {
       state->curstate = STATE_DOWNLOAD;
@@ -1616,8 +1739,9 @@ static bool handle_stateaction(APPSTATE *state, enum nk_collapse_states tab_stat
     if (!state->skip_download) {
       bool ok = true;
       if (state->isrunning_download == THRD_IDLE) {
-        if (state->architecture > 0)
-          bmp_runscript("memremap", architectures[state->architecture], NULL, NULL, 0);
+        const char *tgtdriver = target_is_lpc(state->mcufamily);
+        if (tgtdriver != NULL)
+          bmp_runscript("memremap", tgtdriver, NULL, NULL, 0);
         /* create a thread to do the download, so that this loop continues with
            updating the message log, while the download is in progress */
         state->isrunning_download = THRD_RUNNING;
@@ -1642,27 +1766,31 @@ static bool handle_stateaction(APPSTATE *state, enum nk_collapse_states tab_stat
     break;
 
   case STATE_VERIFY:
-    if (state->architecture > 0) {
-      /* check whether CRP was set; if so, verification will always fail */
-      assert(state->fpWork != NULL);
-      int crp;
-      result = elf_check_crp(state->fpWork, &crp);
-      if (result == ELFERR_NONE && crp > 0 && crp < 4) {
-        /* CRP level set on the ELF file; it may still be that the code in
-           the target does not have CRP set, but regardless, it won't match
-           the code in the file */
+    if (state->crp_level > 0 && (target_is_stm32(state->mcufamily) != NULL || target_is_gd32(state->mcufamily) != NULL)) {
+      /* set option bytes for CRP */
+      if (state->crp_level == 1 || state->crp_level == 2) {
+        char cmd[100];
+        sprintf(cmd, "option 0x1ffff800 0x%04x", (state->crp_level == 1) ? 0x00ff : 0x33cc);
+        if (bmp_monitor(cmd)) {
+          sprintf(cmd, "^4CRP level %d set; power cycle is needed\n", state->crp_level);
+          log_addstring(cmd);
+        } else {
+          log_addstring("^1Failed to set the option byte for CRP\n");
+        }
+      } else {
         char msg[100];
-        sprintf(msg, "^3Code Read Protection (CRP%d) is set\n", crp);
+        sprintf(msg, "^1CRP level %d is invalid for the target MCU\n", state->crp_level);
         log_addstring(msg);
       }
     }
     /* compare the checksum of Flash memory to the file */
-    if (state->architecture > 0)
-      bmp_runscript("memremap", architectures[state->architecture], NULL, NULL, 0);
-    state->download_success = bmp_verify((state->fpWork != NULL)? state->fpWork : state->fpTgt);
+    const char *tgtdriver = target_is_lpc(state->mcufamily);
+    if (tgtdriver != NULL)
+      bmp_runscript("memremap", tgtdriver, NULL, NULL, 0);
+    state->download_success = bmp_verify();
     if (state->download_success)
       state->curstate = STATE_FINISH;
-    else if (strlen(state->PostProcess) > 0 && state->PostProcessFailures)
+    else if (strlen(state->ScriptFile) > 0 && state->ScriptOnFailures)
       state->curstate = STATE_POSTPROCESS;
     else
       state->curstate = STATE_IDLE;
@@ -1677,7 +1805,7 @@ static bool handle_stateaction(APPSTATE *state, enum nk_collapse_states tab_stat
 
   case STATE_FINISH:
     /* optionally log the download */
-    if (state->write_log && !writelog(state->ELFfile, (state->serialize != SER_NONE) ? state->Serial : NULL))
+    if (state->write_log && !writelog(state->TargetFile, (state->serialize != SER_NONE) ? state->Serial : NULL))
       log_addstring("^3Failed to write to log file\n");
     /* optionally increment the serial number */
     if (state->serialize != SER_NONE && !state->skip_download) {
@@ -1701,13 +1829,13 @@ static bool handle_stateaction(APPSTATE *state, enum nk_collapse_states tab_stat
 
   case STATE_POSTPROCESS:
     /* optionally perform a post-processing step */
-    if (strlen(state->PostProcess) > 0) {
+    if (strlen(state->ScriptFile) > 0) {
       if (state->isrunning_tcl == THRD_IDLE) {
-        char *basename = strrchr(state->PostProcess, DIRSEP_CHAR);
+        char *basename = strrchr(state->ScriptFile, DIRSEP_CHAR);
         if (basename != NULL)
           basename += 1;
         else
-          basename = state->PostProcess;
+          basename = state->ScriptFile;
         if (tcl_preparescript(state)) {
           char msg[280];
           sprintf(msg, "Running: %s\n", basename);
@@ -1752,37 +1880,27 @@ static bool handle_stateaction(APPSTATE *state, enum nk_collapse_states tab_stat
       if (state->monitor_cmds != NULL)
         free((void*)state->monitor_cmds);
       state->monitor_cmds = bmp_get_monitor_cmds();
+      assert(state->monitor_cmds != NULL);
       if (bmp_expand_monitor_cmd(NULL, 0, "option", state->monitor_cmds)) {
         result = bmp_monitor("option erase");
-        if (result)
-          log_addstring("^2Option bytes erased; power cycle is needed\n");
-        else
+        if (result) {
+          bmp_detach(state->tpwr);
+          state->is_attached = false;
+          if (state->tpwr) {
+            log_addstring("^2Option bytes erased\n");
+            /* make sure power stays off for a short while */
+#           if defined _WIN32
+              Sleep(100);
+#           else
+              usleep(100 * 1000);
+#           endif
+            state->set_probe_options = true;
+          } else {
+            log_addstring("^2Option bytes erased; power cycle is needed\n");
+          }
+        } else {
           log_addstring("^1Failed to erase the option bytes\n");
-      } else {
-        char msg[100];
-        sprintf(msg, "^1Command not supported for target driver %s\n", state->mcufamily);
-      }
-    }
-    state->curstate = STATE_IDLE;
-    waitidle = false;
-    break;
-
-  case STATE_SET_CRP:
-    bmp_progress_reset(0);
-    if (bmp_connect(state->probe, (state->probe == state->netprobe) ? state->IPaddr : NULL)
-        && probe_set_options(state)
-        && bmp_attach(false, state->mcufamily, sizearray(state->mcufamily), NULL, 0))
-    {
-      state->is_attached = true;
-      if (state->monitor_cmds != NULL)
-        free((void*)state->monitor_cmds);
-      state->monitor_cmds = bmp_get_monitor_cmds();
-      if (bmp_expand_monitor_cmd(NULL, 0, "option", state->monitor_cmds)) {
-        result = bmp_monitor("option 0x1ffff800 0x00ff");
-        if (result)
-          log_addstring("^2Option bytes set; power cycle is needed\n");
-        else
-          log_addstring("^1Failed to set the option byte for CRP\n");
+        }
       } else {
         char msg[100];
         sprintf(msg, "^1Command not supported for target driver %s\n", state->mcufamily);
@@ -1794,15 +1912,82 @@ static bool handle_stateaction(APPSTATE *state, enum nk_collapse_states tab_stat
 
   case STATE_FULLERASE:
     bmp_progress_reset(0);
+    pointer_setstyle(CURSOR_WAIT);
     if (bmp_connect(state->probe, (state->probe == state->netprobe) ? state->IPaddr : NULL)
         && probe_set_options(state)
-        && bmp_attach(false, NULL, 0, NULL, 0))
+        && bmp_attach(false, state->mcufamily, sizearray(state->mcufamily), NULL, 0))
     {
-      state->is_attached = true;
-      if (state->architecture > 0)
-        bmp_runscript("memremap", architectures[state->architecture], NULL, NULL, 0);
-      bmp_fullerase();
+      if (state->partid == 0 || !state->is_attached) {
+        state->is_attached = true;
+        target_partid(state);
+      }
+      unsigned flashsize = UINT_MAX;
+      target_flashsize(state, &flashsize);
+      const char *tgtdriver = target_is_lpc(state->mcufamily);
+      if (tgtdriver != NULL)
+        bmp_runscript("memremap", tgtdriver, NULL, NULL, 0);
+      bmp_fullerase(flashsize); //??? do this in a thread, for better user interface response
     }
+    pointer_setstyle(CURSOR_NORMAL);
+    state->curstate = STATE_IDLE;
+    waitidle = false;
+    break;
+
+  case STATE_BLANKCHECK:
+    bmp_progress_reset(0);
+    pointer_setstyle(CURSOR_WAIT);
+    if (bmp_connect(state->probe, (state->probe == state->netprobe) ? state->IPaddr : NULL)
+        && probe_set_options(state)
+        && bmp_attach(false, state->mcufamily, sizearray(state->mcufamily), NULL, 0))
+    {
+      if (state->partid == 0 || !state->is_attached) {
+        state->is_attached = true;
+        target_partid(state);
+      }
+      unsigned flashsize = UINT_MAX;
+      target_flashsize(state, &flashsize);
+      const char *tgtdriver = target_is_lpc(state->mcufamily);
+      if (tgtdriver != NULL)
+        bmp_runscript("memremap", tgtdriver, NULL, NULL, 0);
+      bmp_blankcheck(flashsize); //??? do this in a thread, for better user interface response
+    }
+    pointer_setstyle(CURSOR_NORMAL);
+    state->curstate = STATE_IDLE;
+    waitidle = false;
+    break;
+
+  case STATE_DUMPFLASH:
+    bmp_progress_reset(0);
+    pointer_setstyle(CURSOR_WAIT);
+    if (bmp_connect(state->probe, (state->probe == state->netprobe) ? state->IPaddr : NULL)
+        && probe_set_options(state)
+        && bmp_attach(false, state->mcufamily, sizearray(state->mcufamily), NULL, 0))
+    {
+      osdialog_filters *filters = osdialog_filters_parse("BIN files:bin;All files:*");
+      char *fname = osdialog_file(OSDIALOG_SAVE, "Save as BIN file", NULL, NULL, filters);
+      osdialog_filters_free(filters);
+      if (fname != NULL && strlen(fname) > 0) {
+        /* copy to local path, so that default extension can be appended */
+        char path[_MAX_PATH];
+        strlcpy(path, fname, sizearray(path));
+        free(fname);
+        const char *ext;
+        if ((ext = strrchr(path, '.')) == NULL || strchr(ext, DIRSEP_CHAR) != NULL)
+          strlcat(path, ".bin", sizearray(path)); /* default extension .csv */
+        if (state->partid == 0 || !state->is_attached) {
+          state->is_attached = true;
+          target_partid(state);
+        }
+        pointer_setstyle(CURSOR_WAIT);
+        unsigned flashsize = UINT_MAX;
+        target_flashsize(state, &flashsize);
+        const char *tgtdriver = target_is_lpc(state->mcufamily);
+        if (tgtdriver != NULL)
+          bmp_runscript("memremap", tgtdriver, NULL, NULL, 0);
+        bmp_dumpflash(path, flashsize); //??? do this in a thread, for better user interface response
+      }
+    }
+    pointer_setstyle(CURSOR_NORMAL);
     state->curstate = STATE_IDLE;
     waitidle = false;
     break;
@@ -1885,21 +2070,22 @@ int main(int argc, char *argv[])
       }
     } else {
       if (access(argv[idx], 0) == 0) {
-        strlcpy(appstate.ELFfile, argv[idx], sizearray(appstate.ELFfile));
+        strlcpy(appstate.TargetFile, argv[idx], sizearray(appstate.TargetFile));
         load_options = 1;
       }
     }
   }
-  if (strlen(appstate.ELFfile) == 0) {
-    ini_gets("Session", "recent", "", appstate.ELFfile, sizearray(appstate.ELFfile), txtConfigFile);
-    if (access(appstate.ELFfile, 0) == 0)
+  if (strlen(appstate.TargetFile) == 0) {
+    ini_gets("Session", "recent", "", appstate.TargetFile, sizearray(appstate.TargetFile), txtConfigFile);
+    if (access(appstate.TargetFile, 0) == 0)
       load_options = 1;
     else
-      appstate.ELFfile[0] = '\0';
+      appstate.TargetFile[0] = '\0';
   }
 
-  strlcpy(appstate.ParamFile, appstate.ELFfile, sizearray(appstate.ParamFile));
-  strlcat(appstate.ParamFile, ".bmcfg", sizearray(appstate.ParamFile));
+  strlcpy(appstate.ParamFile, appstate.TargetFile, sizearray(appstate.ParamFile));
+  if (strlen(appstate.ParamFile) > 0)
+    strlcat(appstate.ParamFile, ".bmcfg", sizearray(appstate.ParamFile));
 
   tcl_init(&appstate.tcl);
   tcl_register(&appstate.tcl, "exec", tcl_cmd_exec, 2, 2, NULL);
@@ -1937,40 +2123,64 @@ int main(int argc, char *argv[])
 
     /* GUI */
     if (nk_begin(ctx, "MainPanel", nk_rect(0, 0, WINDOW_WIDTH, WINDOW_HEIGHT), 0)) {
-      struct nk_rect rc_toolbutton;
-      int result;
+      char basename[_MAX_PATH], *p;
+      p = strrchr(appstate.TargetFile, DIRSEP_CHAR);
+      strlcpy(basename, (p == NULL) ? appstate.TargetFile : p + 1, sizearray(basename));
       nk_layout_row_begin(ctx, NK_STATIC, ROW_HEIGHT, 2);
       nk_layout_row_push(ctx, WINDOW_WIDTH - 4 * opt_fontsize);
-      result = nk_edit_string_zero_terminated(ctx, NK_EDIT_FIELD|NK_EDIT_SIG_ENTER,
-                                              appstate.ELFfile, sizearray(appstate.ELFfile), nk_filter_ascii);
-      if (result & NK_EDIT_COMMITED)
-        load_options = 2;
-      else if ((result & NK_EDIT_DEACTIVATED) != 0
-               && strncmp(appstate.ELFfile, appstate.ParamFile, strlen(appstate.ELFfile)) != 0)
-        load_options = 2;
+      bool error = (load_options == 0 && appstate.TargetFileType == FILETYPE_NONE);
+      char tiptext[_MAX_PATH] = "";
+      if (strlen(basename) == 0) {
+        strcpy(tiptext, "Please select a target file");
+      } else {
+        if (error)
+          strcpy(tiptext, "NOT FOUND: ");
+        strlcat(tiptext, appstate.TargetFile, sizearray(tiptext));
+      }
+      editctrl_cond_color(ctx, error, COLOUR_BG_DARKRED);
+      int result = editctrl_tooltip(ctx, NK_EDIT_FIELD|NK_EDIT_READ_ONLY,
+                                    basename, sizearray(basename),
+                                    nk_filter_ascii, tiptext);
+      editctrl_reset_color(ctx, error);
       nk_layout_row_push(ctx, BROWSEBTN_WIDTH);
-      if (nk_button_symbol(ctx, NK_SYMBOL_TRIPLE_DOT) || nk_input_is_key_pressed(&ctx->input, NK_KEY_OPEN)) {
-#       if defined _WIN32
-          const char *filter = "ELF Executables\0*.elf;*.\0All files\0*.*\0";
-#       else
-          const char *filter = "ELF Executables\0*.elf\0All files\0*\0";
-#       endif
-        int res = noc_file_dialog_open(appstate.ELFfile, sizearray(appstate.ELFfile),
-                                       NOC_FILE_DIALOG_OPEN, filter,
-                                       NULL, NULL, "Select ELF Executable",
-                                       guidriver_apphandle());
-        if (res)
+      if (nk_button_symbol(ctx, NK_SYMBOL_TRIPLE_DOT)
+          || nk_input_is_key_pressed(&ctx->input, NK_KEY_OPEN)
+          || (result & NK_EDIT_BLOCKED) != 0)
+      {
+        nk_input_clear_mousebuttons(ctx);
+        osdialog_filters *filters = osdialog_filters_parse("ELF Executables:elf;HEX file:hex;All files:*");
+        char *fname = osdialog_file(OSDIALOG_OPEN, "Select Target file", NULL, appstate.TargetFile, filters);
+        osdialog_filters_free(filters);
+        if (fname != NULL) {
+          strlcpy(appstate.TargetFile, fname, sizearray(appstate.TargetFile));
+          free(fname);
           load_options = 2;
+        }
       }
       nk_layout_row_end(ctx);
 
-      nk_layout_row_dynamic(ctx, (LOGVIEW_ROWS+4)*ROW_HEIGHT, 1);
+      float logview_height = LOGVIEW_HEIGHT;
+      if (!error && appstate.TargetFileType == FILETYPE_UNKNOWN) {
+        logview_height -= ROW_HEIGHT + 2*SPACING;
+        nk_layout_row_begin(ctx, NK_STATIC, ROW_HEIGHT, 2);
+        nk_layout_row_push(ctx, 10 * opt_fontsize);
+        nk_label(ctx, "Download address", NK_TEXT_ALIGN_LEFT | NK_TEXT_ALIGN_MIDDLE);
+        nk_layout_row_push(ctx, 15 * opt_fontsize);
+        editctrl_tooltip(ctx, NK_EDIT_FIELD, appstate.DownloadAddress, sizearray(appstate.DownloadAddress),
+                         nk_filter_dec_hex,
+                         "Base address where the file will be downloaded to.\n"
+                         "When left empty, the file is downloaded to the start of\n"
+                         "the Flash memory of the microcontroller.");
+        nk_layout_row_end(ctx);
+      }
+
+      nk_layout_row_dynamic(ctx, logview_height, 1);
       if (nk_group_begin(ctx, "options", 0)) {
         panel_options(ctx, &appstate, tab_states);
         panel_serialize(ctx, &appstate, tab_states);
 
         if (nk_tree_state_push(ctx, NK_TREE_TAB, "Status", &tab_states[TAB_STATUS])) {
-          nk_layout_row_dynamic(ctx, LOGVIEW_ROWS*ROW_HEIGHT, 1);
+          nk_layout_row_dynamic(ctx, logview_height - 3.4 * ROW_HEIGHT - 8 *SPACING, 1);
           log_widget(ctx, "status", logtext, opt_fontsize, &loglines);
 
           nk_layout_row_dynamic(ctx, ROW_HEIGHT*0.4, 1);
@@ -1988,31 +2198,36 @@ int main(int argc, char *argv[])
       /* the options are best reloaded after handling other settings, but before
          handling the download action */
       if (load_options != 0) {
-        strlcpy(appstate.ParamFile, appstate.ELFfile, sizearray(appstate.ParamFile));
-        strlcat(appstate.ParamFile, ".bmcfg", sizearray(appstate.ParamFile));
+        /* check the type of the file (ELF/HEX/BIN) and whether NXP CRP
+           signature is found */
+        FILE *fp = fopen(appstate.TargetFile, "rb");
+        if (fp != NULL) {
+          int wordsize;
+          result = elf_info(fp, &wordsize, NULL, NULL, NULL);
+          if (result == ELFERR_NONE && wordsize == 32)
+            appstate.TargetFileType = FILETYPE_ELF;
+          else if (hex_isvalid(fp))
+            appstate.TargetFileType = FILETYPE_HEX;
+          else
+            appstate.TargetFileType = FILETYPE_UNKNOWN; /* BIN file */
+          fclose(fp);
+        } else {
+          appstate.TargetFileType = FILETYPE_NONE;
+        }
+        /* reset options (load new options from file) */
+        strlcpy(appstate.ParamFile, appstate.TargetFile, sizearray(appstate.ParamFile));
+        if (strlen(appstate.ParamFile) > 0)
+          strlcat(appstate.ParamFile, ".bmcfg", sizearray(appstate.ParamFile));
         if (load_targetparams(appstate.ParamFile, &appstate)) {
           if (load_options == 2)
             log_addstring("Changed target, settings loaded\n");
           else
             log_addstring("Settings for target loaded\n");
           appstate.set_probe_options = true;
-          /* for an LPC* target, check CRP */
-          if (appstate.architecture > 0) {
-            appstate.fpTgt = fopen(appstate.ELFfile, "rb");
-            if (appstate.fpTgt != NULL) {
-              result = elf_check_crp(appstate.fpTgt, &idx);
-              fclose(appstate.fpTgt);
-              appstate.fpTgt = NULL;
-              if (result == ELFERR_NONE && idx > 0 && idx < 4) {
-                char msg[100];
-                sprintf(msg, "^3Code Read Protection (CRP%d) is set on the ELF file\n", idx);
-                log_addstring(msg);
-              }
-            }
-          }
+          check_crp_level(&appstate);
         } else if (load_options == 2) {
-          if (access(appstate.ELFfile, 0) != 0)
-            log_addstring("^1Target not found\n");
+          if (access(appstate.TargetFile, 0) != 0)
+            log_addstring("^1Target file not found\n");
           else
             log_addstring("New target, please check settings\n");
         }
@@ -2021,8 +2236,8 @@ int main(int argc, char *argv[])
 
       nk_layout_row(ctx, NK_DYNAMIC, ROW_HEIGHT, 5, nk_ratio(5, 0.4, 0.025, 0.30, 0.025, 0.25));
       if (appstate.isrunning_download != THRD_RUNNING && appstate.isrunning_tcl != THRD_RUNNING) {
-        if (button_tooltip(ctx, "Download", NK_KEY_F5, appstate.curstate == STATE_IDLE, "Download ELF file into target (F5)")) {
-          appstate.skip_download = 0;      /* should already be 0 */
+        if (button_tooltip(ctx, "Download", NK_KEY_F5, appstate.curstate == STATE_IDLE, "Download ELF/HEX/BIN file into target (F5)")) {
+          appstate.skip_download = false;  /* should already be false */
           appstate.curstate = STATE_SAVE;  /* start the download sequence */
         }
       } else {
@@ -2034,7 +2249,7 @@ int main(int argc, char *argv[])
         }
       }
       nk_spacing(ctx, 1);
-      rc_toolbutton = nk_widget_bounds(ctx);
+      struct nk_rect rc_toolbutton = nk_widget_bounds(ctx);
       if (button_tooltip(ctx, "Tools", NK_KEY_NONE, appstate.curstate == STATE_IDLE, "Other commands"))
         toolmenu_active = TOOL_OPEN;
       nk_spacing(ctx, 1);
@@ -2053,21 +2268,25 @@ int main(int argc, char *argv[])
           appstate.curstate = STATE_INIT;
           toolmenu_active = TOOL_CLOSE;
           break;
-        case TOOL_FULLERASE:
-          appstate.curstate = STATE_FULLERASE;
+        case TOOL_VERIFY:
+          appstate.skip_download = true;
+          appstate.curstate = STATE_SAVE;  /* start the pseudo-download sequence */
           toolmenu_active = TOOL_CLOSE;
           break;
         case TOOL_OPTIONERASE:
           appstate.curstate = STATE_ERASE_OPTBYTES;
           toolmenu_active = TOOL_CLOSE;
           break;
-        case TOOL_STM32PROTECT:
-          appstate.curstate = STATE_SET_CRP;
+        case TOOL_FULLERASE:
+          appstate.curstate = STATE_FULLERASE;
           toolmenu_active = TOOL_CLOSE;
           break;
-        case TOOL_VERIFY:
-          appstate.skip_download = 1;
-          appstate.curstate = STATE_SAVE;  /* start the pseudo-download sequence */
+        case TOOL_BLANKCHECK:
+          appstate.curstate = STATE_BLANKCHECK;
+          toolmenu_active = TOOL_CLOSE;
+          break;
+        case TOOL_DUMPFLASH:
+          appstate.curstate = STATE_DUMPFLASH;
           toolmenu_active = TOOL_CLOSE;
           break;
         }
@@ -2079,13 +2298,19 @@ int main(int argc, char *argv[])
     guidriver_render(COLOUR_BG0_S);
   }
 
-  if (strlen(appstate.ParamFile) > 0 && access(appstate.ParamFile, 0) == 0)
+  if (appstate.tpwr && bmp_isopen())
+    bmp_monitor("tpwr disable");
+  if (appstate.is_attached)
+    bmp_detach(false);    /* if currently attached, detach */
+  bmp_disconnect();
+
+  if (strlen(appstate.ParamFile) > 0)
     save_targetparams(appstate.ParamFile, &appstate);
   ini_putf("Settings", "fontsize", opt_fontsize, txtConfigFile);
   ini_puts("Settings", "fontstd", opt_fontstd, txtConfigFile);
   ini_puts("Settings", "fontmono", opt_fontmono, txtConfigFile);
   if (strlen(txtConfigFile) > 0)
-    ini_puts("Session", "recent", appstate.ELFfile, txtConfigFile);
+    ini_puts("Session", "recent", appstate.TargetFile, txtConfigFile);
   if (bmp_is_ip_address(appstate.IPaddr))
     ini_puts("Settings", "ip-address", appstate.IPaddr, txtConfigFile);
   ini_putl("Settings", "appstate.probe", (appstate.probe == appstate.netprobe) ? 99 : appstate.probe, txtConfigFile);
@@ -2096,8 +2321,8 @@ int main(int argc, char *argv[])
   guidriver_close();
   bmscript_clear();
   gdbrsp_packetsize(0);
-  bmp_disconnect();
   tcpip_cleanup();
+  nk_guide_cleanup();
   if (appstate.monitor_cmds != NULL)
     free((void*)appstate.monitor_cmds);
   if (logtext != NULL)

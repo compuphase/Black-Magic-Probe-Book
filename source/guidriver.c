@@ -2,7 +2,7 @@
  * Helper functions for the back-end driver for the Nuklear GUI. Currently, GDI+
  * (for Windows) and GLFW with OpenGL (for Linux) are supported.
  *
- * Copyright 2019-2022 CompuPhase
+ * Copyright 2019-2023 CompuPhase
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -238,7 +238,7 @@ struct nk_context* guidriver_init(const char *caption, int width, int height, in
     fontMono = nk_gdipfont_create("Courier New", fontsize, NK_FONTREGULAR);
 
   assert(fontStd != NULL);
-  nk_gdipfont_set_voffset(fontStd, (-fontsize*0.2-0.5));
+  nk_gdipfont_set_voffset(fontStd, (int)(-fontsize*0.2f-0.5f));
   nk_gdip_set_font(fontStd);
 
   pointer_init((void*)hwndApp);

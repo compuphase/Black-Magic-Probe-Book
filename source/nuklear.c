@@ -21196,6 +21196,22 @@ nk_filter_hex(const struct nk_text_edit *box, nk_rune unicode)
     else return nk_true;
 }
 NK_API nk_bool
+nk_filter_dec_hex(const struct nk_text_edit *box, nk_rune unicode)
+{
+    /* decimal is always accepted */
+    if (nk_filter_decimal(box, unicode))
+        return nk_true;
+    /* hexadecimal is accepted if the string starts with 0x */
+    if (nk_filter_hex(box, unicode) && box->cursor >= 2
+        && ((char*)(box->string.buffer.memory.ptr))[0] == '0'
+        && (((char*)(box->string.buffer.memory.ptr))[1] == 'x' || ((char*)(box->string.buffer.memory.ptr))[1] == 'X'))
+        return nk_true;
+    /* 'x' is accepted when it follows a 0 (and nothing comes before that) */
+    if ((unicode == 'x' || unicode == 'X') && box->cursor == 1 && ((char*)(box->string.buffer.memory.ptr))[0] == '0')
+        return nk_true;
+    return nk_false;
+}
+NK_API nk_bool
 nk_filter_oct(const struct nk_text_edit *box, nk_rune unicode)
 {
     NK_UNUSED(box);

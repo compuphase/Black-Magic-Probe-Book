@@ -33,6 +33,12 @@
 #include "rs232.h"
 #include "tcpip.h"
 
+#if defined _MSC_VER
+# if _MSC_VER < 1900
+#   define inline __inline
+# endif
+#endif
+
 #if defined FORTIFY
 # include <alloc/fortify.h>
 #endif
@@ -48,6 +54,14 @@ static size_t cache_size = 0;       /* maximum size of the cache */
 static size_t cache_idx = 0;        /* index to the free area of the cache */
 
 
+static const char hexdigits[] = { '0', '1', '2', '3', '4', '5', '6', '7', '8',
+                               '9', 'a', 'b', 'c', 'd', 'e', 'f' };
+static inline char int2hex(int v)
+{
+  assert(v >= 0 && v < 16);
+  return hexdigits[v];
+}
+
 static inline int hex2int(char ch)
 {
   if (ch >= '0' && ch <= '9')
@@ -57,14 +71,6 @@ static inline int hex2int(char ch)
   if (ch >= 'a' && ch <= 'f')
     return ch - 'a' + 10;
   return -1;
-}
-
-static inline char int2hex(int v)
-{
-  static const char digits[] = { '0', '1', '2', '3', '4', '5', '6', '7', '8',
-                                 '9', 'a', 'b', 'c', 'd', 'e', 'f' };
-  assert(v >= 0 && v < 16);
-  return digits[v];
 }
 
 /** gdbrsp_hex2array() converts an ASCIIZ string encoded with hexadecimal values

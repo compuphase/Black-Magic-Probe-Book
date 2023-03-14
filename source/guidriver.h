@@ -2,7 +2,7 @@
  * Helper functions for the back-end driver for the Nuklear GUI. Currently, GDI+
  * (for Windows) and GLFW with OpenGL (for Linux) are supported.
  *
- * Copyright 2019 CompuPhase
+ * Copyright 2019-2023 CompuPhase
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.

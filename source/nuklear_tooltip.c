@@ -1,7 +1,7 @@
 /*
  * Tooltip with delay for the Nuklear GUI.
  *
- * Copyright 2019-2021 CompuPhase
+ * Copyright 2019-2023 CompuPhase
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -91,11 +91,10 @@ void label_tooltip(struct nk_context *ctx, const char *label, nk_flags align,
   tooltip(ctx, bounds, tiptext);
 }
 
-nk_bool button_tooltip(struct nk_context *ctx, const char *title,
+nk_bool button_tooltip(struct nk_context *ctx, const char *label,
                        enum nk_keys hotkey, nk_bool enabled,
                        const char *tiptext)
 {
-  nk_bool result;
   struct nk_rect bounds = nk_widget_bounds(ctx);
   struct nk_style_button *style = &ctx->style.button;
   if (!enabled) {
@@ -106,7 +105,7 @@ nk_bool button_tooltip(struct nk_context *ctx, const char *title,
     nk_style_push_color(ctx, &style->active.data.color, style->normal.data.color);
   }
 
-  result = nk_button_label(ctx, title);
+  nk_bool result = nk_button_label(ctx, label);
   if (tiptext != NULL)
     tooltip(ctx, bounds, tiptext);
   if (!result && hotkey != NK_KEY_NONE)
@@ -121,6 +120,19 @@ nk_bool button_tooltip(struct nk_context *ctx, const char *title,
     result = nk_false;  /* any input is to be ignored */
   }
 
+  return result;
+}
+
+nk_bool button_styled_tooltip(struct nk_context *ctx, const char *label,
+                              enum nk_keys hotkey, const struct nk_style_button *style,
+                              const char *tiptext)
+{
+  struct nk_rect bounds = nk_widget_bounds(ctx);
+  nk_bool result = nk_button_label_styled(ctx, style, label);
+  if (tiptext != NULL)
+    tooltip(ctx, bounds, tiptext);
+  if (!result && hotkey != NK_KEY_NONE)
+    result = nk_input_is_key_pressed(&ctx->input, hotkey);
   return result;
 }
 

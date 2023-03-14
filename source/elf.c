@@ -349,7 +349,7 @@ static const char *read_sectionnames(FILE *fp,uint32_t *size)
  *                      parameter may be NULL.
  *  \param offset       The file offset to the segment data. This parameter may
  *                      be NULL.
- *  \param filesize     The size of the segment data in the size. This parameter
+ *  \param filesize     The size of the segment data in the file. This parameter
  *                      may be NULL.
  *  \param vaddr        The (virtual) address at which the segment will be at
  *                      run-time. This parameter may be NULL.
@@ -715,6 +715,36 @@ void elf_clear_symbols(ELF_SYMBOL *symbols,unsigned number)
       free((void*)symbols[i].name);
 }
 
+/** elf_check_vecttable() returns whether the vector table of the NXP LPC
+ *  microcontroller has the correct checksum.
+ */
+int elf_check_vecttable(FILE *fp)
+{
+  assert(fp!=NULL);
+  int wordsize,bigendian,machine;
+  int result=elf_info(fp,&wordsize,&bigendian,&machine,NULL);
+  if (result!=ELFERR_NONE || wordsize!=32 || machine!=EM_ARM)
+    return ELFERR_FILEFORMAT; /* only 32-bit ARM architecture */
+
+  /* find the section at memory address 0 (the vector table) */
+  unsigned long offset,address,length;
+  result=elf_section_by_address(fp,0,NULL,0,&offset,&address,&length);
+  if (result!=ELFERR_NONE || address!=0 || length<8*sizeof(uint32_t))
+    return ELFERR_FILEFORMAT;
+
+  uint32_t vect[8];
+  fseek(fp,offset,SEEK_SET);
+  fread(vect,sizeof(uint32_t),sizearray(vect),fp);
+  uint32_t sum=0;
+  for (int idx=0; idx<8; idx++) {
+    if (bigendian)
+      vect[idx]=SWAP32(vect[idx]);
+    sum+=vect[idx];
+  }
+
+  return (sum == 0) ? ELFERR_NONE : ELFERR_CHKSUMERR;
+}
+
 /** elf_patch_vecttable() updates the checksum in the vector table in the ELF
  *  file, for LPC micro-controllers.
  *
@@ -727,18 +757,17 @@ void elf_clear_symbols(ELF_SYMBOL *symbols,unsigned number)
  */
 int elf_patch_vecttable(FILE *fp,const char *driver,unsigned int *checksum)
 {
-  unsigned long offset,address,length;
-  int wordsize,bigendian,machine,result;
-
   assert(checksum!=NULL);
   *checksum=0;
 
   assert(fp!=NULL);
-  result=elf_info(fp,&wordsize,&bigendian,&machine,NULL);
+  int wordsize,bigendian,machine;
+  int result=elf_info(fp,&wordsize,&bigendian,&machine,NULL);
   if (result!=ELFERR_NONE || wordsize!=32 || machine!=EM_ARM)
     return ELFERR_FILEFORMAT; /* only 32-bit ARM architecture */
 
   /* find the section at memory address 0 (the vector table) */
+  unsigned long offset,address,length;
   result=elf_section_by_address(fp,0,NULL,0,&offset,&address,&length);
   if (result!=ELFERR_NONE || address!=0 || length<8*sizeof(uint32_t))
     return ELFERR_FILEFORMAT;
@@ -748,17 +777,15 @@ int elf_patch_vecttable(FILE *fp,const char *driver,unsigned int *checksum)
   assert(driver!=NULL);
   if (stricmp(driver,"lpc8xx")==0 || stricmp(driver,"lpc11xx")==0 ||
       stricmp(driver,"lpc15xx")==0 || stricmp(driver,"lpc17xx")==0 ||
-      stricmp(driver,"lpc43xx")==0)
+      stricmp(driver,"lpc43xx")==0 || stricmp(driver,"lpc546xx")==0)
   {
-    uint32_t vect[8], sum;
-    int idx;
-
+    uint32_t vect[8];
     memset(vect,0,sizeof vect);
     fseek(fp,offset,SEEK_SET);
     fread(vect,sizeof(uint32_t),sizearray(vect),fp);
 
-    sum = 0;
-    for (idx=0; idx<7; idx++) {
+    uint32_t sum = 0;
+    for (int idx=0; idx<7; idx++) {
       if (bigendian)
         vect[idx]=SWAP32(vect[idx]);
       sum+=vect[idx];
@@ -779,15 +806,13 @@ int elf_patch_vecttable(FILE *fp,const char *driver,unsigned int *checksum)
   } else if (stricmp(driver,"lpc21xx")==0 || stricmp(driver,"lpc22xx")==0
              || stricmp(driver,"lpc23xx")==0 || stricmp(driver,"lpc24xx")==0)
   {
-    uint32_t vect[8], sum;
-    int idx;
-
+    uint32_t vect[8];
     memset(vect,0,sizeof vect);
     fseek(fp,offset,SEEK_SET);
     fread(vect,sizeof(uint32_t),sizearray(vect),fp);
 
-    sum = 0;
-    for (idx = 0; idx<8; idx++) {
+    uint32_t sum = 0;
+    for (int idx = 0; idx<8; idx++) {
       if (bigendian)
         vect[idx]=SWAP32(vect[idx]);
       if (idx!=5)
@@ -855,16 +880,19 @@ int elf_check_crp(FILE *fp,int *crp)
   fread(&magic,sizeof(uint32_t),1,fp);
   switch (magic) {
   case 0x12345678:
-    *crp=1;
+    *crp=1;         /* SWD disabled, read & compare Flash memory disabled, erase sector 0 disabled unless full Flash is erased (but other sectors can be individually erased/rewritten) */
     break;
   case 0x87654321:
-    *crp=2;
+    *crp=2;         /* all of CRP1, plus erase & write disabled, with the exception of full Flash erase */
     break;
   case 0x43218765:
-    *crp=3;
+    *crp=3;         /* SWD disabled & ISP disabled (no way to unlock the chip unless the firmware has a "self-erase" function in its code) */
     break;
   case 0x4E697370:
-    *crp=4;
+    *crp=4;         /* "no isp": boot pin on reset (for entering ISP mode) disabled (SWD still enabled, so not truly code protection) */
+    break;
+  case 0xbc00b657:
+    *crp=9;         /* placeholder signature */
     break;
   }
 

@@ -268,8 +268,8 @@ const char bmtrace_help[] = {
   "Black Magic Probe. It is a self-contained utility; it does not require GDB.\n"
   "\n"
   "---\n"
-  "Version 1.2.6902M \\\n"
-  "Copyright 2019-2022 CompuPhase \\\n"
+  "Version 1.2.6916 \\\n"
+  "Copyright 2019-2023 CompuPhase \\\n"
   "Licensed under the Apache License version 2.0\n"
   "\n"
 };

@@ -54,12 +54,12 @@
 
 #include "guidriver.h"
 #include "minIni.h"
-#include "noc_file_dialog.h"
 #include "nuklear_guide.h"
 #include "nuklear_mousepointer.h"
 #include "nuklear_splitter.h"
 #include "nuklear_style.h"
 #include "nuklear_tooltip.h"
+#include "osdialog.h"
 #include "rs232.h"
 #include "specialfolder.h"
 #include "svnrev.h"
@@ -96,9 +96,9 @@
 #define WINDOW_WIDTH    700     /* default window size (window is resizable) */
 #define WINDOW_HEIGHT   420
 #define FONT_HEIGHT     14      /* default font size */
-#define ROW_HEIGHT      (1.6 * opt_fontsize)
-#define COMBOROW_CY     (0.9 * opt_fontsize)
-#define BROWSEBTN_WIDTH (1.5 * opt_fontsize)
+#define ROW_HEIGHT      (1.6f * opt_fontsize)
+#define COMBOROW_CY     (0.9f * opt_fontsize)
+#define BROWSEBTN_WIDTH (1.5f * opt_fontsize)
 static float opt_fontsize = FONT_HEIGHT;
 
 
@@ -429,7 +429,7 @@ typedef struct tagAPPSTATE {
   int append_eol;               /**< append CR, LF or CR+LF */
   FILTER filter_root;           /**< highlight filters */
   FILTER filter_edit;           /**< the filter being edited */
-  char scriptfile[_MAX_PATH];   /**< path of the script file */
+  char ScriptFile[_MAX_PATH];   /**< path of the script file */
   time_t scriptfiletime;        /**< "modified" timestamp of the loaded file */
   char *script;                 /**< script loaded in memory */
   bool script_reload;           /**< whether the script must be reloaded */
@@ -510,7 +510,7 @@ static bool save_settings(const char *filename, const APPSTATE *state,
     ini_puts("Filters", key, data, filename);
   }
 
-  ini_puts("Script", "file", state->scriptfile, filename);
+  ini_puts("Script", "file", state->ScriptFile, filename);
 
   return access(filename, 0) == 0;
 }
@@ -557,8 +557,8 @@ static bool load_settings(const char *filename, APPSTATE *state,
     sprintf(state->linelimit, "%d", state->linelimit_val);
 
   splitter_hor->ratio = ini_getf("Settings", "splitter", 0.0, filename);
-  if (splitter_hor->ratio < 0.05 || splitter_hor->ratio > 0.95)
-    splitter_hor->ratio = 0.70;
+  if (splitter_hor->ratio < 0.05f || splitter_hor->ratio > 0.95f)
+    splitter_hor->ratio = 0.70f;
 
   for (int idx = 0; idx < TAB_COUNT; idx++) {
     char key[40], valstr[100];
@@ -584,7 +584,7 @@ static bool load_settings(const char *filename, APPSTATE *state,
       filter_add(&state->filter_root, flttext, nk_rgb(r, g, b), enabled);
   }
 
-  ini_gets("Script", "file", "", state->scriptfile, sizearray(state->scriptfile), filename);
+  ini_gets("Script", "file", "", state->ScriptFile, sizearray(state->ScriptFile), filename);
 
   return true;
 }
@@ -760,9 +760,9 @@ static bool tcl_runscript(APPSTATE *state, const unsigned char *data, size_t siz
   /* (re-)load the script file */
   assert(state != NULL);
   /* check whether the file date/time changes; if so, also reload the script */
-  if (state->script != NULL && strlen(state->scriptfile) > 0) {
+  if (state->script != NULL && strlen(state->ScriptFile) > 0) {
     struct stat fstat;
-    if (stat(state->scriptfile, &fstat) == 0 && state->scriptfiletime != fstat.st_mtime) {
+    if (stat(state->ScriptFile, &fstat) == 0 && state->scriptfiletime != fstat.st_mtime) {
       state->scriptfiletime =fstat.st_mtime;
       state->script_reload = true;
     }
@@ -774,9 +774,9 @@ static bool tcl_runscript(APPSTATE *state, const unsigned char *data, size_t siz
       free((void*)state->script);
       state->script = NULL;
     }
-    if (strlen(state->scriptfile) == 0)
+    if (strlen(state->ScriptFile) == 0)
       return false;
-    FILE *fp = fopen(state->scriptfile, "rt");
+    FILE *fp = fopen(state->ScriptFile, "rt");
     if (fp == NULL) {
       static const char *msg = "Tcl script file not found.";
       tcl_add_message(state, msg, strlen(msg), false);
@@ -1243,7 +1243,7 @@ static void widget_monitor(struct nk_context *ctx, const char *id, APPSTATE *sta
 
 static void widget_lineinput(struct nk_context *ctx, APPSTATE *state)
 {
-# define SPACING 4
+# define SPACING 4.0f
 
   assert(ctx != NULL);
   assert(state != NULL);
@@ -1356,8 +1356,8 @@ static void panel_portconfig(struct nk_context *ctx, APPSTATE *state,
   static const char *parity_strings[] = { "None", "Odd", "Even", "Mark", "Space" };
   static const char *flowctrl_strings[] = { "None", "RTS / CTS", "XON / XOFF" };
 
-# define SPACING     4
-# define LABEL_WIDTH (5.5 * opt_fontsize)
+# define SPACING     4.0f
+# define LABEL_WIDTH (5.5f * opt_fontsize)
 # define VALUE_WIDTH (panel_width - LABEL_WIDTH - (2 * SPACING + 18))
 
   if (nk_tree_state_push(ctx, NK_TREE_TAB, "Configuration", &tab_states[TAB_PORTCONFIG])) {
@@ -1618,8 +1618,8 @@ static void panel_displayoptions(struct nk_context *ctx, APPSTATE *state,
                                  enum nk_collapse_states tab_states[TAB_COUNT],
                                  float panel_width)
 {
-# define SPACING     4
-# define LABEL_WIDTH (5.5 * opt_fontsize)
+# define SPACING     4.0f
+# define LABEL_WIDTH (5.5f * opt_fontsize)
 # define VALUE_WIDTH (panel_width - LABEL_WIDTH - (2 * SPACING + 18))
 
   if (nk_tree_state_push(ctx, NK_TREE_TAB, "Display options", &tab_states[TAB_DISPLAYOPTIONS])) {
@@ -1732,8 +1732,8 @@ static void panel_transmitoptions(struct nk_context *ctx, APPSTATE *state,
                                   enum nk_collapse_states tab_states[TAB_COUNT],
                                   float panel_width)
 {
-# define SPACING     4
-# define LABEL_WIDTH (1.0 * opt_fontsize)
+# define SPACING     4.0f
+# define LABEL_WIDTH (1.0f * opt_fontsize)
 # define VALUE_WIDTH (panel_width - LABEL_WIDTH - (2 * SPACING + 18))
 
   if (nk_tree_state_push(ctx, NK_TREE_TAB, "Local options", &tab_states[TAB_TRANSMITOPTIONS])) {
@@ -1776,9 +1776,9 @@ static void panel_filters(struct nk_context *ctx, APPSTATE *state,
                           enum nk_collapse_states tab_states[TAB_COUNT],
                           float panel_width)
 {
-# define SPACING       4
-# define ENABLED_WIDTH (2.0 * opt_fontsize)
-# define BUTTON_WIDTH  (1.6 * opt_fontsize)
+# define SPACING       4.0f
+# define ENABLED_WIDTH (2.0f * opt_fontsize)
+# define BUTTON_WIDTH  (1.6f * opt_fontsize)
 # define LABEL_WIDTH   (panel_width - ENABLED_WIDTH - BUTTON_WIDTH - (3 * SPACING + 18))
 
   struct nk_style_button stbtn = ctx->style.button;
@@ -1813,9 +1813,9 @@ static void panel_filters(struct nk_context *ctx, APPSTATE *state,
       /* we want a contextual pop-up (that you can simply click away
          without needing a close button), so we simulate a right-mouse
          click */
-      nk_input_motion(ctx, bounds.x, bounds.y + bounds.h - 1);
-      nk_input_button(ctx, NK_BUTTON_RIGHT, bounds.x, bounds.y + bounds.h - 1, 1);
-      nk_input_button(ctx, NK_BUTTON_RIGHT, bounds.x, bounds.y + bounds.h - 1, 0);
+      nk_input_motion(ctx, (int)bounds.x, (int)(bounds.y + bounds.h - 1));
+      nk_input_button(ctx, NK_BUTTON_RIGHT, (int)bounds.x, (int)(bounds.y + bounds.h - 1), 1);
+      nk_input_button(ctx, NK_BUTTON_RIGHT, (int)bounds.x, (int)(bounds.y + bounds.h - 1), 0);
     }
     tooltip(ctx, bounds, "Highlight colour; click to change");
 
@@ -1865,9 +1865,8 @@ static void panel_script(struct nk_context *ctx, APPSTATE *state,
                          enum nk_collapse_states tab_states[TAB_COUNT],
                          float panel_width)
 {
-# define SPACING     4
-# define LABEL_WIDTH (2 * opt_fontsize)
-# define BROWSEBTN_WIDTH (1.5 * opt_fontsize)
+# define SPACING     4.0f
+# define LABEL_WIDTH (2.0f * opt_fontsize)
 # define VALUE_WIDTH (panel_width - LABEL_WIDTH - BROWSEBTN_WIDTH - (3 * SPACING + 18))
 
   if (nk_tree_state_push(ctx, NK_TREE_TAB, "Script", &tab_states[TAB_SCRIPT])) {
@@ -1875,11 +1874,11 @@ static void panel_script(struct nk_context *ctx, APPSTATE *state,
     nk_layout_row_push(ctx, LABEL_WIDTH);
     nk_label(ctx, "File", NK_TEXT_ALIGN_LEFT | NK_TEXT_ALIGN_MIDDLE);
     nk_layout_row_push(ctx, VALUE_WIDTH);
-    bool patherror = (strlen(state->scriptfile) > 0 && access(state->scriptfile, 0) != 0);
+    bool patherror = (strlen(state->ScriptFile) > 0 && access(state->ScriptFile, 0) != 0);
     if (patherror)
       nk_style_push_color(ctx, &ctx->style.edit.text_normal, COLOUR_FG_RED);
     int result = editctrl_tooltip(ctx, NK_EDIT_FIELD|NK_EDIT_SIG_ENTER,
-                                  state->scriptfile, sizearray(state->scriptfile),
+                                  state->ScriptFile, sizearray(state->ScriptFile),
                                   nk_filter_ascii, "TCL script");
     if (result & (NK_EDIT_COMMITED | NK_EDIT_DEACTIVATED))
       state->script_reload = true;
@@ -1887,20 +1886,20 @@ static void panel_script(struct nk_context *ctx, APPSTATE *state,
       nk_style_pop_color(ctx);
     nk_layout_row_push(ctx, BROWSEBTN_WIDTH);
     if (nk_button_symbol(ctx, NK_SYMBOL_TRIPLE_DOT)) {
-      const char *filter = "TCL files\0*.tcl\0All files\0*\0";
-      int res = noc_file_dialog_open(state->scriptfile, sizearray(state->scriptfile),
-                                     NOC_FILE_DIALOG_OPEN, filter, NULL,
-                                     state->scriptfile, "Select TCL script file",
-                                     guidriver_apphandle());
-      if (res)
+      osdialog_filters *filters = osdialog_filters_parse("Tcl scripts:tcl;All files:*");
+      char *fname = osdialog_file(OSDIALOG_OPEN, "Select Tcl script", NULL, state->ScriptFile, filters);
+      osdialog_filters_free(filters);
+      if (fname != NULL) {
+        strlcpy(state->ScriptFile, fname, sizearray(state->ScriptFile));
+        free(fname);
         state->script_reload = true;
+      }
     }
     nk_layout_row_end(ctx);
 
     nk_tree_state_pop(ctx);
   }
 # undef LABEL_WIDTH
-# undef BROWSEBTN_WIDTH
 # undef VALUE_WIDTH
 # undef SPACING
 }
@@ -1922,11 +1921,14 @@ static void button_bar(struct nk_context *ctx, APPSTATE *state)
   }
 
   if (nk_button_label(ctx, "Save") || nk_input_is_key_pressed(&ctx->input, NK_KEY_SAVE)) {
-    char path[_MAX_PATH];
-    int res = noc_file_dialog_open(path, sizearray(path), NOC_FILE_DIALOG_SAVE,
-                                   "Text files\0*.txt\0All files\0*.*\0",
-                                   NULL, NULL, NULL, guidriver_apphandle());
-    if (res) {
+    osdialog_filters *filters = osdialog_filters_parse("Text files:txt;All files:*");
+    char *fname = osdialog_file(OSDIALOG_SAVE, "Save to file", NULL, NULL, filters);
+    osdialog_filters_free(filters);
+    if (fname != NULL) {
+      /* copy to local path, so that default extension can be appended */
+      char path[_MAX_PATH];
+      strlcpy(path, fname, sizearray(path));
+      free(fname);
       const char *ext;
       if ((ext = strrchr(path, '.')) == NULL || strchr(ext, DIRSEP_CHAR) != NULL)
         strlcat(path, ".txt", sizearray(path)); /* default extension .txt */
@@ -1990,8 +1992,8 @@ int main(int argc, char *argv[])
   }
   appstate.filter_edit.colour = filter_defcolour(&appstate.filter_root);
 
-# define SEPARATOR_HOR 4
-# define SPACING       4
+# define SEPARATOR_HOR 4.0f
+# define SPACING       4.0f
   nk_splitter_init(&splitter_hor, canvas_width - 3 * SPACING, SEPARATOR_HOR, splitter_hor.ratio);
 
   for (int idx = 1; idx < argc; idx++) {
@@ -2060,16 +2062,16 @@ int main(int argc, char *argv[])
       collect_portlist(&appstate);
     if (nk_hsplitter_colwidth(&splitter_hor, 0) != mainview_width && !splitter_hor.hover) {
       /* reformat the main view when its width changes and word-wrap is in effect */
-      mainview_width = nk_hsplitter_colwidth(&splitter_hor, 0);
+      mainview_width = (int)nk_hsplitter_colwidth(&splitter_hor, 0);
       if (appstate.view == VIEW_TEXT && appstate.wordwrap)
         appstate.reformat_view = true;
     }
 
     /* GUI */
     guidriver_appsize(&canvas_width, &canvas_height);
-    if (nk_begin(ctx, "MainPanel", nk_rect(0, 0, canvas_width, canvas_height), NK_WINDOW_NO_SCROLLBAR)) {
-      nk_splitter_resize(&splitter_hor, canvas_width - 3 * SPACING, RESIZE_TOPLEFT);
-      nk_hsplitter_layout(ctx, &splitter_hor, canvas_height - 2 * SPACING);
+    if (nk_begin(ctx, "MainPanel", nk_rect(0, 0, (float)canvas_width, (float)canvas_height), NK_WINDOW_NO_SCROLLBAR)) {
+      nk_splitter_resize(&splitter_hor, (float)canvas_width - 3 * SPACING, RESIZE_TOPLEFT);
+      nk_hsplitter_layout(ctx, &splitter_hor, (float)canvas_height - 2 * SPACING);
       ctx->style.window.padding.x = 2;
       ctx->style.window.padding.y = 2;
       ctx->style.window.group_padding.x = 0;
@@ -2105,7 +2107,7 @@ int main(int argc, char *argv[])
       }
 
       /* popup dialogs */
-      help_popup(ctx, &appstate, canvas_width, canvas_height);
+      help_popup(ctx, &appstate, (float)canvas_width, (float)canvas_height);
 
       /* keyboard input (hotkeys) */
       if (nk_input_is_key_pressed(&ctx->input, NK_KEY_ESCAPE)) {
@@ -2143,6 +2145,7 @@ int main(int argc, char *argv[])
   datalist_clear();
   free_portlist(&appstate);
   guidriver_close();
+  nk_guide_cleanup();
   return EXIT_SUCCESS;
 }
 

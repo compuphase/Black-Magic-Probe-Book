@@ -1,7 +1,7 @@
 /*
  * Tooltip with delay for the Nuklear GUI.
  *
- * Copyright 2019-2022 CompuPhase
+ * Copyright 2019-2023 CompuPhase
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -28,10 +28,13 @@
 unsigned long timestamp(void);
 int tooltip(struct nk_context *ctx, struct nk_rect bounds, const char *text);
 
-nk_bool button_tooltip(struct nk_context *ctx, const char *title,
+void label_tooltip(struct nk_context *ctx, const char *label, nk_flags align, const char *tiptext);
+nk_bool button_tooltip(struct nk_context *ctx, const char *label,
                        enum nk_keys hotkey, nk_bool enabled,
                        const char *tiptext);
-void label_tooltip(struct nk_context *ctx, const char *label, nk_flags align, const char *tiptext);
+nk_bool button_styled_tooltip(struct nk_context *ctx, const char *label,
+                              enum nk_keys hotkey, const struct nk_style_button *style,
+                              const char *tiptext);
 nk_bool button_symbol_tooltip(struct nk_context *ctx, enum nk_symbol_type symbol,
                               enum nk_keys hotkey, nk_bool enabled, const char *tiptext);
 nk_bool checkbox_tooltip(struct nk_context *ctx, const char *label,

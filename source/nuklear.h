@@ -4450,6 +4450,7 @@ NK_API nk_bool nk_filter_ascii(const struct nk_text_edit*, nk_rune unicode);
 NK_API nk_bool nk_filter_float(const struct nk_text_edit*, nk_rune unicode);
 NK_API nk_bool nk_filter_decimal(const struct nk_text_edit*, nk_rune unicode);
 NK_API nk_bool nk_filter_hex(const struct nk_text_edit*, nk_rune unicode);
+NK_API nk_bool nk_filter_dec_hex(const struct nk_text_edit *box, nk_rune unicode);
 NK_API nk_bool nk_filter_oct(const struct nk_text_edit*, nk_rune unicode);
 NK_API nk_bool nk_filter_binary(const struct nk_text_edit*, nk_rune unicode);
 

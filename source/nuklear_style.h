@@ -1,7 +1,7 @@
 /*
  * Common styling & layout functions for the Nuklear GUI.
  *
- * Copyright 2021-2022 CompuPhase
+ * Copyright 2021-2023 CompuPhase
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -38,7 +38,7 @@ void editctrl_reset_color(struct nk_context *ctx, bool condition);
 #define COLOUR_BG_AQUA    nk_rgb_hex("#689d6a")
 #define COLOUR_BG_GRAY    nk_rgb_hex("#a89984")
 #define COLOUR_TEXT       nk_rgb_hex("#ebdbb2")
-#define COLOUR_HIGHLIGHT  nk_rgb_hex("#fffff0") /* highlighted text */
+#define COLOUR_HIGHLIGHT  nk_rgb_hex("#abcfff") /* highlighted text */
 #define COLOUR_FG_GRAY    nk_rgb_hex("#928374") /* disabled text */
 #define COLOUR_FG_RED     nk_rgb_hex("#fb4934")
 #define COLOUR_FG_YELLOW  nk_rgb_hex("#fabd2f")

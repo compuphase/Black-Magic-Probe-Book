@@ -23,8 +23,8 @@
 #include <string.h>
 #include "demangle.h"
 
-#if defined __POCC__ || defined __MINGW32__ || defined __MINGW64__
-# include <stdlib.h>
+#if defined __POCC__ || defined __MINGW32__ || defined __MINGW64__ || defined _MSC_VER
+# include <malloc.h>
 #elif defined __MINGW32__ || defined __MINGW64__ || defined _MSC_VER
 # include <malloc.h>
 #else

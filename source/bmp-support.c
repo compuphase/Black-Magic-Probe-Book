@@ -28,6 +28,7 @@
 #endif
 #include <assert.h>
 #include <ctype.h>
+#include <limits.h>
 #include <stdarg.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -39,6 +40,7 @@
 #include "bmp-support.h"
 #include "crc32.h"
 #include "elf.h"
+#include "fileloader.h"
 #include "gdb-rsp.h"
 #include "tcpip.h"
 #include "xmltractor.h"
@@ -51,7 +53,7 @@
 #if defined __linux__ || defined __FreeBSD__ || defined __APPLE__
 # define stricmp(s1,s2)  strcasecmp((s1),(s2))
 #elif defined _MSC_VER
-# define strdup(s)         _strdup(s)
+# define strdup(s)       _strdup(s)
 #endif
 
 #if !defined sizearray
@@ -102,12 +104,36 @@ void bmp_flash_cleanup(void)
   memblock_cleanup(&FlashRegions);
 }
 
-unsigned long bmp_flashtotal(void)
+/** bmp_flashtotal() returns the Flash memory total range and the number of
+ *  regions.
+ *
+ *  \param low_addr   [out] Set to the lowest Flash address. This parameter may
+ *                    be NULL.
+ *  \param high_addr  [out] Set to the address just beyond the highest Flash
+ *                    address. This parameter may be NULL.
+ *
+ *  \return The number of flash regions, as reported by the BMP (a region may be
+ *          composed of several Flash sectors).
+ */
+int bmp_flashtotal(unsigned long *low_addr, unsigned long *high_addr)
 {
-  long total = 0;
-  for (const MEMBLOCK *rgn = FlashRegions.next; rgn != NULL; rgn = rgn->next)
-    total += rgn->size;
-  return total;
+  unsigned long low = ULONG_MAX;
+  unsigned long high = 0;
+  int count = 0;
+  for (const MEMBLOCK *rgn = FlashRegions.next; rgn != NULL; rgn = rgn->next) {
+    if (rgn->address < low)
+      low = rgn->address;
+    if (rgn->address + rgn->size > high)
+      high = rgn->address + rgn->size;
+    count += 1;
+  }
+  if (count == 0)
+    low = high = 0;
+  if (low_addr != NULL)
+    *low_addr = low;
+  if (high_addr != NULL)
+    *high_addr = high;
+  return count;
 }
 
 /** bmp_setcallback() sets the callback function for detailed status
@@ -246,7 +272,7 @@ bool bmp_connect(int probe, const char *ipaddress)
       bmp_disconnect();
       return false;
     }
-    notice(BMPSTAT_SUCCESS, "Connected to %s (%s)", probename, devname);
+    notice(BMPSTAT_NOTICE, "Connected to %s (%s)", probename, devname);
   }
 
   return true;
@@ -457,7 +483,7 @@ restart:
       xt_destroy_node(root);
     }
   }
-  if (bmp_flashtotal() == 0)
+  if (bmp_flashtotal(NULL, NULL) == 0)
     notice(BMPERR_NOFLASH, "No Flash memory record");
 
   return true;
@@ -481,6 +507,8 @@ bool bmp_detach(bool powerdown)
       if (!bmp_monitor("tpwr disable"))
         result = false;
     }
+    /* clean up flash information data */
+    memblock_cleanup(&FlashRegions);
   }
 
   return result;
@@ -703,7 +731,7 @@ bool bmp_expand_monitor_cmd(char *buffer, size_t bufsize, const char *name, cons
  *  not require analysis of the reply strings sent by the device (other than
  *  OK or error)
  */
-int bmp_monitor(const char *command)
+bool bmp_monitor(const char *command)
 {
   char buffer[512];
   size_t size;
@@ -712,7 +740,7 @@ int bmp_monitor(const char *command)
 
   if (!bmp_isopen()) {
     notice(BMPERR_ATTACHFAIL, "No connection to debug probe");
-    return 0;
+    return false;
   }
 
   strlcpy(buffer, "qRcmd,", sizearray(buffer));
@@ -722,60 +750,6 @@ int bmp_monitor(const char *command)
     size = gdbrsp_recv(buffer, sizearray(buffer), 1000);
   } while (size > 0 && buffer[0] == 'o'); /* ignore console output */
   return (size == 2 && memcmp(buffer, "OK", size) == 0);
-}
-
-int bmp_fullerase(void)
-{
-  char *cmd;
-  int rcvd, pktsize;
-
-  if (!bmp_isopen()) {
-    notice(BMPERR_NOCONNECT, "Not connected to Black Magic Probe");
-    return 0;
-  }
-  if (bmp_flashtotal() == 0) {
-    notice(BMPERR_NOFLASH, "No Flash memory record");
-    return 0;
-  }
-  pktsize = (PacketSize > 0) ? PacketSize : 64;
-  cmd = malloc((pktsize + 16) * sizeof(char));
-  if (cmd == NULL) {
-    notice(BMPERR_MEMALLOC, "Memory allocation error");
-    return 0;
-  }
-
-  for (const MEMBLOCK *rgn = FlashRegions.next; rgn != NULL; rgn = rgn->next) {
-    unsigned long size = rgn->size;
-    int failed;
-    do {
-      sprintf(cmd, "vFlashErase:%x,%x", (unsigned)rgn->address, (unsigned)size);
-      gdbrsp_xmit(cmd, -1);
-      rcvd = gdbrsp_recv(cmd, pktsize, 500);
-      failed = (rcvd != 2 || memcmp(cmd, "OK", rcvd) != 0);
-      if (failed)
-        size /= 2;
-    } while (failed && size >= 1024);
-    if (failed) {
-      notice(BMPERR_FLASHERASE, "Flash erase failed");
-      free(cmd);
-      return 0;
-    } else {
-      sprintf(cmd, "Erased Flash at 0x%08x, size %u KiB",
-              (unsigned)rgn->address, (unsigned)size / 1024);
-      notice(BMPSTAT_SUCCESS, cmd);
-    }
-  }
-
-  gdbrsp_xmit("vFlashDone", -1);
-  rcvd = gdbrsp_recv(cmd, pktsize, 500);
-  if (rcvd != 2 || memcmp(cmd, "OK", rcvd)!= 0) {
-    notice(BMPERR_FLASHDONE, "Flash completion failed");
-    free(cmd);
-    return 0;
-  }
-
-  free(cmd);
-  return 1;
 }
 
 static unsigned long download_numsteps = 0;
@@ -799,15 +773,19 @@ void bmp_progress_get(unsigned long *step, unsigned long *range)
     *range = download_numsteps;
 }
 
-bool bmp_download(FILE *fp)
+bool bmp_download(void)
 {
   bmp_progress_reset(0);
   if (!bmp_isopen()) {
     notice(BMPERR_NOCONNECT, "Not connected to Black Magic Probe");
     return false;
   }
-  if (bmp_flashtotal() == 0) {
+  if (bmp_flashtotal(NULL, NULL) == 0) {
     notice(BMPERR_NOFLASH, "No Flash memory record");
+    return false;
+  }
+  if (filesection_filetype() == FILETYPE_NONE) {
+    notice(BMPERR_NOFILEDATA, "No target file loaded");
     return false;
   }
   int pktsize = (PacketSize > 0) ? PacketSize : 64;
@@ -817,32 +795,30 @@ bool bmp_download(FILE *fp)
     return false;
   }
 
-  assert(fp != NULL);
   unsigned long progress_range = 0;
   for (const MEMBLOCK *rgn = FlashRegions.next; rgn != NULL; rgn = rgn->next) {
-    int segment, type, rcvd;
-    unsigned long topaddr, flashsectors, paddr, vaddr, fileoffs, filesize;
-    /* walk through all segments in the ELF file that fall into this region */
-    topaddr = 0;
-    for (segment = 0; elf_segment_by_index(fp, segment, &type, NULL, &fileoffs, &filesize, NULL, &paddr, NULL) == ELFERR_NONE; segment++) {
-      if (type == ELF_PT_LOAD && paddr >= rgn->address && paddr < rgn->address + rgn->size) {
-        topaddr = paddr + filesize;
-        progress_range += filesize;
+    unsigned long saddr, ssize;
+    /* walk through all sections in the target file that fall into this Flash region */
+    unsigned long topaddr = 0;
+    for (int segment = 0; filesection_getdata(segment, &saddr, NULL, &ssize, NULL); segment++) {
+      if (saddr >= rgn->address && saddr < rgn->address + rgn->size) {
+        topaddr = saddr + ssize;
+        progress_range += ssize;
       }
     }
     if (topaddr == 0)
-      continue; /* no segment fitting in this Flash sector */
+      continue; /* no segment fitting in this Flash sector -> continue with next region */
     bmp_progress_reset(progress_range+1);
     /* erase the Flash memory */
     assert(topaddr <= rgn->address + rgn->size);
     assert(rgn->blocksize > 0);
-    flashsectors = ((topaddr - rgn->address + (rgn->blocksize - 1)) / rgn->blocksize);
+    unsigned long flashsectors = ((topaddr - rgn->address + (rgn->blocksize - 1)) / rgn->blocksize);
     assert(flashsectors * rgn->blocksize <= rgn->address + rgn->size);
     notice(BMPSTAT_NOTICE, "Erase Flash at 0x%x length 0x%x",
            (unsigned)rgn->address, (unsigned)(flashsectors * rgn->blocksize));
     sprintf(cmd, "vFlashErase:%x,%x", (unsigned)rgn->address, (unsigned)(flashsectors * rgn->blocksize));
     gdbrsp_xmit(cmd, -1);
-    rcvd = gdbrsp_recv(cmd, pktsize, 500);
+    size_t rcvd = gdbrsp_recv(cmd, pktsize, 500);
     if (rcvd != 2 || memcmp(cmd, "OK", rcvd)!= 0) {
       notice(BMPERR_FLASHERASE, "Flash erase failed");
       free(cmd);
@@ -850,54 +826,50 @@ bool bmp_download(FILE *fp)
     }
     bmp_progress_step(1);
     /* walk through all segments again, to download the payload */
-    for (segment = 0; elf_segment_by_index(fp, segment, &type, NULL, &fileoffs, &filesize, &vaddr, &paddr, NULL) == ELFERR_NONE; segment++) {
-      unsigned char *data;
-      unsigned pos, numbytes, esccount, idx;
-      if (type != ELF_PT_LOAD || filesize == 0 || paddr < rgn->address || paddr >= rgn->address + rgn->size)
+    int stype;
+    unsigned char *sdata;
+    for (int segment = 0; filesection_getdata(segment, &saddr, &sdata, &ssize, &stype); segment++) {
+      if (ssize == 0 || saddr < rgn->address || saddr >= rgn->address + rgn->size)
         continue;
-      notice(BMPSTAT_NOTICE, "%d: %s segment at 0x%x length 0x%x", segment, (vaddr == paddr) ? "Code" : "Data", (unsigned)paddr, (unsigned)filesize);
-      data = malloc(filesize);
-      if (data == NULL) {
-        notice(BMPERR_MEMALLOC, "Memory allocation failure");
-        free(cmd);
-        return false;
-      }
-      fseek(fp, fileoffs, SEEK_SET);
-      fread(data, 1, filesize, fp);
-      for (pos = numbytes = 0; pos < filesize; pos += numbytes) {
+      const char *desc = "Download to";
+      if (stype == SECTIONTYPE_CODE)
+        desc = "Code section at";
+      else if (stype == SECTIONTYPE_DATA)
+        desc = "Data section at";
+      notice(BMPSTAT_NOTICE, "%d: %s 0x%lx length 0x%lx", segment, desc, saddr, ssize);
+      unsigned pos, numbytes;
+      for (pos = numbytes = 0; pos < ssize; pos += numbytes) {
         unsigned prefixlen;
-        sprintf(cmd, "vFlashWrite:%x:", (unsigned)(paddr + pos));
+        sprintf(cmd, "vFlashWrite:%x:", (unsigned)(saddr + pos));
         prefixlen = strlen(cmd) + 4;  /* +1 for '$', +3 for '#nn' checksum */
         /* make blocks that are a multiple of 16 bytes (for guaranteed alignment)
            that are less than (or equal to) PacketSize; start by subtracting the
            prefix length */
         numbytes = (pktsize - prefixlen) & ~0x0f;
-        if (pos + numbytes > filesize)
-          numbytes = filesize - pos;
+        if (pos + numbytes > ssize)
+          numbytes = ssize - pos;
         /* check how many bytes in the packet must be escaped, then check
            whether the packet would still fit (decrement the block length
            otherwise) */
         for ( ;; ) {
-          esccount = 0;
-          for (idx = 0; idx < numbytes; idx++)
-            if (data[pos + idx] == '$' || data[pos + idx] == '#' || data[pos + idx] == '}')
+          unsigned esccount = 0;
+          for (unsigned idx = 0; idx < numbytes; idx++)
+            if (sdata[pos + idx] == '$' || sdata[pos + idx] == '#' || sdata[pos + idx] == '}')
               esccount += 1;
           if (numbytes + esccount + prefixlen <= (unsigned)pktsize)
             break;
           numbytes -= 16;
         }
-        memmove(cmd + (prefixlen - 4), data + pos, numbytes);
+        memmove(cmd + (prefixlen - 4), sdata + pos, numbytes);
         gdbrsp_xmit(cmd, (prefixlen - 4) + numbytes);
         rcvd = gdbrsp_recv(cmd, pktsize, 500);
         if (rcvd != 2 || memcmp(cmd, "OK", rcvd)!= 0) {
           notice(BMPERR_FLASHWRITE, "Flash write failed");
-          free(data);
           free(cmd);
           return false;
         }
         bmp_progress_step(numbytes);
       }
-      free(data);
     }
     gdbrsp_xmit("vFlashDone", -1);
     rcvd = gdbrsp_recv(cmd, pktsize, 500);
@@ -912,52 +884,40 @@ bool bmp_download(FILE *fp)
   return true;
 }
 
-bool bmp_verify(FILE *fp)
+bool bmp_verify(void)
 {
   if (!bmp_isopen()) {
     notice(BMPERR_NOCONNECT, "Not connected to Black Magic Probe");
-    return 0;
+    return false;
+  }
+  if (bmp_flashtotal(NULL, NULL) == 0) {
+    notice(BMPERR_NOFLASH, "No Flash memory record");
+    return false;
   }
 
   /* run over all segments in the ELF file */
   bool allmatch = true;
-  assert(fp != NULL);
-  int type;
-  unsigned long offset, filesize, paddr;
-  for (int segment = 0;
-       elf_segment_by_index(fp, segment, &type, NULL, &offset, &filesize, NULL, &paddr, NULL) == ELFERR_NONE;
-       segment++)
-  {
-    unsigned char *data;
-    unsigned crc_src, crc_tgt;
-    size_t rcvd;
-
-    if (type != ELF_PT_LOAD || filesize == 0)
+  unsigned long saddr, ssize;
+  unsigned char *sdata;
+  for (int segment = 0; filesection_getdata(segment, &saddr, &sdata, &ssize, NULL); segment++) {
+    if (ssize == 0)
       continue;   /* no loadable data */
-    /* also check that paddr falls within a Flash memory sector */
+    /* also check that saddr falls within a Flash memory sector */
     const MEMBLOCK *rgn;
     for (rgn = FlashRegions.next; rgn != NULL; rgn = rgn->next)
-      if (paddr >= rgn->address && paddr < rgn->address + rgn->size)
+      if (saddr >= rgn->address && saddr < rgn->address + rgn->size)
         break;
     if (rgn == NULL)
       continue; /* segment is outside of any Flash sector */
-    /* read entire segment, calc CRC */
-    data = malloc((size_t)filesize * sizeof (unsigned char));
-    if (data == NULL) {
-      notice(BMPERR_MEMALLOC, "Memory allocation failure");
-      return false;
-    }
-    fseek(fp, offset, SEEK_SET);
-    fread(data, 1, filesize, fp);
-    crc_src = (unsigned)gdb_crc32((uint32_t)~0, data, filesize);
-    free(data);
+    /* calculate CRC of the section in memory */
+    unsigned crc_src = (unsigned)gdb_crc32((uint32_t)~0, sdata, ssize);
     /* request CRC from Black Magic Probe */
     char cmd[100];
-    sprintf(cmd, "qCRC:%lx,%lx",paddr,filesize);
+    sprintf(cmd, "qCRC:%lx,%lx", saddr, ssize);
     gdbrsp_xmit(cmd, -1);
-    rcvd = gdbrsp_recv(cmd, sizearray(cmd), 3000);
+    size_t rcvd = gdbrsp_recv(cmd, sizearray(cmd), 3000);
     cmd[rcvd] = '\0';
-    crc_tgt = (rcvd >= 2 && cmd[0] == 'C') ? strtoul(cmd + 1, NULL, 16) : 0;
+    unsigned crc_tgt = (rcvd >= 2 && cmd[0] == 'C') ? strtoul(cmd + 1, NULL, 16) : 0;
     if (crc_tgt != crc_src) {
       notice(BMPERR_FLASHCRC, "Segment %d data mismatch", segment);
       allmatch = false;
@@ -967,6 +927,229 @@ bool bmp_verify(FILE *fp)
     notice(BMPSTAT_SUCCESS, "Verification successful");
 
   return allmatch;
+}
+
+bool bmp_fullerase(unsigned flashsize)
+{
+  if (!bmp_isopen()) {
+    notice(BMPERR_NOCONNECT, "Not connected to Black Magic Probe");
+    return false;
+  }
+  if (bmp_flashtotal(NULL, NULL) == 0) {
+    notice(BMPERR_NOFLASH, "No Flash memory record");
+    return false;
+  }
+  int pktsize = (PacketSize > 0) ? PacketSize : 64;
+  char *cmd = malloc((pktsize + 16) * sizeof(char));
+  if (cmd == NULL) {
+    notice(BMPERR_MEMALLOC, "Memory allocation error");
+    return false;
+  }
+
+  for (const MEMBLOCK *rgn = FlashRegions.next; rgn != NULL; rgn = rgn->next) {
+    unsigned size = (unsigned)rgn->size;
+    if (size > flashsize)
+      size = flashsize;
+    int failed;
+    do {
+      sprintf(cmd, "vFlashErase:%x,%x", (unsigned)rgn->address, size);
+      gdbrsp_xmit(cmd, -1);
+      int rcvd = gdbrsp_recv(cmd, pktsize, 5000); /* erase may take some time */
+      failed = (rcvd != 2 || memcmp(cmd, "OK", rcvd) != 0);
+      if (failed)
+        size /= 2;
+    } while (failed && size >= 1024);
+    if (failed) {
+      notice(BMPERR_FLASHERASE, "Flash erase failed");
+      free(cmd);
+      return false;
+    } else {
+      sprintf(cmd, "Erased Flash at 0x%08x, size %u KiB",
+              (unsigned)rgn->address, (unsigned)size / 1024);
+      notice(BMPSTAT_SUCCESS, cmd);
+    }
+  }
+
+  gdbrsp_xmit("vFlashDone", -1);
+  int rcvd = gdbrsp_recv(cmd, pktsize, 500);
+  if (rcvd != 2 || memcmp(cmd, "OK", rcvd)!= 0) {
+    notice(BMPERR_FLASHDONE, "Flash completion failed");
+    free(cmd);
+    return false;
+  }
+
+  free(cmd);
+  return true;
+}
+
+bool bmp_blankcheck(unsigned flashsize)
+{
+# define BLOCKSIZE 512
+
+  if (!bmp_isopen()) {
+    notice(BMPERR_NOCONNECT, "Not connected to Black Magic Probe");
+    return false;
+  }
+  if (bmp_flashtotal(NULL, NULL) == 0) {
+    notice(BMPERR_NOFLASH, "No Flash memory record");
+    return false;
+  }
+  char *cmd = malloc((2*BLOCKSIZE + 16) * sizeof(char));
+  if (cmd == NULL) {
+    notice(BMPERR_MEMALLOC, "Memory allocation error");
+    return false;
+  }
+
+  bool is_success = true;
+  for (const MEMBLOCK *rgn = FlashRegions.next; rgn != NULL && is_success; rgn = rgn->next) {
+    bool is_blank = true;
+    unsigned size = (unsigned)rgn->size;
+    if (size > flashsize)
+      size = flashsize;
+    unsigned addr = (unsigned)rgn->address;
+    unsigned remaining = size;
+    while (remaining > 0 && is_blank && is_success) {
+      unsigned blksize = (remaining > BLOCKSIZE) ? BLOCKSIZE : remaining;
+      sprintf(cmd, "m%08X,%X:", addr, blksize);
+      gdbrsp_xmit(cmd, -1);
+      size_t len = gdbrsp_recv(cmd, 2*BLOCKSIZE, 1000);
+      if (len == 0) {
+        sprintf(cmd, "Error reading from address %08x", addr);
+        notice(BMPERR_FLASHREAD, cmd);
+        is_success = false;
+      } else {
+        for (int idx = 0; idx < len && is_blank; idx++)
+          is_blank = (cmd[idx] == 'F' || cmd[idx] == 'f');
+        remaining -= len;
+        addr += len;
+      }
+    }
+    if (is_success) {
+      if (is_blank) {
+        sprintf(cmd, "Flash region at 0x%08x, size %u KiB is blank",
+                (unsigned)rgn->address, (unsigned)size / 1024);
+        notice(BMPSTAT_SUCCESS, cmd);
+      } else {
+        sprintf(cmd, "Flash region at 0x%08x, size %u KiB contains data",
+                (unsigned)rgn->address, (unsigned)size / 1024);
+        notice(BMPERR_GENERAL, cmd);
+      }
+    }
+  }
+
+  free(cmd);
+  return is_success;
+# undef BLOCKSIZE
+}
+
+bool bmp_dumpflash(const char *path, unsigned flashsize)
+{
+# define BLOCKSIZE  512
+# define FLASHLIMIT (1024*1024) /* limit size of dumped BIN file to 1 MiB */
+
+  if (!bmp_isopen()) {
+    notice(BMPERR_NOCONNECT, "Not connected to Black Magic Probe");
+    return false;
+  }
+  if (bmp_flashtotal(NULL, NULL) == 0) {
+    notice(BMPERR_NOFLASH, "No Flash memory record");
+    return false;
+  }
+
+  /* get memory range */
+  unsigned long base = ULONG_MAX;
+  unsigned long top = 0;
+  for (const MEMBLOCK *rgn = FlashRegions.next; rgn != NULL; rgn = rgn->next) {
+    if (rgn->address < base)
+      base = rgn->address;
+    if (rgn->address + rgn->size > top)
+      top = rgn->address + rgn->size;
+  }
+  if (top - base < flashsize)
+    flashsize = top - base;
+  if (flashsize > FLASHLIMIT) {
+    char msg[100];
+    sprintf(msg, "Flash memory size reported to be %u KiB, exceeding limit of 1024 KiB", flashsize);
+    notice(BMPERR_MEMALLOC, msg);
+    return false;
+  }
+
+  unsigned char *pgm = malloc(flashsize * sizeof(unsigned char));
+  char *cmd = malloc((2 * BLOCKSIZE + 16) * sizeof(char));
+  if (pgm == NULL || cmd == NULL) {
+    notice(BMPERR_MEMALLOC, "Memory allocation error");
+    if (pgm != NULL)
+      free(pgm);
+    if (cmd != NULL)
+      free(cmd);
+    return false;
+  }
+
+  /* read the data in memory first */
+  memset(pgm, 0xff, flashsize * sizeof(unsigned char));
+  bool is_success = true;
+  for (const MEMBLOCK *rgn = FlashRegions.next; rgn != NULL && is_success; rgn = rgn->next) {
+    assert(rgn->address < base + flashsize);
+    unsigned size = (unsigned)rgn->size;
+    if (rgn->address + size > base + flashsize)
+      size = base + flashsize - rgn->address;
+    unsigned addr = (unsigned)rgn->address;
+    unsigned remaining = size;
+    while (remaining > 0 && is_success) {
+      unsigned blksize = (remaining > BLOCKSIZE) ? BLOCKSIZE : remaining;
+      sprintf(cmd, "m%08X,%X:", addr, blksize);
+      gdbrsp_xmit(cmd, -1);
+      size_t len = gdbrsp_recv(cmd, 2*BLOCKSIZE, 1000);
+      if (len == 0) {
+        sprintf(cmd, "Error reading from address %08x", addr);
+        notice(BMPERR_FLASHREAD, cmd);
+        is_success = false;
+      } else {
+        cmd[2*BLOCKSIZE] = '\0';
+        assert(addr >= base);
+        gdbrsp_hex2array(cmd, pgm + (addr - base), flashsize - addr);
+        remaining -= len/2;
+        addr += len/2;
+      }
+    }
+  }
+  free(cmd);
+
+  /* trim the data from the top */
+  if (is_success) {
+    top = flashsize;
+    while (top > 0 && pgm[top - 1] == 0xff)
+      top--;
+    if (top == 0) {
+      notice(BMPERR_FLASHREAD, "Flash memory is blank");
+      is_success = false;
+    }
+    while ((top & 0x03) != 0)
+      top++;  /* round up to 4 bytes */
+  }
+
+  /* now store the file */
+  if (is_success) {
+    FILE *fp = fopen(path, "wb");
+    if (fp != NULL) {
+      fwrite(pgm, 1, top, fp);
+      fclose(fp);
+      char msg[100];
+      if (top >= 10*1024)
+        sprintf(msg, "Successfully written %lu KiB", (top + 1023) / 1024);
+      else
+        sprintf(msg, "Successfully written %lu B", top);
+      notice(BMPSTAT_SUCCESS, msg);
+    } else {
+      notice(BMPERR_GENERAL, "File cannot be written");
+      is_success = false;
+    }
+  }
+
+  free(pgm);
+  return is_success;
+# undef BLOCKSIZE
+# undef FLASHLIMIT
 }
 
 /** bmp_enabletrace() code enables trace in the Black Magic Probe.

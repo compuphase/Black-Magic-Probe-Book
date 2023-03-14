@@ -1,7 +1,7 @@
 /*
  * Microcontroller description lookup, based on brand and part id.
  *
- * Copyright 2022 CompuPhase
+ * Copyright 2022-2023 CompuPhase
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -26,13 +26,14 @@
 
 typedef struct tagMCUINFO {
   uint32_t partid;
-  uint32_t maskid;
-  const char *prefix;   /* brand/family prefix (Black Magic Probe "driver" name) */
-  const char *mcuname;  /* name to use in scripts, if applicable */
+  const char *prefix;   /* brand/family prefix (part of Black Magic Probe "driver" name), may be NULL */
+  uint32_t flash;
+  uint32_t sram;        /* main SRAM (not including buffers, caches & FIFOs for peripherals) */
   const char *description;
 } MCUINFO;
 
-const MCUINFO *mcuinfo_lookup(const char *family, uint32_t id);
+const MCUINFO *mcuinfo_data(const char *family, uint32_t id);
+const char *mcuinfo_lookup(const char *family, uint32_t id);
 
 #if defined __cplusplus
   }

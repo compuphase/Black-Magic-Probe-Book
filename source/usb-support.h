@@ -2,7 +2,7 @@
  * Functions for general purpose USB device access in Microsoft Windows, by
  * dynamically loading & Linking WinUSB.
  *
- * Copyright 2020 CompuPhase
+ * Copyright 2020-2023 CompuPhase
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.

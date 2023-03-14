@@ -40,13 +40,15 @@ enum {
   BMPERR_MEMALLOC   = -7, /* memory allocation error */
   BMPERR_NOFLASH    = -8, /* no records of Flash memory */
   BMPERR_FLASHERASE = -9, /* Flash erase failed */
-  BMPERR_FLASHWRITE = -10,/* Flash write failed */
-  BMPERR_FLASHDONE  = -11,/* Flash programming completion failed */
-  BMPERR_FLASHCRC   = -12,/* Flash CRC verification failed */
-  BMPERR_GENERAL    = -14,
+  BMPERR_FLASHREAD  = -10,/* Flash read error */
+  BMPERR_FLASHWRITE = -11,/* Flash write failed */
+  BMPERR_FLASHDONE  = -12,/* Flash programming completion failed */
+  BMPERR_FLASHCRC   = -13,/* Flash CRC verification failed */
+  BMPERR_NOFILEDATA = -14,/* no file in memory for download/verify */
+  BMPERR_GENERAL    = -15,
 };
 
-unsigned long bmp_flashtotal(void);
+int bmp_flashtotal(unsigned long *low_addr, unsigned long *high_addr);
 
 typedef int (*BMP_STATCALLBACK)(int code, const char *message);
 void bmp_setcallback(BMP_STATCALLBACK func);
@@ -65,10 +67,12 @@ bool bmp_expand_monitor_cmd(char *buffer, size_t bufsize, const char *name, cons
 bool bmp_attach(bool autopower, char *name, size_t namelength, char *arch, size_t archlength);
 bool bmp_detach(bool powerdown);
 
-int bmp_monitor(const char *command);
-int bmp_fullerase(void);
-bool bmp_download(FILE *fp);
-bool bmp_verify(FILE *fp);
+bool bmp_monitor(const char *command);
+bool bmp_download(void);
+bool bmp_verify(void);
+bool bmp_fullerase(unsigned flashsize);
+bool bmp_blankcheck(unsigned flashsize);
+bool bmp_dumpflash(const char *path, unsigned flashsize);
 
 void bmp_progress_reset(unsigned long numsteps);
 void bmp_progress_step(unsigned long step);

@@ -50,13 +50,13 @@
 #endif
 
 #if defined WIN32 || defined _WIN32
-# define SEPARATOR  ";"
-# define DIRSEP_CHR '\\'
-# define DIRSEP_STR "\\"
+# define SEPARATOR    ";"
+# define DIRSEP_CHAR  '\\'
+# define DIRSEP_STR   "\\"
 #else
-# define SEPARATOR  ":"
-# define DIRSEP_CHR '/'
-# define DIRSEP_STR "/"
+# define SEPARATOR    ":"
+# define DIRSEP_CHAR  '/'
+# define DIRSEP_STR   "/"
 #endif
 
 /** pathsearch() locates a file in the path.
@@ -88,7 +88,7 @@ bool pathsearch(char *buffer, size_t bufsize, const char *filename)
     strlcpy(path, tok, sizearray(path));
     size_t len = strlen(path);
     assert(len < sizearray(path));
-    if (len > 0 && path[len - 1] != DIRSEP_CHR)
+    if (len > 0 && path[len - 1] != DIRSEP_CHAR)
       strlcat(path, DIRSEP_STR, sizearray(path));
     strlcat(path, filename, sizearray(path));
     if (access(path, 0) == 0 && strlen(path) < bufsize) {
