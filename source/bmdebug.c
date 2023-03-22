@@ -1192,20 +1192,23 @@ static int console_autocomplete(char *text, size_t textsize, const DWARF_SYMBOLL
   return result;
 }
 
-static void console_history_add(STRINGLIST *root, const char *text, bool tail)
+static void console_history_add(STRINGLIST *root, char *text, bool tail)
 {
-  STRINGLIST *item;
-
   assert(root != NULL);
   assert(text != NULL);
+  text[strcspn(text, "\n")] = '\0'; // remove EOL from command
 
-  /* do not add this text if it already appears earlier in the list */
-  for (item = root->next; item != NULL; item = item->next) {
-    assert(item->text != NULL);
-    if (strcmp(item->text, text) == 0)
-      return; /* text already appears in the list, no need to add it again */
+  // If the command history is empty (ex new install of bmdebug) then store the first command 
+  if (root->next == NULL) {
+    stringlist_append(root, text, 0); 
+    return;
   }
 
+  // If the current command = most recent command then do not store it again
+  if (strcmp(root->next->text, text) == 0)
+    return;
+
+  // Store the command
   if (tail)
     stringlist_append(root, text, 0);
   else
@@ -5967,10 +5970,9 @@ static void console_view(struct nk_context *ctx, APPSTATE *state,
             TERM_EQU(state->console_edit, "disable", 7) ||
             TERM_EQU(state->console_edit, "enable", 6))
           state->refreshflags |= REFRESH_BREAKPOINTS | IGNORE_DOUBLE_DONE;
-        /* save console_edit in a recent command list (but skip this if the
-           command is already at the head of the list) */
-        if (state->consoleedit_root.next != NULL && strcmp(state->consoleedit_root.next->text, state->console_edit) != 0)
-          stringlist_insert(&state->consoleedit_root, state->console_edit, 0);
+
+        // save most recent keyboard command in the command history list list
+        console_history_add(&state->consoleedit_root, state->console_edit, false);
         state->consoleedit_next = NULL;
         state->console_edit[0] = '\0';
       }

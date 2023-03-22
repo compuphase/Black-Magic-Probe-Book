@@ -50,3 +50,21 @@ modules.order
 Module.symvers
 Mkfile.old
 dkms.conf
+
+# Editor temp files
+*~*
+
+# Linux Executable Files
+source/tracegen
+source/elf-postlink
+source/calltree
+source/bmtrace
+source/bmserial
+source/bmscan
+source/bmprofile
+source/bmflash
+source/bmdebug
+
+# Environment specific Make files
+source/Makefile
+source/makefile.cfg
