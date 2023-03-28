@@ -955,6 +955,7 @@ enum {
   STATE_PATCH_FILE,
   STATE_CLEARFLASH,
   STATE_DOWNLOAD,
+  STATE_OPTIONBYTES,
   STATE_VERIFY,
   STATE_FINISH,
   STATE_POSTPROCESS,
@@ -1381,8 +1382,7 @@ static void check_crp_level(APPSTATE *state)
     return; /* should not happen, because filetype was already established */
   int lpc_crp_level;
   int result = elf_check_crp(fp, &lpc_crp_level);
-  assert(result == ELFERR_NONE);  /* it has already been tested that the file is ELF */
-  bool lpc_cksum = (elf_check_vecttable(fp) == ELFERR_NONE);
+  bool lpc_cksum = (result == ELFERR_NONE && elf_check_vecttable(fp) == ELFERR_NONE);
   fclose(fp);
 
   if (0 < lpc_crp_level && lpc_crp_level < 4 && state->crp_level != lpc_crp_level) {
@@ -1678,9 +1678,9 @@ static bool handle_stateaction(APPSTATE *state, enum nk_collapse_states tab_stat
         if (result) {
           int old_level = filesection_get_crp();
           int set_level = (state->crp_level > 0) ? state->crp_level : 9;
-          result = filesection_set_crp(set_level);  /* fails if the ELF file was not prepared for CRP */
+          bool crp_result = filesection_set_crp(set_level);  /* fails if the ELF file was not prepared for CRP */
           char msg[100] = "";
-          if (result) {
+          if (crp_result) {
             assert(old_level > 0);
             if ((old_level == 9 || old_level == set_level) && set_level < 9)
               sprintf(msg, "^4Code Read Protection is set, level %d\n", set_level);
@@ -1690,6 +1690,7 @@ static bool handle_stateaction(APPSTATE *state, enum nk_collapse_states tab_stat
               sprintf(msg, "^4Code Read Protection is overruled to level %d\n", set_level);
           } else if (state->crp_level > 0) {
             sprintf(msg, "^1Failure setting CRP level %d\n", state->crp_level);
+            result = false;
           }
           if (strlen(msg) > 0 && !state->skip_download)
             log_addstring(msg);
@@ -1758,14 +1759,14 @@ static bool handle_stateaction(APPSTATE *state, enum nk_collapse_states tab_stat
         state->isrunning_download = THRD_IDLE;
       }
       if (state->isrunning_download == THRD_IDLE)
-        state->curstate = ok ? STATE_VERIFY : STATE_IDLE;
+        state->curstate = ok ? STATE_OPTIONBYTES : STATE_IDLE;
     } else {
-      state->curstate = STATE_VERIFY;
+      state->curstate = STATE_OPTIONBYTES;
     }
     waitidle = false;
     break;
 
-  case STATE_VERIFY:
+  case STATE_OPTIONBYTES:
     if (state->crp_level > 0 && (target_is_stm32(state->mcufamily) != NULL || target_is_gd32(state->mcufamily) != NULL)) {
       /* set option bytes for CRP */
       if (state->crp_level == 1 || state->crp_level == 2) {
@@ -1783,10 +1784,14 @@ static bool handle_stateaction(APPSTATE *state, enum nk_collapse_states tab_stat
         log_addstring(msg);
       }
     }
+    state->curstate = STATE_VERIFY;
+    waitidle = false;
+    break;
+
+  case STATE_VERIFY:
     /* compare the checksum of Flash memory to the file */
-    const char *tgtdriver = target_is_lpc(state->mcufamily);
-    if (tgtdriver != NULL)
-      bmp_runscript("memremap", tgtdriver, NULL, NULL, 0);
+    if (target_is_lpc(state->mcufamily) != NULL)
+      bmp_runscript("memremap", target_is_lpc(state->mcufamily), NULL, NULL, 0);
     state->download_success = bmp_verify();
     if (state->download_success)
       state->curstate = STATE_FINISH;
@@ -2126,8 +2131,14 @@ int main(int argc, char *argv[])
       char basename[_MAX_PATH], *p;
       p = strrchr(appstate.TargetFile, DIRSEP_CHAR);
       strlcpy(basename, (p == NULL) ? appstate.TargetFile : p + 1, sizearray(basename));
-      nk_layout_row_begin(ctx, NK_STATIC, ROW_HEIGHT, 2);
-      nk_layout_row_push(ctx, WINDOW_WIDTH - 4 * opt_fontsize);
+      nk_layout_row_begin(ctx, NK_STATIC, ROW_HEIGHT, 3);
+      nk_layout_row_push(ctx, 8 * opt_fontsize);
+      guidriver_setfont(ctx, FONT_HEADING2);
+      nk_style_push_vec2(ctx, &ctx->style.button.padding, nk_vec2(0, 0));
+      nk_label(ctx, " Target file", NK_TEXT_ALIGN_LEFT | NK_TEXT_ALIGN_MIDDLE);
+      guidriver_setfont(ctx, FONT_STD);
+      nk_style_pop_vec2(ctx);
+      nk_layout_row_push(ctx, WINDOW_WIDTH - 12 * opt_fontsize);
       bool error = (load_options == 0 && appstate.TargetFileType == FILETYPE_NONE);
       char tiptext[_MAX_PATH] = "";
       if (strlen(basename) == 0) {
@@ -2163,9 +2174,9 @@ int main(int argc, char *argv[])
       if (!error && appstate.TargetFileType == FILETYPE_UNKNOWN) {
         logview_height -= ROW_HEIGHT + 2*SPACING;
         nk_layout_row_begin(ctx, NK_STATIC, ROW_HEIGHT, 2);
-        nk_layout_row_push(ctx, 10 * opt_fontsize);
-        nk_label(ctx, "Download address", NK_TEXT_ALIGN_LEFT | NK_TEXT_ALIGN_MIDDLE);
-        nk_layout_row_push(ctx, 15 * opt_fontsize);
+        nk_layout_row_push(ctx, 8 * opt_fontsize);
+        nk_label(ctx, " Address", NK_TEXT_ALIGN_LEFT | NK_TEXT_ALIGN_MIDDLE);
+        nk_layout_row_push(ctx, 8 * opt_fontsize);
         editctrl_tooltip(ctx, NK_EDIT_FIELD, appstate.DownloadAddress, sizearray(appstate.DownloadAddress),
                          nk_filter_dec_hex,
                          "Base address where the file will be downloaded to.\n"

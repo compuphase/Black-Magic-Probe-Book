@@ -723,7 +723,7 @@ int elf_check_vecttable(FILE *fp)
   assert(fp!=NULL);
   int wordsize,bigendian,machine;
   int result=elf_info(fp,&wordsize,&bigendian,&machine,NULL);
-  if (result!=ELFERR_NONE || wordsize!=32 || machine!=EM_ARM)
+  if (result!=ELFERR_NONE || wordsize!=32 || (machine!=0 && machine!=EM_ARM))
     return ELFERR_FILEFORMAT; /* only 32-bit ARM architecture */
 
   /* find the section at memory address 0 (the vector table) */
@@ -763,7 +763,7 @@ int elf_patch_vecttable(FILE *fp,const char *driver,unsigned int *checksum)
   assert(fp!=NULL);
   int wordsize,bigendian,machine;
   int result=elf_info(fp,&wordsize,&bigendian,&machine,NULL);
-  if (result!=ELFERR_NONE || wordsize!=32 || machine!=EM_ARM)
+  if (result!=ELFERR_NONE || wordsize!=32 || (machine!=0 && machine!=EM_ARM))
     return ELFERR_FILEFORMAT; /* only 32-bit ARM architecture */
 
   /* find the section at memory address 0 (the vector table) */
@@ -859,7 +859,7 @@ int elf_check_crp(FILE *fp,int *crp)
 
   assert(fp!=NULL);
   result=elf_info(fp,&wordsize,&bigendian,&machine,NULL);
-  if (result!=ELFERR_NONE || wordsize!=32 || machine!=EM_ARM)
+  if (result!=ELFERR_NONE || wordsize!=32 || (machine!=0 && machine!=EM_ARM))
     return ELFERR_FILEFORMAT;   /* only 32-bit ARM architecture */
 
   /* find the section where the CRP "magic" may be stored */

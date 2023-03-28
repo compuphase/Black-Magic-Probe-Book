@@ -1637,8 +1637,10 @@ static bool sources_add(int srcindex, const char *filename, const char *filepath
 /** sources_clear() removes all source files from the sources lists, and
  *  optionally removes these lists too.
  *  \param free_sym   Whether to also clear the symbols.
+ *  \param namelist   An array of base filenames, which is also freed (if not
+ *                    NULL).
  */
-static void sources_clear(bool free_sym)
+static void sources_clear(bool free_sym, const char *namelist[])
 {
   while (sources_root.next != NULL) {
     SOURCEFILE *src = sources_root.next;
@@ -1650,6 +1652,7 @@ static void sources_clear(bool free_sym)
     assert(src->srcindex != NULL);
     free((void*)src->srcindex);
     sourceline_clear(&src->root);
+    free((void*)src);
   }
 
   if (free_sym && elf_symbols != NULL) {
@@ -1659,6 +1662,9 @@ static void sources_clear(bool free_sym)
     elf_symbols = NULL;
     elf_symbol_count = 0;
   }
+
+  if (namelist != NULL)
+    free((void*)namelist);
 }
 
 static int sources_reload(const char *sourcepath, bool debugmode)
@@ -5240,6 +5246,7 @@ static void usage(const char *invalid_option)
          "Options:\n"
          "-f=value  Font size to use (value must be 8 or larger).\n"
          "-g=path   Path to the GDB executable to use.\n"
+         "-t=value  Target to attach to, for systems with multiple targets\n"
          "-h        This help.\n"
          "-v        Show version information.\n");
 }
@@ -5320,7 +5327,7 @@ typedef struct tagAPPSTATE {
   char IPaddr[64];              /**< IP address for network probe */
   char mcu_family[64];          /**< detected MCU family (on attach), also the "driver" name of BMP */
   char mcu_architecture[32];    /**< detected ARM architecture (on attach) */
-  unsigned long mcu_partid;     /**< specific ID code (0 if unknown) */
+  unsigned long mcu_partid;     /**< specific Part ID or Chip ID code (0 if unknown) */
   const char *monitor_cmds;     /**< list of "monitor" commands (target & probe dependent) */
   char GDBpath[_MAX_PATH];      /**< path to GDB executable */
   TASK gdb_task;                /**< GDB process */
@@ -5334,6 +5341,8 @@ typedef struct tagAPPSTATE {
   nk_bool autodownload;         /**< option: download ELF file to target on changes */
   nk_bool force_download;       /**< temporary option: download ELF file */
   nk_bool allmsg;               /**< option: show all GDB output (instead of filtered) */
+  int target_count;             /**< number of targets found by swdp_scan */
+  int target_select;            /**< target number to attach to (in case there are multiple targets) */
   bool atprompt;                /**< whether GDB has displayed the prompt (and waits for input) */
   bool monitor_cmd_active;      /**< to silence output of scripts */
   bool monitor_cmd_finish;      /**< automatically set the command as handled when the monitor command completes */
@@ -6250,7 +6259,9 @@ static void panel_configuration(struct nk_context *ctx, APPSTATE *state,
 
     /* reset during connect */
     nk_layout_row_dynamic(ctx, ROW_HEIGHT, 1);
-    if (checkbox_tooltip(ctx, "Reset target during connect", &state->connect_srst, NK_TEXT_LEFT, "Keep target MCU reset while debug probe attaches")) {
+    if (checkbox_tooltip(ctx, "Reset target during connect", &state->connect_srst, NK_TEXT_LEFT,
+                         "Keep target MCU reset while debug probe attaches"))
+    {
       state->monitor_cmd_active = true;
       char cmd[50];
       if (state->monitor_cmds != NULL && strstr(state->monitor_cmds, "connect_srst") != NULL)
@@ -7148,6 +7159,7 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
         state->mcu_family[0] = '\0';
         state->mcu_architecture[0] = '\0';
         state->mcu_partid = 0;
+        state->target_count = 0;
       } else if (gdbmi_isresult() != NULL) {
         if (strncmp(gdbmi_isresult(), "done", 4) == 0) {
           /* save architecture */
@@ -7164,9 +7176,12 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
           if (item != NULL && (item->flags & STRFLG_TARGET) != 0) {
             assert(item->text != NULL);
             const char *ptr = skipwhite(item->text);
-            while (isdigit(*ptr))
-              ptr++;
-            ptr = skipwhite(ptr);
+            if (isdigit(*ptr)) {
+              int val = strtol(ptr, (char**)&ptr, 10);
+              if (val > state->target_count)
+                state->target_count = val;
+              ptr = skipwhite(ptr);
+            }
             if (*ptr == '*')
               ptr = skipwhite(ptr + 1);
             assert(*ptr != '\0');
@@ -7200,7 +7215,7 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
       if (!state->atprompt)
         break;
       if (STATESWITCH(state)) {
-        strcpy(state->cmdline, "-gdb-set target-async 1\n");
+        strcpy(state->cmdline, "-gdb-set mi-async 1\n");
         if (task_stdin(&state->gdb_task, state->cmdline))
           console_input(state->cmdline);
         state->atprompt = false;
@@ -7223,7 +7238,9 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
       if (!state->atprompt)
         break;
       if (STATESWITCH(state)) {
-        strcpy(state->cmdline, "-target-attach 1\n");
+        assert(state->target_select > 0);
+        int tgt = (state->target_select <= state->target_count) ? state->target_select : 1;
+        sprintf(state->cmdline, "-target-attach %d\n", tgt);
         if (task_stdin(&state->gdb_task, state->cmdline))
           console_input(state->cmdline);
         state->atprompt = false;
@@ -7245,12 +7262,9 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
       if (STATESWITCH(state)) {
         /* clear source files (if any were loaded); these will be reloaded
            after the list of source files is refreshed */
-        sources_clear(false);
-        if (state->sourcefiles != NULL) {
-          free((void*)state->sourcefiles);
-          state->sourcefiles = NULL;
-          state->sourcefiles_count = 0;
-        }
+        sources_clear(false, state->sourcefiles);
+        state->sourcefiles = NULL;
+        state->sourcefiles_count = 0;
         /* also get the list of source files from GDB (it might use a different
            order of the file index numbers) */
         strcpy(state->cmdline, "-file-list-exec-source-files\n");
@@ -8050,6 +8064,7 @@ int main(int argc, char *argv[])
 
   /* global defaults */
   memset(&appstate, 0, sizeof appstate);
+  appstate.target_select = 1;
   appstate.prev_clicked_line = -1;
   appstate.console_activate = 1;
   appstate.trace_status = TRACESTAT_INIT_FAILED;
@@ -8155,6 +8170,14 @@ int main(int argc, char *argv[])
         if (*ptr == '=' || *ptr == ':')
           ptr++;
         strlcpy(appstate.GDBpath, ptr, sizearray(appstate.GDBpath));
+        break;
+      case 't':
+        ptr = &argv[idx][2];
+        if (*ptr == '=' || *ptr == ':')
+          ptr++;
+        appstate.target_select = strtol(ptr, NULL, 10);
+        if (appstate.target_select < 1)
+          appstate.target_select = 1;
         break;
       case 'v':
         version();
@@ -8410,8 +8433,10 @@ int main(int argc, char *argv[])
   locals_clear();
   memdump_cleanup(&appstate.memdump);
   console_clear();
-  sources_clear(true);
+  sources_clear(true, appstate.sourcefiles);
   bmscript_clear();
+  ctf_parse_cleanup();
+  ctf_decode_cleanup();
   dwarf_cleanup(&dwarf_linetable, &dwarf_symboltable, &dwarf_filetable);
   disasm_cleanup(&appstate.armstate);
   tcpip_cleanup();

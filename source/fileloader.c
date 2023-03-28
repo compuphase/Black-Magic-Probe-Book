@@ -448,6 +448,7 @@ int filesection_patch_vecttable(const char *driver, unsigned int *checksum)
   if (sum == vect[chksum_idx])
     return FSERR_CHKSUMSET;
   vect[chksum_idx] = sum;
+  memcpy(sect->buffer, vect, sizeof vect);
   return FSERR_NONE;
 }
 

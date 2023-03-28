@@ -354,29 +354,36 @@ static CTF_TYPE *type_init(CTF_TYPE *root, const char *name, int typeclass, int 
   return item;
 }
 
+static void type_cleanup(CTF_TYPE *root); /* indirect recursion */
+static void type_clear_contents(CTF_TYPE *item)
+{
+  assert(item != NULL);
+  if (item->identifier != NULL)
+    free((void*)item->identifier);
+  if (item->selector != NULL)
+    free((void*)item->selector);
+  if (item->fields != NULL) {
+    type_cleanup(item->fields);
+    free((void*)item->fields);
+  }
+  if (item->keys != NULL) {
+    CTF_KEYVALUE *keyroot = item->keys;
+    while (keyroot->next != NULL) {
+      CTF_KEYVALUE *keyitem = keyroot->next;
+      keyroot->next = keyitem->next;
+      free((void*)keyitem);
+    }
+    free((void*)item->keys);
+  }
+}
+
 static void type_cleanup(CTF_TYPE *root)
 {
   assert(root != NULL);
   while (root->next != NULL) {
     CTF_TYPE *item = root->next;
     root->next = item->next;
-    if (item->identifier != NULL)
-      free((void*)item->identifier);
-    if (item->selector != NULL)
-      free((void*)item->selector);
-    if (item->fields != NULL) {
-      type_cleanup(item->fields);
-      free((void*)item->fields);
-    }
-    if (item->keys != NULL) {
-      CTF_KEYVALUE *keyroot = item->keys;
-      while (keyroot->next != NULL) {
-        CTF_KEYVALUE *keyitem = keyroot->next;
-        keyroot->next = keyitem->next;
-        free((void*)keyitem);
-      }
-      free((void*)item->keys);
-    }
+    type_clear_contents(item);
     free(item);
   }
 }
@@ -419,8 +426,12 @@ static void type_duplicate(CTF_TYPE *tgt, const CTF_TYPE *src)
       CTF_KEYVALUE *kv_tgt = (CTF_KEYVALUE*)malloc(sizeof(CTF_KEYVALUE));
       if (kv_tgt != NULL) {
         memcpy(kv_tgt, kv_src, sizeof(CTF_KEYVALUE));
-        kv_tgt->next = tgt->keys->next;
-        tgt->keys->next = kv_tgt;
+        kv_tgt->next = NULL;
+        CTF_KEYVALUE *tail = tgt->keys;
+        assert(tgt->keys != NULL);
+        while (tail->next != NULL)  /* append to tail (keep key order) */
+          tail = tail->next;
+        tail->next = kv_tgt;
       }
     }
   }
@@ -800,6 +811,7 @@ static void event_cleanup(void)
     while (iter->field_root.next != NULL) {
       CTF_EVENT_FIELD *fld = iter->field_root.next;
       iter->field_root.next = fld->next;
+      type_clear_contents(&fld->type);
       free((void*)fld);
     }
     if (iter->attribute != NULL)
