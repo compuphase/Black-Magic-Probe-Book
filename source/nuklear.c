@@ -16617,7 +16617,8 @@ nk_layout_peek(struct nk_rect *bounds, struct nk_context *ctx)
  * ===============================================================*/
 NK_INTERN int
 nk_tree_state_base(struct nk_context *ctx, enum nk_tree_type type,
-    struct nk_image *img, const char *title, enum nk_collapse_states *state)
+                   struct nk_image *img, const char *title,
+                   enum nk_collapse_states *state, nk_bool *toggled)
 {
     struct nk_window *win;
     struct nk_panel *layout;
@@ -16640,7 +16641,7 @@ nk_tree_state_base(struct nk_context *ctx, enum nk_tree_type type,
     NK_ASSERT(ctx->current);
     NK_ASSERT(ctx->current->layout);
     if (!ctx || !ctx->current || !ctx->current->layout)
-        return 0;
+        return nk_false;
 
     /* cache some data */
     win = ctx->current;
@@ -16672,8 +16673,10 @@ nk_tree_state_base(struct nk_context *ctx, enum nk_tree_type type,
     /* update node state */
     in = (!(layout->flags & NK_WINDOW_ROM)) ? &ctx->input: 0;
     in = (in && widget_state == NK_WIDGET_VALID) ? &ctx->input : 0;
-    if (nk_button_behavior(&ws, header, in, NK_BUTTON_DEFAULT))
+    if (nk_button_behavior(&ws, header, in, NK_BUTTON_DEFAULT)) {
         *state = (*state == NK_MAXIMIZED) ? NK_MINIMIZED : NK_MAXIMIZED;
+        if (toggled) *toggled = nk_true;
+    } else if (toggled) *toggled = nk_false;
 
     /* select correct button style */
     if (*state == NK_MAXIMIZED) {
@@ -16725,9 +16728,9 @@ nk_tree_state_base(struct nk_context *ctx, enum nk_tree_type type,
     } else return nk_false;
 }
 NK_INTERN int
-nk_tree_base(struct nk_context *ctx, enum nk_tree_type type,
-    struct nk_image *img, const char *title, enum nk_collapse_states initial_state,
-    const char *hash, int len, int line)
+nk_tree_base(struct nk_context *ctx, enum nk_tree_type type, struct nk_image *img,
+             const char *title, enum nk_collapse_states initial_state,
+             const char *hash, int len, int line)
 {
     struct nk_window *win = ctx->current;
     int title_len = 0;
@@ -16744,19 +16747,20 @@ nk_tree_base(struct nk_context *ctx, enum nk_tree_type type,
         state = nk_add_value(ctx, win, tree_hash, 0);
         *state = initial_state;
     }
-    return nk_tree_state_base(ctx, type, img, title, (enum nk_collapse_states*)state);
+    return nk_tree_state_base(ctx, type, img, title, (enum nk_collapse_states*)state, NULL);
 }
 NK_API nk_bool
 nk_tree_state_push(struct nk_context *ctx, enum nk_tree_type type,
-    const char *title, enum nk_collapse_states *state)
+                   const char *title, enum nk_collapse_states *state, nk_bool *toggled)
 {
-    return nk_tree_state_base(ctx, type, 0, title, state);
+    return nk_tree_state_base(ctx, type, 0, title, state, toggled);
 }
 NK_API nk_bool
 nk_tree_state_image_push(struct nk_context *ctx, enum nk_tree_type type,
-    struct nk_image img, const char *title, enum nk_collapse_states *state)
+                         struct nk_image img, const char *title,
+                         enum nk_collapse_states *state, nk_bool *toggled)
 {
-    return nk_tree_state_base(ctx, type, &img, title, state);
+    return nk_tree_state_base(ctx, type, &img, title, state, toggled);
 }
 NK_API void
 nk_tree_state_pop(struct nk_context *ctx)

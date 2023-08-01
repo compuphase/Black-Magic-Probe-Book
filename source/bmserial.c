@@ -1360,7 +1360,7 @@ static void panel_portconfig(struct nk_context *ctx, APPSTATE *state,
 # define LABEL_WIDTH (5.5f * opt_fontsize)
 # define VALUE_WIDTH (panel_width - LABEL_WIDTH - (2 * SPACING + 18))
 
-  if (nk_tree_state_push(ctx, NK_TREE_TAB, "Configuration", &tab_states[TAB_PORTCONFIG])) {
+  if (nk_tree_state_push(ctx, NK_TREE_TAB, "Configuration", &tab_states[TAB_PORTCONFIG], NULL)) {
     int result, curidx;
     struct nk_rect bounds;
 
@@ -1492,7 +1492,7 @@ static void panel_linestatus(struct nk_context *ctx, APPSTATE *state,
     nk_style_push_color(ctx, &ctx->style.tab.tab_minimize_button.text_normal, COLOUR_FG_RED);
     caption = "No connection";
   }
-  if (nk_tree_state_push(ctx, NK_TREE_TAB, caption, &tab_states[TAB_LINESTATUS])) {
+  if (nk_tree_state_push(ctx, NK_TREE_TAB, caption, &tab_states[TAB_LINESTATUS], NULL)) {
     /* update the status roughly every 0.1 second */
     unsigned long tstamp = timestamp();
     if (tstamp - state->linestat_tstamp >= 100) {
@@ -1622,7 +1622,7 @@ static void panel_displayoptions(struct nk_context *ctx, APPSTATE *state,
 # define LABEL_WIDTH (5.5f * opt_fontsize)
 # define VALUE_WIDTH (panel_width - LABEL_WIDTH - (2 * SPACING + 18))
 
-  if (nk_tree_state_push(ctx, NK_TREE_TAB, "Display options", &tab_states[TAB_DISPLAYOPTIONS])) {
+  if (nk_tree_state_push(ctx, NK_TREE_TAB, "Display options", &tab_states[TAB_DISPLAYOPTIONS], NULL)) {
 
     int result;
 
@@ -1736,7 +1736,7 @@ static void panel_transmitoptions(struct nk_context *ctx, APPSTATE *state,
 # define LABEL_WIDTH (1.0f * opt_fontsize)
 # define VALUE_WIDTH (panel_width - LABEL_WIDTH - (2 * SPACING + 18))
 
-  if (nk_tree_state_push(ctx, NK_TREE_TAB, "Local options", &tab_states[TAB_TRANSMITOPTIONS])) {
+  if (nk_tree_state_push(ctx, NK_TREE_TAB, "Local options", &tab_states[TAB_TRANSMITOPTIONS], NULL)) {
     nk_layout_row_dynamic(ctx, ROW_HEIGHT, 1);
     checkbox_tooltip(ctx, "Local echo", &state->localecho, NK_TEXT_LEFT,
                      "Copy transmitted text to the viewport");
@@ -1782,7 +1782,7 @@ static void panel_filters(struct nk_context *ctx, APPSTATE *state,
 # define LABEL_WIDTH   (panel_width - ENABLED_WIDTH - BUTTON_WIDTH - (3 * SPACING + 18))
 
   struct nk_style_button stbtn = ctx->style.button;
-  if (nk_tree_state_push(ctx, NK_TREE_TAB, "Highlight filters", &tab_states[TAB_FILTERS])) {
+  if (nk_tree_state_push(ctx, NK_TREE_TAB, "Highlight filters", &tab_states[TAB_FILTERS], NULL)) {
 
     for (FILTER *flt = state->filter_root.next, *next = NULL; flt != NULL; flt = next) {
       next = flt->next; /* save pointer to next filter, for the case the current filter is delected */
@@ -1869,7 +1869,7 @@ static void panel_script(struct nk_context *ctx, APPSTATE *state,
 # define LABEL_WIDTH (2.0f * opt_fontsize)
 # define VALUE_WIDTH (panel_width - LABEL_WIDTH - BROWSEBTN_WIDTH - (3 * SPACING + 18))
 
-  if (nk_tree_state_push(ctx, NK_TREE_TAB, "Script", &tab_states[TAB_SCRIPT])) {
+  if (nk_tree_state_push(ctx, NK_TREE_TAB, "Script", &tab_states[TAB_SCRIPT], NULL)) {
     nk_layout_row_begin(ctx, NK_STATIC, ROW_HEIGHT, 3);
     nk_layout_row_push(ctx, LABEL_WIDTH);
     nk_label(ctx, "File", NK_TEXT_ALIGN_LEFT | NK_TEXT_ALIGN_MIDDLE);

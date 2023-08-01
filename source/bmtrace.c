@@ -498,7 +498,7 @@ static void panel_options(struct nk_context *ctx, APPSTATE *state,
 # define LABEL_WIDTH (4.5 * opt_fontsize)
 # define VALUE_WIDTH (panel_width - LABEL_WIDTH - 26)
 
-  if (nk_tree_state_push(ctx, NK_TREE_TAB, "Configuration", &tab_states[TAB_CONFIGURATION])) {
+  if (nk_tree_state_push(ctx, NK_TREE_TAB, "Configuration", &tab_states[TAB_CONFIGURATION], NULL)) {
     nk_layout_row_begin(ctx, NK_STATIC, ROW_HEIGHT, 2);
     nk_layout_row_push(ctx, LABEL_WIDTH);
     nk_label(ctx, "Probe", NK_TEXT_ALIGN_LEFT | NK_TEXT_ALIGN_MIDDLE);
@@ -675,7 +675,7 @@ static void panel_status(struct nk_context *ctx, APPSTATE *state,
 # define VALUE_WIDTH(n) (panel_width - LABEL_WIDTH(n) - 26)
 # define LINE_HEIGHT (1.2 * opt_fontsize)
 
-  if (nk_tree_state_push(ctx, NK_TREE_TAB, "Status", &tab_states[TAB_STATUS])) {
+  if (nk_tree_state_push(ctx, NK_TREE_TAB, "Status", &tab_states[TAB_STATUS], NULL)) {
     char valuestr[20];
     nk_layout_row_begin(ctx, NK_STATIC, LINE_HEIGHT, 2);
     nk_layout_row_push(ctx, LABEL_WIDTH(8));
@@ -715,7 +715,7 @@ static void panel_status(struct nk_context *ctx, APPSTATE *state,
 static void filter_options(struct nk_context *ctx, APPSTATE *state,
                           enum nk_collapse_states tab_states[TAB_COUNT])
 {
-  if (nk_tree_state_push(ctx, NK_TREE_TAB, "Filters", &tab_states[TAB_FILTERS])) {
+  if (nk_tree_state_push(ctx, NK_TREE_TAB, "Filters", &tab_states[TAB_FILTERS], NULL)) {
     char filter[FILTER_MAXSTRING];
     assert(state->filterlistsize == 0 || state->filterlist != NULL);
     assert(state->filterlistsize == 0 || state->filtercount < state->filterlistsize);
@@ -796,7 +796,7 @@ static void filter_options(struct nk_context *ctx, APPSTATE *state,
 static void channel_options(struct nk_context *ctx, APPSTATE *state,
                             enum nk_collapse_states tab_states[TAB_COUNT])
 {
-  if (nk_tree_state_push(ctx, NK_TREE_TAB, "Channels", &tab_states[TAB_CHANNELS])) {
+  if (nk_tree_state_push(ctx, NK_TREE_TAB, "Channels", &tab_states[TAB_CHANNELS], NULL)) {
     float labelwidth = tracelog_labelwidth(opt_fontsize) + 10;
     struct nk_style_button stbtn = ctx->style.button;
     stbtn.border = 0;
@@ -978,7 +978,9 @@ static void handle_stateaction(APPSTATE *state)
         /* check to get more specific information on the MCU (specifically to
            update the mcu_family name, so that the appropriate scripts can be
            loaded) */
-        if (bmp_runscript("partid", state->mcu_family, state->mcu_architecture, params, 1)) {
+        if (bmp_has_command("partid", state->monitor_cmds)) {
+          state->mcu_partid = bmp_get_partid();
+        } else if (bmp_runscript("partid", state->mcu_family, state->mcu_architecture, params, 1)) {
           state->mcu_partid = params[0];
           const char *mcuname = mcuinfo_lookup(state->mcu_family, state->mcu_partid);
           if (mcuname != NULL) {

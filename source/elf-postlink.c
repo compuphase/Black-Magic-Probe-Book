@@ -35,19 +35,24 @@ static void usage(int flags)
 {
   if (flags & FLAG_HEADER)
     printf("\nPostprocess an ELF file for requirements of specific micro-controllers.\n\n"
-           "Usage: elf-postlink [mcu] [elf-file]\n\n");
+           "Usage: elf-postlink <mcu-type> <elf-file>\n\n");
   if (flags & FLAG_MCU_LIST)
     printf("MCU types:\n"
-           "\tlpc8xx  - NXP LPC800, LPC810, LPC820, LPC830 and LPC840 Cortex-M0/M0+\n"
-           "\t          series\n"
-           "\tlpc11xx - NXP LPC1100, LPC11C00 and LPC11U00 Cortex-M0+ series\n"
+           "\tlpc8xx  - NXP LPC800, LPC810, LPC820, LPC830, LPC840 and LPC860\n"
+           "\t          Cortex-M0/M0+ series\n"
+           "\tlpc11xx - NXP LPC1100, LPC11A00, LPC11C00, LPC11E00 and LPC11U00\n"
+           "\t          Cortex-M0/M0+ series\n"
            "\tlpc15xx - NXP LPC1500 Cortex-M3 series\n"
            "\tlpc17xx - NXP LPC1700 Cortex-M3 series\n"
+           "\tlpc18xx - NXP LPC1800 Cortex-M3 series\n"
            "\tlpc21xx - NXP LPC2100 ARM7TDMI series\n"
            "\tlpc22xx - NXP LPC2200 ARM7TDMI series\n"
            "\tlpc23xx - NXP LPC2300 ARM7TDMI series\n"
            "\tlpc24xx - NXP LPC2400 ARM7TDMI series\n"
-           "\tlpc43xx - NXP LPC4300 Cortex-M4/M0 series\n");
+           "\tlpc40xx - NXP LPC4000 Cortex-M4 series\n"
+           "\tlpc43xx - NXP LPC4300 Cortex-M4/M0 series\n"
+           "\tlpc546xx - NXP LPC546xx Cortex-M4 series\n"
+           );
 }
 
 static void version(void)

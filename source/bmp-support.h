@@ -20,6 +20,7 @@
 #define _BMP_SUPPORT_H
 
 #include <stdbool.h>
+#include <stdint.h>
 #include <stdio.h>
 #include "rs232.h"
 
@@ -61,7 +62,9 @@ HCOM *bmp_comport(void);
 
 int bmp_is_ip_address(const char *address);
 int bmp_checkversionstring(void);
+uint32_t bmp_get_partid(void);
 const char *bmp_get_monitor_cmds(void);
+bool bmp_has_command(const char *name, const char *list);
 bool bmp_expand_monitor_cmd(char *buffer, size_t bufsize, const char *name, const char *list);
 
 bool bmp_attach(bool autopower, char *name, size_t namelength, char *arch, size_t archlength);
@@ -78,7 +81,7 @@ void bmp_progress_reset(unsigned long numsteps);
 void bmp_progress_step(unsigned long step);
 void bmp_progress_get(unsigned long *step, unsigned long *range);
 
-int bmp_enabletrace(int async_bitrate, unsigned char *endpoint);
+bool bmp_enabletrace(int async_bitrate, unsigned char *endpoint);
 
 int bmp_restart(void);
 int bmp_break(void);

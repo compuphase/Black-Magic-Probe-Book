@@ -18,6 +18,7 @@
  */
 
 #include <assert.h>
+#include <ctype.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -406,6 +407,27 @@ void filesection_relocate(unsigned long offset)
     sect->address += offset;
 }
 
+static bool match(const char *driver, const char *pattern)
+{
+  assert(driver != NULL);
+  assert(pattern != NULL);
+
+  while (*pattern != '\0') {
+    if (*driver == '\0')
+      return false;     /* driver name is shorter than the pattern -> mismatch */
+    if (*pattern == 'x') {
+      if (!isalnum(*driver))
+        return false;   /* 'x' is a wildcard for a digit or a letter */
+    } else if (toupper(*driver) != toupper(*pattern)) {
+      return false;     /* otherwise, case-insensitive match */
+    }
+    pattern += 1;
+    driver += 1;
+  }
+
+  return true;  /* name matches the pattern (within the pattern length) */
+}
+
 int filesection_patch_vecttable(const char *driver, unsigned int *checksum)
 {
   assert(checksum!=NULL);
@@ -420,13 +442,15 @@ int filesection_patch_vecttable(const char *driver, unsigned int *checksum)
 
   int chksum_idx = 0;
   assert(driver != NULL);
-  if (stricmp(driver,"lpc8xx")==0 || stricmp(driver,"lpc11xx")==0 ||
-      stricmp(driver,"lpc15xx")==0 || stricmp(driver,"lpc17xx")==0 ||
-      stricmp(driver,"lpc43xx")==0 || stricmp(driver,"lpc546xx")==0)
+  if (match(driver, "LPC8xx") || match(driver, "LPC8N04") || match(driver, "LPC11xx") ||
+      match(driver, "LPC11Axx") || match(driver, "LPC11Cxx") || match(driver, "LPC11Exx") ||
+      match(driver, "LPC11Uxx") || match(driver, "LPC12xx") || match(driver, "LPC13xx") ||
+      match(driver, "LPC15xx") || match(driver, "LPC17xx") || match(driver, "LPC18xx") ||
+      match(driver, "LPC40xx") || match(driver, "LPC43xx") || match(driver, "LPC546xx"))
   {
     chksum_idx = 7;
-  } else if (stricmp(driver,"lpc21xx")==0 || stricmp(driver,"lpc22xx")==0
-             || stricmp(driver,"lpc23xx")==0 || stricmp(driver,"lpc24xx")==0)
+  } else if (match(driver, "LPC21xx") || match(driver, "LPC22xx") ||
+             match(driver, "LPC23xx") || match(driver, "LPC24xx"))
   {
     chksum_idx = 5;
   } else {

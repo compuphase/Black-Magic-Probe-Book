@@ -967,7 +967,7 @@ static void panel_options(struct nk_context *ctx, APPSTATE *state,
 # define LABEL_WIDTH (4.5 * opt_fontsize)
 # define VALUE_WIDTH (panel_width - LABEL_WIDTH - 26)
 
-  if (nk_tree_state_push(ctx, NK_TREE_TAB, "Configuration", &tab_states[TAB_CONFIGURATION])) {
+  if (nk_tree_state_push(ctx, NK_TREE_TAB, "Configuration", &tab_states[TAB_CONFIGURATION], NULL)) {
     int result;
     nk_layout_row_begin(ctx, NK_STATIC, ROW_HEIGHT, 2);
     nk_layout_row_push(ctx, LABEL_WIDTH);
@@ -1105,7 +1105,7 @@ static void panel_profile(struct nk_context *ctx, APPSTATE *state,
 # define LABEL_WIDTH(n) ((n) * opt_fontsize)
 # define VALUE_WIDTH(n) (panel_width - LABEL_WIDTH(n) - 26)
 
-  if (nk_tree_state_push(ctx, NK_TREE_TAB, "Profile options", &tab_states[TAB_PROFILE])) {
+  if (nk_tree_state_push(ctx, NK_TREE_TAB, "Profile options", &tab_states[TAB_PROFILE], NULL)) {
     int result;
     nk_layout_row_begin(ctx, NK_STATIC, ROW_HEIGHT, 2);
     nk_layout_row_push(ctx, LABEL_WIDTH(7));
@@ -1151,7 +1151,7 @@ static void panel_status(struct nk_context *ctx, APPSTATE *state,
 # define LABEL_WIDTH(n) ((n) * opt_fontsize)
 # define VALUE_WIDTH(n) (panel_width - LABEL_WIDTH(n) - 26)
 
-  if (nk_tree_state_push(ctx, NK_TREE_TAB, "Status", &tab_states[TAB_STATUS])) {
+  if (nk_tree_state_push(ctx, NK_TREE_TAB, "Status", &tab_states[TAB_STATUS], NULL)) {
     char valuestr[20];
     nk_layout_row_begin(ctx, NK_STATIC, ROW_HEIGHT, 2);
     nk_layout_row_push(ctx, LABEL_WIDTH(8));
@@ -1358,7 +1358,9 @@ static void handle_stateaction(APPSTATE *state)
       /* check to get more specific information on the MCU (specifically to
          update the mcu_family name, so that the appropriate scripts can be
          loaded) */
-      if (bmp_runscript("partid", state->mcu_family, state->mcu_architecture, params, 1)) {
+      if (bmp_has_command("partid", state->monitor_cmds)) {
+        state->mcu_partid = bmp_get_partid();
+      } else if (bmp_runscript("partid", state->mcu_family, state->mcu_architecture, params, 1)) {
         state->mcu_partid = params[0];
         const char *mcuname = mcuinfo_lookup(state->mcu_family, state->mcu_partid);
         if (mcuname != NULL) {

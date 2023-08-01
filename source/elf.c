@@ -777,6 +777,7 @@ int elf_patch_vecttable(FILE *fp,const char *driver,unsigned int *checksum)
   assert(driver!=NULL);
   if (stricmp(driver,"lpc8xx")==0 || stricmp(driver,"lpc11xx")==0 ||
       stricmp(driver,"lpc15xx")==0 || stricmp(driver,"lpc17xx")==0 ||
+      stricmp(driver,"lpc18xx")==0 || stricmp(driver,"lpc40xx")==0 ||
       stricmp(driver,"lpc43xx")==0 || stricmp(driver,"lpc546xx")==0)
   {
     uint32_t vect[8];
@@ -803,8 +804,8 @@ int elf_patch_vecttable(FILE *fp,const char *driver,unsigned int *checksum)
       fseek(fp,offset,SEEK_SET);
       fwrite(vect,sizeof(uint32_t),sizearray(vect),fp);
     }
-  } else if (stricmp(driver,"lpc21xx")==0 || stricmp(driver,"lpc22xx")==0
-             || stricmp(driver,"lpc23xx")==0 || stricmp(driver,"lpc24xx")==0)
+  } else if (stricmp(driver,"lpc21xx")==0 || stricmp(driver,"lpc22xx")==0 ||
+             stricmp(driver,"lpc23xx")==0 || stricmp(driver,"lpc24xx")==0)
   {
     uint32_t vect[8];
     memset(vect,0,sizeof vect);

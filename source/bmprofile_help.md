@@ -196,7 +196,7 @@ See also:
 The BlackMagic Profiler is a companion tool of the book "Embedded Debugging
 with the Black Magic Probe." The book has a chapter on profiling, discussing the
 pros and cons of sampling versus instrumented profiling, plus notes on diving
-deeping into the profile analysis. It is available as a free PDF file, and
+deeper into the profile analysis. It is available as a free PDF file, and
 as a printed book.
 
 The BlackMagic Profiler requires a debug probe that is compatible with the

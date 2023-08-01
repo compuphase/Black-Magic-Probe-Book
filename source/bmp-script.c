@@ -59,11 +59,11 @@
 #  define _MAX_PATH 260
 #endif
 
-typedef struct tagREG_DEF {     /* register definition */
+typedef struct tagREG_DEF {     /* register definition (hardcoded or from file) */
   const char *name;
   uint32_t address;
   uint8_t size;
-  const char *mcu_list;
+  uint8_t matchlevel;
 } REG_DEF;
 
 typedef struct tagSCRIPT_DEF {  /* hard-coded script (in this source file) */
@@ -81,6 +81,7 @@ typedef struct tagSCRIPTLINE {  /* interpreted script instruction */
 typedef struct tagSCRIPT {
   struct tagSCRIPT *next;
   const char *name;
+  int matchlevel;
   const SCRIPTLINE *lines;
   size_t count;     /* number of lines in the lines array */
 } SCRIPT;
@@ -93,18 +94,28 @@ typedef struct tagREG_CACHE {
 } REG_CACHE;
 
 
-static const REG_DEF register_defaults[] = {
-  { "SYSCON_SYSMEMREMAP",   0x40048000, 4, "LPC8xx,LPC8N04,LPC11xx*,LPC11Uxx,"
-                                           "LPC12xx,LPC13xx,LPC11U3x" },        /**< LPC Cortex M0 series */
+static const struct {
+  const char *name;
+  uint32_t address;
+  uint8_t size;
+  const char *mcu_list;
+} register_defaults[] = {
+  { "SYSCON_SYSMEMREMAP",   0x40048000, 4, "LPC8xx,LPC8N04,LPC11xx*,LPC11Axx,"
+                                           "LPC11Cxx,LPC11Exx,LPC11Uxx,LPC11U3x,"
+                                           "LPC122x,LPC13xx" },                 /**< LPC Cortex M0 series */
   { "SYSCON_SYSMEMREMAP",   0x40074000, 4, "LPC15xx" },                         /**< LPC15xx series */
+  { "SYSCON_SYSMEMREMAP",   0x40000000, 4, "LPC5410x" },                        /**< LPC5410x series */
   { "SCB_MEMMAP",           0x400FC040, 4, "LPC17xx" },                         /**< LPC175x/176x series */
   { "SCB_MEMMAP",           0xE01FC040, 4, "LPC21xx,LPC22xx,LPC23xx,LPC24xx" }, /**< LPC ARM7TDMI series */
   { "M4MEMMAP",             0x40043100, 4, "LPC43xx*" },                        /**< LPC43xx series */
-  { "PART_ID",              0X400483F4, 4, "LPC8N04,LPC11xx,LPC12xx,LPC13xx" }, /**< DEVICE_ID register, LPC Cortex M0 series */
-  { "PART_ID",              0x400483F8, 4, "LPC8xx,LPC11U3x,LPC11xx-XL" },      /**< DEVICE_ID register, LPC Cortex M0 series */
+  { "PART_ID",              0X400483F4, 4, "LPC8N04,LPC11xx,LPC11Cxx,LPC11Exx,"
+                                           "LPC11Uxx,LPC122x,LPC13xx" },        /**< DEVICE_ID register, LPC Cortex M0 series */
+  { "PART_ID",              0x400483F8, 4, "LPC8xx,LPC11xx-XL,LPC11E6x,LPC11U3x,"
+                                           "LPC11U6x" },                        /**< DEVICE_ID register, LPC Cortex M0 series */
   { "PART_ID",              0x400743F8, 4, "LPC15xx" },                         /**< DEVICE_ID register, LPC15xx series */
   { "PART_ID",              0x40043200, 4, "LPC43xx" },                         /**< CHIP_ID register, LPC43xx series */
-  { "PART_ID",              0x40000FF8, 4, "LPC546xx" },                        /**< DEVICE_ID0 register, LPC546xx series */
+  { "PART_ID",              0x40000FF8, 4, "LPC51Uxx,LPC54S0xx,LPC546xx" },     /**< DEVICE_ID0 register, LPC51Uxx, LPC5411x & LPC546xx series */
+  { "PART_ID",              0x400003F8, 4, "LPC5410x" },                        /**< DEVICE_ID0 register, LPC5410x series */
 
   { "RCC_APB2ENR",          0x40021018, 4, "STM32F1*" },                        /**< STM32F1 APB2 Peripheral Clock Enable Register */
   { "AFIO_MAPR",            0x40010004, 4, "STM32F1*" },                        /**< STM32F1 AF remap and debug I/O configuration */
@@ -161,7 +172,7 @@ static const REG_DEF register_defaults[] = {
 
 static const SCRIPT_DEF script_defaults[] = {
   /* memory mapping (for Flash programming) */
-  { "memremap", "LPC8xx,LPC11xx*,LPC11Uxx,LPC12xx,LPC13xx",
+  { "memremap", "LPC8xx,LPC11xx*,LPC11Axx,LPC11Cxx,LPC11Exx,LPC11Uxx,LPC12xx,LPC13xx",
     "SYSCON_SYSMEMREMAP = 2"
   },
   { "memremap", "LPC15xx",
@@ -275,7 +286,7 @@ static const SCRIPT_DEF script_defaults[] = {
 };
 
 
-static SCRIPT script_root = { NULL, NULL, NULL, 0 };
+static SCRIPT script_root = { NULL, NULL, 0, NULL, 0 };
 static REG_CACHE cache = { NULL, NULL, 0, 0 };
 
 
@@ -296,34 +307,53 @@ static const char *skiptrailing(const char *base, const char *end)
 }
 
 /** architecture_match() compares two MCU "family" strings, where an "x" in the
- *  "architecture" string is a wildcard. A single "x" matches any single
- *  character, a double "xx" matches anything that follows. The comparison is
- *  case-insensitive (but the "x" must be lower case).
+ *  "architecture" string is a wildcard for a digit or a letter. The comparison
+ *  is case-insensitive (but the "x" must be lower case).
+ *
+ *  \param architecture   [IN] The family or series name, with optional
+ *                        wildcards.
+ *  \param mcufamily      [IN] The name of the microcontroller, as returned by
+ *                        the Black Magic Probe.
+ *
+ *  \return 0 for a mismatch; 1 for a perfect match (no wildcards); 2+ for a
+ *          match with one or more wildcards.
+ *
+ *  \note Not handled here, but a '*' at the end of the "architecture" string is
+ *        a "match all" wildcard (for matching on the prefix).
  */
-bool architecture_match(const char *architecture, const char *mcufamily)
+int architecture_match(const char *architecture, const char *mcufamily)
 {
+  int wildcards = 0;
   int i;
-
   for (i=0; architecture[i] != '\0' && mcufamily[i] != '\0'; i++) {
     /* if the character in the architecture is a lower case "x", it is a
        wild-card; otherwise the comparison is case-insensitive */
-    if (architecture[i] != 'x' && toupper(architecture[i]) != toupper(mcufamily[i]))
-      return false;
-    if (architecture[i] == 'x' && architecture[i+1] == 'x' && architecture[i+2] == '\0')
-      return true;
+    if (architecture[i] == 'x') {
+      if (!isalnum(mcufamily[i]))
+        return 0;
+      wildcards++;
+    } else if (toupper(architecture[i]) != toupper(mcufamily[i])) {
+      return 0;
+    }
   }
-  return architecture[i] == '\0' && mcufamily[i] == '\0';
+  if (architecture[i] == '\0' && mcufamily[i] == '\0')
+    return 1 + wildcards; /* match successful, but quality depends on wildcard count */
+  return 0;
 }
 
-static bool mcu_match(const char *mcufamily, const char *list)
+/** mcu_match() returns whether the MCU family name matches any of the names in
+ *  the list. If there is a match, it returns the lowest match level (see
+ *  architecture_match() function).
+ */
+static int mcu_match(const char *mcufamily, const char *list)
 {
   const char *head, *separator;
   char matchname[50];
-  size_t namelen, matchlen;
+  int matchlevel = 0;
 
   assert(mcufamily != NULL && list != NULL);
+  size_t namelen = strlen(mcufamily);
 
-  namelen = strlen(mcufamily);
   /* name should never be empty and should not have leading or trailing
      whitespace */
   assert(namelen > 0 && mcufamily[0] > ' ' && mcufamily[namelen - 1] > ' ');
@@ -341,15 +371,20 @@ static bool mcu_match(const char *mcufamily, const char *list)
     if ((separator = strchr(head, ',')) == NULL)
       separator = strchr(head, '\0');
     tail = skiptrailing(head, separator);
-    matchlen = tail - head;
+    size_t matchlen = tail - head;
     if (matchlen == namelen && matchlen < sizearray(matchname)) {
+      if (head[matchlen - 1] == '*')
+        matchlen -= 1; /* strip off any trailing '*' */
       strncpy(matchname, head, matchlen);
       matchname[matchlen] = '\0';
-      if (architecture_match(matchname, mcufamily))
-        return true;   /* exact match */
+      int level = architecture_match(matchname, mcufamily);
+      if (level > 0 && (matchlevel == 0 || level < matchlevel))
+        matchlevel = level;
     }
     head = (*separator != '\0') ? skipleading(separator + 1, true) : separator;
   }
+  if (matchlevel > 0)
+    return matchlevel;  /* exact match, skip match on prefix */
 
   /* no exact match found, try matching items on prefix */
   head = skipleading(list, true);
@@ -360,7 +395,7 @@ static bool mcu_match(const char *mcufamily, const char *list)
     tail = skiptrailing(head, separator);
     if ((wildcard = strchr(head, '*')) != NULL && wildcard < tail) {
       /* the entry in the MCU list has a wildcard, match up to this position */
-      matchlen = wildcard - head;
+      size_t matchlen = wildcard - head;
       /* wildcard must be at the end of the entry */
       assert(wildcard[1] == ',' || wildcard[1] == ' ' || wildcard[1] == '\0');
       if (matchlen == 0)
@@ -371,14 +406,60 @@ static bool mcu_match(const char *mcufamily, const char *list)
         mcuname[matchlen] = '\0';
         strncpy(matchname, head, matchlen);
         matchname[matchlen] = '\0';
-        if (architecture_match(matchname, mcuname))
-          return true; /* match on prefix */
+        int level = architecture_match(matchname, mcuname);
+        if (level > 0 && (matchlevel == 0 || level < matchlevel))
+          matchlevel = level;
       }
     }
     head = (*separator != '\0') ? skipleading(separator + 1, true) : separator;
   }
 
-  return false;
+  return matchlevel;
+}
+
+static bool growbuffer(void **buffer, size_t itemsize, size_t *current, size_t required)
+{
+  assert(buffer != NULL);
+  assert(current != NULL);
+  assert(required != 0);
+  if (required <= *current)
+    return true;  /* buffer large enough, nothing to do */
+
+  size_t newsize = (*current == 0) ? 8 : 2 * *current;
+  void *newbuf = malloc(newsize * itemsize);
+  if (newbuf == NULL)
+    return false; /* allocation fails, leave original buffer untouched (still too small) */
+
+  if (*current > 0) {
+    assert(*buffer != NULL);
+    memcpy(newbuf, *buffer, *current * itemsize);
+    free(*buffer);
+  }
+  *current = newsize;
+  *buffer = newbuf;
+  return true;
+}
+
+static int find_register(const char *name, const REG_DEF *registers, size_t reg_count)
+{
+  assert(name != NULL);
+  assert(reg_count == 0 || registers != NULL);
+  size_t r;
+  for (r = 0; r < reg_count && strcmp(name, registers[r].name) != 0; r++)
+    {}
+  if (r >= reg_count)
+    return -1;
+  return (int)r;
+}
+
+static const SCRIPT *find_script(const char *name)
+{
+  assert(name != NULL);
+  assert(*name != '\0');
+  const SCRIPT *script;
+  for (script = script_root.next; script != NULL && stricmp(name, script->name) != 0; script = script->next)
+    {}
+  return script;
 }
 
 /** parseline() parses a script line, substituting registers and variable
@@ -386,7 +467,7 @@ static bool mcu_match(const char *mcufamily, const char *list)
  *
  *  \param line       [in] Text line.
  *  \param registers  [in] Array with registers that match the MCU.
- *  \param reg_count  The size of the register array.
+ *  \param reg_count  The number of entries in the register array.
  *  \param oper       [out] The operation code, should be one of the OP_xxx
  *                    enumeration values.
  *  \param lvalue     [out] The address of the register or memory location to
@@ -421,15 +502,20 @@ static const char *parseline(const char *line, const REG_DEF *registers, size_t 
     line += 1 + (isdigit(line[1]) != 0);
   } else {
     const char *tail;
-    size_t r;
     for (tail = line; isalnum(*tail) || *tail == '_'; tail++)
       {}
     assert(tail != line);   /* should be an alphanumeric symbol */
+    size_t len = tail - line;
+    char regname[64];
+    assert(len < sizearray(regname));  /* register names should not be this long */
+    if (len >= sizearray(regname))
+      return NULL;
+    strncpy(regname, line, len);
+    regname[len] = '\0';
     assert(registers != NULL);
-    for (r = 0; r < reg_count && strncmp(line, registers[r].name, (tail - line))!= 0; r++)
-      {}
-    assert(r < reg_count);  /* for predefined script, register should always be found */
-    if (r >= reg_count)
+    int r = find_register(regname, registers, reg_count);
+    assert(r >= 0);  /* for predefined script, register should always be found */
+    if (r < 0)
       return NULL;
     lvalue->data = registers[r].address;
     lvalue->size = registers[r].size;
@@ -542,11 +628,9 @@ int bmscript_load(const char *mcu, const char *arch)
 
   /* the name in the root is set to the MCU name, to detect double loading of
      the same script */
-  unsigned idx;
-  SCRIPT *script;
   if (script_root.name != NULL && strcmp(script_root.name, mcu) == 0) {
-    idx = 0;
-    for (script = script_root.next; script != NULL; script = script->next)
+    size_t idx = 0;
+    for (const SCRIPT *script = script_root.next; script != NULL; script = script->next)
       idx++;
     return idx;
   }
@@ -569,25 +653,26 @@ int bmscript_load(const char *mcu, const char *arch)
      first step: the hard-coded registers */
   REG_DEF *registers = NULL;
   size_t reg_size = 0, reg_count = 0;
-  for (idx = 0; idx < sizearray(register_defaults); idx++) {
-    if (mcu_match(mcu, register_defaults[idx].mcu_list)) {
-      assert(reg_count <= reg_size);
-      if (reg_count == reg_size) {
-        /* we need to grow the array for the registers */
-        size_t newsize = (reg_size == 0) ? 8 : 2 * reg_size;
-        REG_DEF *newbuf = (REG_DEF*)realloc(registers, newsize * sizeof(REG_DEF));
-        if (newbuf != NULL) {
-          reg_size = newsize;
-          registers = newbuf;
+  for (size_t idx = 0; idx < sizearray(register_defaults); idx++) {
+    int level = mcu_match(mcu, register_defaults[idx].mcu_list);
+    if (level > 0) {
+      int reg = find_register(register_defaults[idx].name, registers, reg_count);
+      if (reg < 0) {
+        /* add new definition (register does not yet exist) */
+        if (growbuffer((void**)&registers, sizeof(REG_DEF), &reg_size, reg_count + 1)) {
+          registers[reg_count].name = strdup(register_defaults[idx].name);
+          registers[reg_count].address = register_defaults[idx].address;
+          registers[reg_count].size = register_defaults[idx].size;
+          registers[reg_count].matchlevel = level;
+          if (registers[reg_count].name != NULL)
+            reg_count += 1;
         }
-      }
-      if (reg_count < reg_size) {
-        registers[reg_count].name = strdup(register_defaults[idx].name);
-        registers[reg_count].address = register_defaults[idx].address;
-        registers[reg_count].size = register_defaults[idx].size;
-        registers[reg_count].mcu_list = NULL;
-        if (registers[reg_count].name != NULL)
-          reg_count += 1;
+      } else if (level < registers[reg].matchlevel) {
+        /* overrule existing definition (level lower than the existing definition);
+           note that we do not need to copy the name, because it is already set */
+        registers[reg].address = register_defaults[idx].address;
+        registers[reg].size = register_defaults[idx].size;
+        registers[reg].matchlevel = (uint8_t)level;
       }
     }
   }
@@ -601,46 +686,39 @@ int bmscript_load(const char *mcu, const char *arch)
       if ((ptr = strchr(line, '#')) != NULL)
         *ptr = '\0';  /* strip comments */
       /* check whether this matches a register definition line */
-      if (sscanf(line, "define %s [%[^]]] = %s", regname, mcu_list, address) == 3
-          && mcu_match(mcu, mcu_list))
-      {
-        unsigned long addr;
-        int size = 4;
-        if (address[0] == '{' && (ptr = strchr(address, '}')) != NULL) {
-          addr = strtoul(ptr + 1, NULL, 0);
-          if (strncmp(address, "{short}", 7) == 0)
-            size = 2;
-          else if (strncmp(address, "{char}", 6) == 0 || strncmp(address, "{byte}", 6) == 0)
-            size = 1;
-        } else {
-          addr = strtoul(address, NULL, 0);
-        }
-        /* check whether this definition overrules a default register definition */
-        for (idx = 0; idx < reg_count && strcmp(registers[idx].name, regname) != 0; idx++)
-          {}
-        if (idx < reg_count) {
-          /* change the existing entry */
-          registers[idx].address = addr;
-          registers[idx].size = (uint8_t)size;
-        } else {
-          /* add a new entry */
-          assert(reg_count <= reg_size);
-          if (reg_count == reg_size) {
-            /* we need to grow the array for the registers */
-            size_t newsize = (reg_size == 0) ? 8 : 2 * reg_size;
-            REG_DEF *newbuf = (REG_DEF*)realloc(registers, newsize * sizeof(REG_DEF));
-            if (newbuf != NULL) {
-              reg_size = newsize;
-              registers = newbuf;
-            }
+      if (sscanf(line, "define %s [%[^]]] = %s", regname, mcu_list, address) == 3) {
+        int level = mcu_match(mcu, mcu_list);
+        if (level > 0) {
+          unsigned long addr;
+          int size = 4;
+          if (address[0] == '{' && (ptr = strchr(address, '}')) != NULL) {
+            addr = strtoul(ptr + 1, NULL, 0);
+            if (strncmp(address, "{short}", 7) == 0)
+              size = 2;
+            else if (strncmp(address, "{char}", 6) == 0 || strncmp(address, "{byte}", 6) == 0)
+              size = 1;
+          } else {
+            addr = strtoul(address, NULL, 0);
           }
-          if (reg_count < reg_size) {
-            registers[reg_count].name = strdup(regname);
-            registers[reg_count].address = addr;
-            registers[reg_count].size = (uint8_t)size;
-            registers[reg_count].mcu_list = NULL;
-            if (registers[reg_count].name != NULL)
-              reg_count += 1;
+          /* check whether this definition overrules a default register definition */
+          int reg = find_register(regname, registers, reg_count);
+          if (reg < 0) {
+            /* register does not yet exist, add a new entry */
+            if (growbuffer((void**)&registers, sizeof(REG_DEF), &reg_size, reg_count + 1)) {
+              registers[reg_count].name = strdup(regname);
+              registers[reg_count].address = addr;
+              registers[reg_count].size = (uint8_t)size;
+              registers[reg_count].matchlevel = level;
+              if (registers[reg_count].name != NULL)
+                reg_count += 1;
+            }
+          } else if (level <= registers[reg].matchlevel) {
+            /* change the existing entry; in this case, we overrule the default
+               when the level is lower *or equal* because register definitions
+               on the configuration file may overrule the hardcoded ones */
+            registers[reg].address = addr;
+            registers[reg].size = (uint8_t)size;
+            registers[reg].matchlevel = (uint8_t)level;
           }
         }
       }
@@ -657,35 +735,114 @@ int bmscript_load(const char *mcu, const char *arch)
   /* interpret the scripts, first step: the hard-coded scripts */
   SCRIPTLINE *lines = NULL;
   size_t line_size = 0, line_count = 0;
-  for (idx = 0; idx < sizearray(script_defaults); idx++) {
-    if (mcu_match(mcu, script_defaults[idx].mcu_list)
-        || (arch_name[0] != '\0' && mcu_match(arch_name, script_defaults[idx].mcu_list)))
-    {
+  for (size_t idx = 0; idx < sizearray(script_defaults); idx++) {
+    int mcu_level = mcu_match(mcu, script_defaults[idx].mcu_list);
+    int arch_level = (arch_name[0] != '\0') ? mcu_match(arch_name, script_defaults[idx].mcu_list) : 0;
+    if (mcu_level > 0 || arch_level == 1) {
+      SCRIPT *script = (SCRIPT*)find_script(script_defaults[idx].name);
+      if (script != NULL && ((mcu_level > 0 && mcu_level < script->matchlevel) || (arch_level > 0 && arch_level < script->matchlevel))) {
+        /* delete the script lines, the script content is overruled by the new
+           one (better match level) */
+        if (script->count >0)
+          free((void*)script->lines);
+        script->lines = NULL;
+        script->count= 0;
+      } else if (script != NULL) {
+        /* script exists and it has an equal or better match than the new entry;
+           skip this script */
+        continue;
+      }
       line_count = 0;
       const char *head = skipleading(script_defaults[idx].script, true);
       while (head != NULL && *head != '\0') {
-        /* make space for a new entry in the line list */
-        assert(line_count <= line_size);
-        if (line_count == line_size) {
-          /* we need to grow the array for the registers */
-          size_t newsize = (line_size == 0) ? 8 : 2 * line_size;
-          SCRIPTLINE *newbuf = (SCRIPTLINE*)realloc(lines, newsize * sizeof(SCRIPTLINE));
-          if (newbuf != NULL) {
-            lines = newbuf;
-            line_size = newsize;
-          }
-        }
-        if (line_count < line_size) {
+        /* add a new entry in the line list */
+        if (growbuffer((void**)&lines, sizeof(SCRIPTLINE), &line_size, line_count + 1)) {
           head = parseline(head, registers, reg_count,
                            &lines[line_count].oper, &lines[line_count].lvalue,
                            &lines[line_count].rvalue);
           line_count += 1;
         }
       }
-      /* add the script to the list */
-      if ((script = (SCRIPT*)malloc(sizeof(SCRIPT))) != NULL) {
-        script->name = strdup(script_defaults[idx].name);
-        if (script->name != NULL) {
+      /* add the script to the list, either create a new script entry or re-use
+         the existing entry */
+      if (script == NULL) {
+        script = (SCRIPT*)malloc(sizeof(SCRIPT));
+        if (script != NULL) {
+          script->name = strdup(script_defaults[idx].name);
+          if (script->name == NULL) {
+            free(script);
+            script = NULL;
+          }
+        }
+      }
+      if (script != NULL) {
+        assert(script->name != NULL);
+        script->lines = NULL;
+        if (line_count > 0) {
+          script->lines = (SCRIPTLINE*)malloc(line_count * sizeof(SCRIPTLINE));
+          if (script->lines != NULL)
+            memcpy((void*)script->lines, lines, line_count * sizeof(SCRIPTLINE));
+          else
+            line_count = 0;
+        }
+        script->count = line_count;
+        assert(mcu_level > 0 || arch_level > 0);  /* only one of these should be set */
+        script->matchlevel = (mcu_level > 0) ? mcu_level : arch_level;
+        script->next = script_root.next;
+        script_root.next = script;
+      }
+    }
+  }
+
+  /* now read the scripts from the file */
+  if (strlen(path) > 0 && (fp = fopen(path, "rt")) != NULL) {
+    char line[512], scriptname[64], mcu_list[256];
+    bool inscript = false;
+    SCRIPT *script = NULL;
+    while (fgets(line, sizearray(line), fp) != NULL) {
+      char *ptr;
+      if ((ptr = strchr(line, '#')) != NULL)
+        *ptr = '\0';  /* strip comments */
+      if (*skipleading(line, true) == '\0')
+        continue;     /* ignore empty lines (after stripping comments) */
+      /* check whether this matches a register definition line */
+      if (sscanf(line, "define %s [%[^]]]", scriptname, mcu_list) == 2 && strchr(line, '=') == NULL) {
+        assert(!inscript);  /* if inscript is set, the previous script had no 'end' */
+        int mcu_level = mcu_match(mcu, mcu_list);
+        int arch_level = (arch_name[0] != '\0') ? mcu_match(arch_name, mcu_list) : 0;
+        if (mcu_level > 0 || arch_level == 1) {
+          script = (SCRIPT*)find_script(scriptname);
+          if (script != NULL && ((mcu_level > 0 && mcu_level <= script->matchlevel) || (arch_level > 0 && arch_level <= script->matchlevel))) {
+            /* delete the script lines, the script content is overruled by the new
+               one (better match level) */
+            if (script->count >0)
+              free((void*)script->lines);
+            script->lines = NULL;
+            script->count= 0;
+            inscript = true;
+          } else if (script == NULL) {
+            /* script does not exist, must be created */
+            inscript = true;
+          } else {
+            inscript = false; /* should already be false */
+          }
+        }
+        line_count = 0;
+      } else if (inscript && strncmp(line, "end", 3) == 0 && line[3] <= ' ') {
+        /* end script, add it to the list, either create a new script entry or
+           re-use the existing entry */
+        if (script == NULL) {
+          script = (SCRIPT*)malloc(sizeof(SCRIPT));
+          if (script != NULL) {
+            script->name = strdup(scriptname);
+            if (script->name == NULL) {
+              free(script);
+              script = NULL;
+            }
+          }
+        }
+        if (script != NULL) {
+          assert(script->name != NULL);
           script->lines = NULL;
           if (line_count > 0) {
             script->lines = (SCRIPTLINE*)malloc(line_count * sizeof(SCRIPTLINE));
@@ -698,62 +855,10 @@ int bmscript_load(const char *mcu, const char *arch)
           script->next = script_root.next;
           script_root.next = script;
         }
-      }
-    }
-  }
-
-  /* now read the scripts from the file */
-  if (strlen(path) > 0 && (fp = fopen(path, "rt")) != NULL) {
-    char line[512], scriptname[64], mcu_list[256];
-    int inscript = 0;
-    while (fgets(line, sizearray(line), fp) != NULL) {
-      char *ptr;
-      if ((ptr = strchr(line, '#')) != NULL)
-        *ptr = '\0';  /* strip comments */
-      if (*skipleading(line, true) == '\0')
-        continue;     /* ignore empty lines (after stripping comments) */
-      /* check whether this matches a register definition line */
-      if (sscanf(line, "define %s [%[^]]]", scriptname, mcu_list) == 2
-          && strchr(line, '=') == NULL
-          && (mcu_match(mcu, mcu_list)
-              || (arch_name[0] != '\0' && mcu_match(arch_name, mcu_list))))
-      {
-        assert(!inscript);  /* if inscript is set, the previous script had no 'end' */
-        inscript = 1;
-        line_count = 0;
-      } else if (inscript && strncmp(line, "end", 3) == 0 && line[3] <= ' ') {
-        /* end script (add it to the front of the list, so that scripts from the
-           file overrule the hard-coded scripts) */
-        if ((script = (SCRIPT*)malloc(sizeof(SCRIPT))) != NULL) {
-          script->name = strdup(scriptname);
-          if (script->name != NULL) {
-            script->lines = NULL;
-            if (line_count > 0) {
-              script->lines = (SCRIPTLINE*)malloc(line_count * sizeof(SCRIPTLINE));
-              if (script->lines != NULL)
-                memcpy((void*)script->lines, lines, line_count * sizeof(SCRIPTLINE));
-              else
-                line_count = 0;
-            }
-            script->count = line_count;
-            script->next = script_root.next;
-            script_root.next = script;
-          }
-        }
-        inscript = 0;
+        inscript = false;
       } else if (inscript) {
-        /* add line to script, make space for a new entry in the line list */
-        assert(line_count <= line_size);
-        if (line_count == line_size) {
-          /* we need to grow the array for the registers */
-          size_t newsize = (line_size == 0) ? 8 : 2 * line_size;
-          SCRIPTLINE *newbuf = (SCRIPTLINE*)realloc(lines, newsize * sizeof(SCRIPTLINE));
-          if (newbuf != NULL) {
-            lines = newbuf;
-            line_size = newsize;
-          }
-        }
-        if (line_count < line_size) {
+        /* add line to script */
+        if (growbuffer((void**)&lines, sizeof(SCRIPTLINE), &line_size, line_count + 1)) {
           parseline(line, registers, reg_count,
                     &lines[line_count].oper, &lines[line_count].lvalue,
                     &lines[line_count].rvalue);
@@ -767,7 +872,7 @@ int bmscript_load(const char *mcu, const char *arch)
   }
 
   /* free the register list */
-  for (idx = 0; idx < reg_count; idx++) {
+  for (size_t idx = 0; idx < reg_count; idx++) {
     assert(registers[idx].name != NULL);
     free((void*)registers[idx].name);
   }
@@ -776,10 +881,10 @@ int bmscript_load(const char *mcu, const char *arch)
   free((void*)lines);
 
   /* count the scripts, for the return value */
-  idx = 0;
-  for (script = script_root.next; script != NULL; script = script->next)
-    idx++;
-  return idx;
+  size_t count = 0;
+  for (const SCRIPT *script = script_root.next; script != NULL; script = script->next)
+    count++;
+  return count;
 }
 
 void bmscript_clear(void)

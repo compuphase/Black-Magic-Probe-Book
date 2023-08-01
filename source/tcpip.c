@@ -216,7 +216,9 @@ int tcpip_open(const char *ip_address)
   if (connect(GdbSocket, (struct sockaddr*)&server, sizeof(server)) == 0)
     return 0;
 
-  /* connection failed, return an error code */
+  /* connection failed, close the socket and return an error code */
+  closesocket(GdbSocket);
+  GdbSocket = INVALID_SOCKET;
 # if defined WIN32 || defined _WIN32
     return WSAGetLastError();
 # else

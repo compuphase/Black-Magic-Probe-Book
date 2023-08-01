@@ -145,6 +145,22 @@ void bmp_setcallback(BMP_STATCALLBACK func)
   stat_callback = func;
 }
 
+static bool testreply(const char *reply, size_t reply_length, const char *match)
+{
+  assert(reply != NULL);
+  assert(match != NULL);
+
+  if (reply_length == 0)
+    return false;
+  size_t match_length = strlen(match);
+  /* Black Magic Probe can append a '\0' behind the reply (this is a bug in
+     the firmware, but one that we have to deal with) */
+  if (reply_length == match_length + 1 && reply[reply_length - 1] == '\0')
+    reply_length -= 1;
+
+  return (reply_length == match_length && memcmp(reply, match, reply_length) == 0);
+}
+
 /** bmp_connect() scans for the USB port of the Black Magic Probe and connects
  *  to it. It can also connect to a gdbserver via TCP/IP; in this case, the IP
  *  address must be passed, and the scanning phase is skipped.
@@ -208,15 +224,15 @@ bool bmp_connect(int probe, const char *ipaddress)
         rs232_setstatus(hCom, LINESTAT_DTR, 1);
         size = gdbrsp_recv(buffer, sizearray(buffer), 250);
       }
-      if (size != 2 || memcmp(buffer, "OK", size)!= 0) {
+      if (!testreply(buffer, size, "OK")) {
         /* send "monitor version" command to check for a response (ignore the
            text of the response, only check for the "OK" end code) */
         rs232_flush(hCom);
         gdbrsp_xmit("qRcmd,version", -1);
         do {
-          size=gdbrsp_recv(buffer, sizearray(buffer)-1, 250);
-        } while (size > 0 && size != 2);
-        if (size != 2 || memcmp(buffer, "OK", size)!= 0) {
+          size = gdbrsp_recv(buffer, sizearray(buffer)-1, 250);
+        } while (size > 0 && size < 2);
+        if (!testreply(buffer, size, "OK")) {
           notice(BMPERR_NORESPONSE, "No response on %s", devname);
           hCom = rs232_close(hCom);
           return false;
@@ -244,22 +260,25 @@ bool bmp_connect(int probe, const char *ipaddress)
   }
 
   if (initialize) {
-    char buffer[256], *ptr;
-    size_t size;
-    int retry;
+    char buffer[256];
+    /* clear stray data that is still in the queue */
+    while (gdbrsp_recv(buffer, sizearray(buffer), 10) > 0)
+      {}
     /* query parameters */
     gdbrsp_xmit("qSupported:multiprocess+", -1);
-    size = gdbrsp_recv(buffer, sizearray(buffer), 1000);
+    size_t size = gdbrsp_recv(buffer, sizearray(buffer), 1000);
     buffer[size] = '\0';
+    char *ptr;
     if ((ptr = strstr(buffer, "PacketSize=")) != NULL)
       PacketSize = (int)strtol(ptr + 11, NULL, 16);
     gdbrsp_packetsize(PacketSize+16); /* allow for some margin */
     //??? check for "qXfer:memory-map:read+" as well
     /* connect to gdbserver */
+    int retry;
     for (retry = 3; retry > 0; retry--) {
       gdbrsp_xmit("!",-1);
       size = gdbrsp_recv(buffer, sizearray(buffer), 1000);
-      if (size == 2 && memcmp(buffer, "OK", size) == 0)
+      if (testreply(buffer, size, "OK"))
         break;
 #     if defined _WIN32
         Sleep(200);
@@ -425,7 +444,7 @@ restart:
         strlcpy(name, namebuffer, namelength);
       }
       notice(BMPSTAT_NOTICE, buffer + 1);  /* skip the 'o' at the start */
-    } else if (size != 2 || memcmp(buffer, "OK", size) != 0) {
+    } else if (!testreply(buffer, size, "OK")) {
       /* error message was already given by an "output"-response */
       return false;
     } else {
@@ -435,7 +454,7 @@ restart:
   gdbrsp_xmit("vAttach;1", -1);
   size = gdbrsp_recv(buffer, sizearray(buffer), 1000);
   /* accept OK, S##, T## (but in fact, Black Magic Probe always sends T05) */
-  ok = (size == 2 && memcmp(buffer, "OK", size) == 0)
+  ok = (testreply(buffer, size, "OK"))
        || (size == 3 && buffer[0] == 'S' && isxdigit(buffer[1]) && isxdigit(buffer[2]))
        || (size >= 3 && buffer[0] == 'T' && isxdigit(buffer[1]) && isxdigit(buffer[2]));
   if (!ok) {
@@ -500,7 +519,7 @@ bool bmp_detach(bool powerdown)
     /* detach */
     gdbrsp_xmit("D", -1);
     size = gdbrsp_recv(buffer, sizearray(buffer), 1000);
-    if (size != 2 || memcmp(buffer, "OK", size) != 0)
+    if (!testreply(buffer, size, "OK"))
       result = false;
     /* optionally disable power */
     if (powerdown) {
@@ -548,7 +567,7 @@ int bmp_checkversionstring(void)
         }
       } else if ((ptr = strchr(buffer, 'o')) != NULL) {
         strlcpy(line, ptr, sizearray(line));
-      } else if (size == 2 && memcmp(buffer, "OK", size) == 0) {
+      } else if (testreply(buffer, size, "OK")) {
         /* end response found (when arriving here, the version string has
            probably not been recognized) */
         break;
@@ -559,6 +578,56 @@ int bmp_checkversionstring(void)
     }
   }
   return probe;
+}
+
+/** bmp_get_partid() issues the "monitor partid" command to the debug probe,
+ *  for the LPC family and other microcontrollers that may provide the command.
+ *  \return The part-ID, or 0 on failure.
+ */
+uint32_t bmp_get_partid(void)
+{
+  if (!bmp_isopen())
+    return PROBE_UNKNOWN;
+
+  char line[512];
+  memset(line, 0, sizeof line);
+
+  uint32_t partid = 0;
+  gdbrsp_xmit("qRcmd,partid", -1);
+  while (partid == 0) {
+    char buffer[512];
+    size_t size = gdbrsp_recv(buffer, sizearray(buffer) - 1, 1000);
+    if (size > 0) {
+      assert(size < sizearray(buffer));
+      buffer[size] = '\0';
+      char *ptr;
+      if (buffer[0] == 'o') {
+        if (line[0] == 'o')
+          strlcat(line, buffer + 1, sizearray(line));
+        else
+          strlcpy(line, buffer, sizearray(line));
+        if (strchr(line, '\n') != NULL) {
+          if (strncmp(line, "Part ID", 7) == 0) {
+            const char *ptr = line + 7;
+            if (*ptr == ':')
+              ptr++;
+            partid = strtoul(ptr, NULL, 0);
+          }
+          memset(line, 0, sizeof line);
+        }
+      } else if ((ptr = strchr(buffer, 'o')) != NULL) {
+        strlcpy(line, ptr, sizearray(line));
+      } else if (testreply(buffer, size, "OK")) {
+        /* end response found (when arriving here, the version string has
+           probably not been recognized) */
+        break;
+      }
+    } else {
+      /* no new data arrived within the time-out, assume failure */
+      return 0;
+    }
+  }
+  return partid;
 }
 
 /** bmp_get_monitor_cmds() collects the list of "monitor" commands. These are
@@ -631,7 +700,7 @@ const char *bmp_get_monitor_cmds(void)
         }
       } else if ((ptr = strchr(buffer, 'o')) != NULL) {
         strlcpy(line, ptr, sizearray(line));
-      } else if (size == 2 && memcmp(buffer, "OK", size) == 0) {
+      } else if (testreply(buffer, size, "OK")) {
         /* end response found -> done */
         break;
       }
@@ -654,9 +723,9 @@ const char *bmp_get_monitor_cmds(void)
   size_t total_length = 0;
   for (int idx = 0; idx < count; idx++) {
     assert(list[idx] != NULL);
-    total_length += strlen(list[idx]) + 1;  /* +1 for space between words, or for final '\0' */
+    total_length += strlen(list[idx]) + 1;  /* +1 for space between words */
   }
-  char *buffer = malloc(total_length * sizeof(char));
+  char *buffer = malloc((total_length + 1) * sizeof(char));
   if (buffer != NULL) {
     *buffer = '\0';
     for (int idx = 0; idx < count; idx++) {
@@ -675,6 +744,38 @@ const char *bmp_get_monitor_cmds(void)
   free(list);
 
   return (const char*)buffer;
+}
+
+/** bmp_has_command() checks whether the given command appears in the list.
+ *
+ *  \param name   [in] The command name to match. This parameter must be valid.
+ *  \param list   [in] The list of commands; this may be NULL if no commands
+ *                have been queried.
+ *  \return true on success, false on failure.
+ */
+bool bmp_has_command(const char *name, const char *list)
+{
+  if (list == NULL)
+    return false;
+
+  assert(name != NULL);
+  size_t name_len = strlen(name);
+  const char *head = list;
+  while (*head != '\0') {
+    /* the assumption is that the list of commands is "well-formed": no leading
+       or trailing spaces and the tokens separated by a single space */
+    assert(*head > ' ');
+    const char *tail = strchr(head, ' ');
+    if (tail == NULL)
+      tail = head + strlen(head);
+    size_t token_len = tail - head;
+    if (token_len == name_len && strncmp(name, head, name_len) == 0)
+      return true;
+    head = tail;
+    while (*head != '\0' && *head <= ' ')
+      head++;
+  }
+  return false;
 }
 
 /** bmp_expand_monitor_cmd() finds the complete command from a prefix.
@@ -701,7 +802,7 @@ bool bmp_expand_monitor_cmd(char *buffer, size_t bufsize, const char *name, cons
   buffer[0] = '\0';
   const char *head = list;
   while (*head != '\0') {
-    /* the assumption is that the list of commands is "wekk-formed": no leading
+    /* the assumption is that the list of commands is "well-formed": no leading
        or trailing spaces and the tokens separated by a single space */
     assert(*head > ' ');
     const char *tail = strchr(head, ' ');
@@ -749,7 +850,7 @@ bool bmp_monitor(const char *command)
   do {
     size = gdbrsp_recv(buffer, sizearray(buffer), 1000);
   } while (size > 0 && buffer[0] == 'o'); /* ignore console output */
-  return (size == 2 && memcmp(buffer, "OK", size) == 0);
+  return testreply(buffer, size, "OK");
 }
 
 static unsigned long download_numsteps = 0;
@@ -819,7 +920,7 @@ bool bmp_download(void)
     sprintf(cmd, "vFlashErase:%x,%x", (unsigned)rgn->address, (unsigned)(flashsectors * rgn->blocksize));
     gdbrsp_xmit(cmd, -1);
     size_t rcvd = gdbrsp_recv(cmd, pktsize, 500);
-    if (rcvd != 2 || memcmp(cmd, "OK", rcvd)!= 0) {
+    if (!testreply(cmd, rcvd, "OK")) {
       notice(BMPERR_FLASHERASE, "Flash erase failed");
       free(cmd);
       return false;
@@ -863,7 +964,7 @@ bool bmp_download(void)
         memmove(cmd + (prefixlen - 4), sdata + pos, numbytes);
         gdbrsp_xmit(cmd, (prefixlen - 4) + numbytes);
         rcvd = gdbrsp_recv(cmd, pktsize, 500);
-        if (rcvd != 2 || memcmp(cmd, "OK", rcvd)!= 0) {
+        if (!testreply(cmd, rcvd, "OK")) {
           notice(BMPERR_FLASHWRITE, "Flash write failed");
           free(cmd);
           return false;
@@ -873,7 +974,7 @@ bool bmp_download(void)
     }
     gdbrsp_xmit("vFlashDone", -1);
     rcvd = gdbrsp_recv(cmd, pktsize, 500);
-    if (rcvd != 2 || memcmp(cmd, "OK", rcvd)!= 0) {
+    if (!testreply(cmd, rcvd, "OK")) {
       notice(BMPERR_FLASHDONE, "Flash completion failed");
       free(cmd);
       return false;
@@ -955,7 +1056,7 @@ bool bmp_fullerase(unsigned flashsize)
       sprintf(cmd, "vFlashErase:%x,%x", (unsigned)rgn->address, size);
       gdbrsp_xmit(cmd, -1);
       int rcvd = gdbrsp_recv(cmd, pktsize, 5000); /* erase may take some time */
-      failed = (rcvd != 2 || memcmp(cmd, "OK", rcvd) != 0);
+      failed = !testreply(cmd, rcvd, "OK");
       if (failed)
         size /= 2;
     } while (failed && size >= 1024);
@@ -972,7 +1073,7 @@ bool bmp_fullerase(unsigned flashsize)
 
   gdbrsp_xmit("vFlashDone", -1);
   int rcvd = gdbrsp_recv(cmd, pktsize, 500);
-  if (rcvd != 2 || memcmp(cmd, "OK", rcvd)!= 0) {
+  if (!testreply(cmd, rcvd, "OK")) {
     notice(BMPERR_FLASHDONE, "Flash completion failed");
     free(cmd);
     return false;
@@ -1152,25 +1253,58 @@ bool bmp_dumpflash(const char *path, unsigned flashsize)
 # undef FLASHLIMIT
 }
 
-/** bmp_enabletrace() code enables trace in the Black Magic Probe.
+/** bmp_parsetracereply() checks the reply for a "monitor traceswo" command.
+ *  \param reply          [IN] The string with the response.
+ *  \param endpoint       [OUT] The endpoint for the SWO trace is copied into
+ *                        this parameter. This parameter may be NULL.
+ *
+ *  \return true on success, false on failure.
+ */
+static bool bmp_parsetracereply(const char *reply, unsigned char *endpoint)
+{
+  bool ok = false;
+
+  /* first try the old reply format (1.6 up to 1.8.2): <serial>:<interface>:<endpoint> */
+  const char *ptr = strchr(reply, ':');
+  if (ptr != NULL && strtol(ptr + 1, (char**)&ptr, 16) == BMP_IF_TRACE && *ptr == ':') {
+    long ep = strtol(ptr + 1, NULL, 16);
+    ok = (ep > 0x80); /* this must be an IN enpoint, so high bit must be set */
+    if (endpoint != NULL)
+      *endpoint = (unsigned char)ep;
+  }
+
+  /* reply changed in release 1.9: "Trace enabled for BMP serial <serial>, USB EP <endpoint>>" */
+  if (!ok && strncmp(reply, "Trace enabled", 13) == 0) {
+    ptr = strstr(reply, "USB EP");
+    if (ptr != NULL) {
+      long ep = strtol(ptr + 6, NULL, 16);
+      if (endpoint != NULL)
+        *endpoint = (unsigned char)(ep | 0x80); /* direction flag is not set in the reply */
+      ok = true;
+    }
+  }
+
+  return ok;
+}
+
+/** bmp_enabletrace() enables trace in the Black Magic Probe.
  *  \param async_bitrate  [IN] The bitrate for ASYNC mode; set to 0 for
  *                        manchester mode.
  *  \param endpoint       [OUT] The endpoint for the SWO trace is copied into
  *                        this parameter. This parameter may be NULL.
  *
- *  \return 1 on success, 0 on failure.
+ *  \return true on success, false on failure.
  */
-int bmp_enabletrace(int async_bitrate, unsigned char *endpoint)
+bool bmp_enabletrace(int async_bitrate, unsigned char *endpoint)
 {
-  char buffer[100], *ptr;
-  int rcvd, ok, retry;
-
   if (!bmp_isopen()) {
     notice(BMPERR_NOCONNECT, "Not connected to Black Magic Probe");
-    return 0;
+    return false;
   }
 
-  for (retry = 3; retry > 0; retry--) {
+  char buffer[100];
+  int rcvd;
+  for (int retry = 3; retry > 0; retry--) {
     if (async_bitrate > 0)  {
       sprintf(buffer, "qRcmd,traceswo %d", async_bitrate);
       gdbrsp_xmit(buffer, -1);
@@ -1185,18 +1319,10 @@ int bmp_enabletrace(int async_bitrate, unsigned char *endpoint)
      interface for trace capture (0x05) and the endpoint (0x85, on the original
      Black Magic Probe) */
   buffer[rcvd] = '\0';
-  ok = ((ptr = strchr(buffer, ':')) != NULL && strtol(ptr + 1, &ptr, 16) == BMP_IF_TRACE && *ptr == ':');
-  if (ok) {
-    long ep = strtol(ptr + 1, NULL, 16);
-    ok = (ep > 0x80); /* this must be an IN enpoint, so high bit must be set */
-    if (endpoint != NULL)
-      *endpoint = (unsigned char)ep;
-  }
-  if (!ok) {
+  bool ok = (buffer[0] == 'o') && bmp_parsetracereply(buffer + 1, endpoint);
+  if (!ok)
     notice(BMPERR_MONITORCMD, "Trace setup failed");
-    return 0;
-  }
-  return 1;
+  return ok;
 }
 
 int bmp_restart(void)
@@ -1305,7 +1431,7 @@ bool bmp_runscript(const char *name, const char *mcu, const char *arch, unsigned
       memmove(cmd + len, &rvalue.data, rvalue.size);
       gdbrsp_xmit(cmd, len + rvalue.size);
       len = gdbrsp_recv(cmd, sizearray(cmd), 1000);
-      result = (len == 2 && memcmp(cmd, "OK", len) == 0);
+      result = testreply(cmd, len, "OK");
     }
   }
 

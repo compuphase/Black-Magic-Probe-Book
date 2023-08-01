@@ -278,6 +278,28 @@ static char *striptrailing(char *text)
   return text;
 }
 
+static const char *strchr_nest(const char *text, char match)
+{
+  char ch_nest = '\0';
+  switch (match) {
+  case ')': ch_nest = '('; break;
+  case ']': ch_nest = '['; break;
+  case '}': ch_nest = '{'; break;
+  case '>': ch_nest = '<'; break;
+  }
+  int level = 0;
+  while (*text != '\0') {
+    if (*text == match) {
+      if (--level < 0)
+        return text;
+    } else if (*text == ch_nest) {
+      level++;
+    }
+    text++;
+  }
+  return NULL;
+}
+
 static int strtokenize(const char *token, int *length, char delimiter)
 {
   assert(token != NULL);
@@ -852,6 +874,7 @@ static int console_autocomplete(char *text, size_t textsize, const DWARF_SYMBOLL
     { "disable", NULL, NULL },
     { "disassemble", "disas", "off on" },
     { "display", NULL, "%var %reg" },
+    { "dprintf", NULL, "%func %var" },
     { "down", NULL, NULL },
     { "enable", NULL, NULL },
     { "file", NULL, "%path" },
@@ -859,7 +882,7 @@ static int console_autocomplete(char *text, size_t textsize, const DWARF_SYMBOLL
     { "finish", "fin", NULL },
     { "frame", "f", NULL },
     { "help", NULL, "assembly break breakpoints data files find keyboard monitor running serial stack status support svd trace user-defined" },
-    { "info", NULL, "args breakpoints frame functions locals scope set sources stack svd variables vtbl" },
+    { "info", NULL, "args breakpoints frame functions locals scope set sources stack svd variables vtbl %var" },
     { "list", NULL, "%func %var %file" },
     { "load", NULL, NULL },
     { "monitor", "mon", "auto_scan connect_srst frequency halt_timeout hard_srst heapinfo jtag_scan morse option swdp_scan reset rtt targets tpwr traceswo vector_catch" },
@@ -1198,9 +1221,9 @@ static void console_history_add(STRINGLIST *root, char *text, bool tail)
   assert(text != NULL);
   text[strcspn(text, "\n")] = '\0'; // remove EOL from command
 
-  // If the command history is empty (ex new install of bmdebug) then store the first command 
+  // If the command history is empty (ex new install of bmdebug) then store the first command
   if (root->next == NULL) {
-    stringlist_append(root, text, 0); 
+    stringlist_append(root, text, 0);
     return;
   }
 
@@ -1236,7 +1259,14 @@ static const STRINGLIST *console_history_match(const STRINGLIST *root, const STR
 {
   static char *cache_text = NULL;
   static int cache_cutoff = 0;
-  const STRINGLIST *item;
+  /* special case, for clean-up */
+  if (root == NULL && mark == NULL && text == NULL) {
+    if (cache_text != NULL) {
+      free((void*)cache_text);
+      cache_text = NULL;
+    }
+    return NULL;
+  }
 
   assert(text != NULL);
 
@@ -1249,7 +1279,7 @@ static const STRINGLIST *console_history_match(const STRINGLIST *root, const STR
   }
 
   /* find a string in the history that matches the given text */
-  item = mark;
+  const STRINGLIST *item = mark;
   while ((item = console_history_step(root, item, 0)) != NULL && item != mark) {
     assert(item->text != NULL);
     if ((int)strlen(item->text) > cache_cutoff && strncmp(item->text, text, cache_cutoff) == 0)
@@ -1914,7 +1944,7 @@ static const char **sources_getnames(unsigned *count)
 typedef struct tagBREAKPOINT {
   struct tagBREAKPOINT *next;
   short number; /* sequential number, as assigned by GDB */
-  short type;   /* 0 = breakpoint, 1 = watchpoint */
+  short type;   /* 0 = breakpoint, 1 = watchpoint, 2 = dprintf */
   short keep;
   short enabled;
   unsigned long address;
@@ -1925,6 +1955,10 @@ typedef struct tagBREAKPOINT {
   int hitcount;
 } BREAKPOINT;
 #define BKPTFLG_FUNCTION  0x0001
+
+#define BKPTTYPE_BREAK    0
+#define BKPTTYPE_WATCH    1
+#define BKPTTYPE_DPRINTF  2
 
 static BREAKPOINT breakpoint_root = { NULL };
 
@@ -2002,18 +2036,16 @@ static int breakpoint_parse(const char *gdbresult)
   assert(*start == '[');
   start = skipwhite(start + 1);
   while (*start != ']') {
-    const char *tail;
-    char *line;
-    size_t len;
     assert(strncmp(start, "bkpt", 4) == 0);
     start = skipwhite(start + 4);
     assert(*start == '=');
     start = skipwhite(start + 1);
     assert(*start == '{');
     start = skipwhite(start + 1);
-    tail = strchr(start, '}');
+    const char *tail = strchr_nest(start, '}');
     assert(tail != NULL);
-    len = tail - start;
+    size_t len = tail - start;
+    char *line;
     if ((line = malloc((len + 1) * sizeof(char))) != NULL) {
       BREAKPOINT *bp;
       strncpy(line, start, len);
@@ -2029,7 +2061,12 @@ static int breakpoint_parse(const char *gdbresult)
         if ((start=fieldfind(line, "type")) != NULL) {
           start = fieldvalue(start, NULL);
           assert(start != NULL);
-          bp->type = (strncmp(start, "breakpoint", 10) == 0) ? 0 : 1;
+          if (strncmp(start, "breakpoint", 10) == 0)
+            bp->type = BKPTTYPE_BREAK;
+          else if (strncmp(start, "dprintf", 7) == 0)
+            bp->type = BKPTTYPE_DPRINTF;
+          else
+            bp->type = BKPTTYPE_WATCH;
         }
         if ((start=fieldfind(line, "disp")) != NULL) {
           start = fieldvalue(start, NULL);
@@ -3731,51 +3768,48 @@ static int source_mouse2char(struct nk_context *ctx, const char *id,
 /** source_getsymbol() returns the symbol at the row and column in the
  *  current source. Parameters row and column are 1-based.
  */
-static int source_getsymbol(char *symname, size_t symlen, int row, int col)
+static bool source_getsymbol(char *symname, size_t symlen, int row, int col)
 {
-  SOURCELINE *item;
-  const char *head, *tail, *ptr;
-  int len, nest;
-
   assert(symname != NULL && symlen > 0);
   *symname = '\0';
   if (row < 1 || col < 1)
-    return 0;
+    return false;
+  SOURCELINE *item;
   for (item = source_firstline(source_cursorfile); item != NULL && row > 1; item = item->next)
     row--;
   if (item == NULL)
-    return 0;
+    return false;
   assert(item->text != NULL);
   if ((unsigned)col > strlen(item->text))
-    return 0;
+    return false;
   /* when moving to the left, skip '.' and '->' to complete the structure field
      with the structure variable; also skip '*' so that pointing at '*ptr' shows
      the dereferenced value */
-  head = item->text + (col - 1);
+  const char *head = item->text + (col - 1);
   if (!isalpha(*head) && !isdigit(*head) && *head != '_')
-    return 0;
+    return false;
   while (head > item->text
          && (isalpha(*(head - 1)) || isdigit(*(head - 1)) || *(head - 1) == '_'
              || *(head - 1) == '.' || (*(head - 1) == '>' && *(head - 2) == '-') || (*(head - 1) == '-' && *head == '>')
              || *(head - 1) == '*'))
     head--;
   if (!isalpha(*head) && *head != '_' && *head != '*')
-    return 0; /* symbol must start with a letter or '_' (but make an exception for the '*' prefix) */
+    return false;       /* symbol must start with a letter or '_' (but make an exception for the '*' prefix) */
   /* run from the start of the line to the head, check for preprocessor directives,
      comments and literal strings (it does not work well for multi-line comments
      and it also does not take continued lines into account) */
-  ptr = skipwhite(item->text);
+  const char *ptr = skipwhite(item->text);
   if (*ptr == '#')
-    return 0;     /* symbol is on a preprocessor directive */
+    return false;       /* symbol is on a preprocessor directive */
   while (ptr < head) {
     assert(*ptr != '\0');
     if (*ptr == '/' && *(ptr + 1) == '/')
-      return 0;   /* symbol is in a single-line comment */
+      return false;     /* symbol is in a single-line comment */
     if (*ptr == '/' && *(ptr + 1) == '*') {
       ptr += 2;
       while (*ptr != '\0' && (*ptr != '*' || *(ptr + 1) != '/')) {
         if (ptr >= head)
-          return 0; /* symbol is in ablock comment */
+          return false; /* symbol is in a block comment */
         ptr += 1;
       }
       ptr += 1; /* we stopped on the '*', move to the '/' which is the end of the comment */
@@ -3783,7 +3817,7 @@ static int source_getsymbol(char *symname, size_t symlen, int row, int col)
       char quote = *ptr++;
       while (*ptr != '\0' && *ptr != quote) {
         if (ptr >= head)
-          return 0; /* symbol is in a literal character or string */
+          return false; /* symbol is in a literal character or string */
         if (*ptr == '\\')
           ptr += 1; /* escape character, skip 2 characters */
         ptr += 1;
@@ -3794,8 +3828,8 @@ static int source_getsymbol(char *symname, size_t symlen, int row, int col)
   /* when moving to the right, skip '[' and ']' so that pointing at 'vector[i]'
      shows the element 'i' of array 'vector' (but skip ']' only if '[' was seen
      too) */
-  nest = 0;
-  tail = item->text + (col - 1);
+  int nest = 0;
+  const char *tail = item->text + (col - 1);
   while (isalpha(*tail) || isdigit(*tail) || *tail == '_' || *tail == '[' || (*tail == ']' && nest > 0)) {
     if (*tail == '[')
       nest++;
@@ -3804,15 +3838,15 @@ static int source_getsymbol(char *symname, size_t symlen, int row, int col)
     tail++;
   }
   if (nest != 0)
-    return 0;
-  len = tail - head;
-  if ((unsigned)len >= symlen)
-    return 0; /* full symbol name does not fit, no need to try to look it up */
+    return false;
+  unsigned len = tail - head;
+  if (len >= symlen)
+    return false;       /* full symbol name does not fit, no need to try to look it up */
   strncpy(symname, head, len);
   symname[len] = '\0';
   if (is_keyword(symname))
-    return 0; /* reserved words are not symbols */
-  return 1;
+    return false;       /* reserved words are not symbols */
+  return true;
 }
 
 /* returns the current file index and line that the cursor is on */
@@ -3840,16 +3874,18 @@ enum {
   STATE_FILE,
   STATE_TARGET_EXT,
   STATE_PROBE_TYPE,
-  STATE_PROBE_CMDS,
+  STATE_PROBE_CMDS_1,   /* get probe commands before target scan */
   STATE_CONNECT_SRST,
   STATE_MON_TPWR,
   STATE_MON_SCAN,
   STATE_ASYNC_MODE,
   STATE_ATTACH,
+  STATE_PROBE_CMDS_2,   /* get probe + target commands after attach */
   STATE_GET_SOURCES,
-  STATE_MEMACCESS_1,
-  STATE_MEMACCESS_2,
-  STATE_PARTID,
+  STATE_MEMACCESS,      /* allow GDB to access memory beyond ELF file boundaries */
+  STATE_MEMMAP,         /* LPC: make sure low memory is mapped to Flash */
+  STATE_PARTID_1,       /* part id via command */
+  STATE_PARTID_2,       /* part id via script */
   STATE_VERIFY,
   STATE_DOWNLOAD,
   STATE_CHECK_MAIN,
@@ -4155,10 +4191,10 @@ static bool handle_help_cmd(char *command, STRINGLIST *textroot, int *active,
                                   " instruction, rather than by source line. You can still use the \"next\""
                                   " and \"step\" commands to step by source line.", 0);
     } else if (TERM_EQU(cmdptr, "find", 4)) {
-      stringlist_append(textroot, "Find text in the current source file (case-insensitive).", 0);
+      stringlist_append(textroot, "Find text in source code, or bytes in target memory.", 0);
       stringlist_append(textroot, "", 0);
-      stringlist_append(textroot, "find [text]", 0);
-      stringlist_append(textroot, "Without parameter, the find command repeats the previous search.", 0);
+      stringlist_append(textroot, "find [text] -- Find text in the current source file (case-insensitive). Without parameter, the find command repeats the previous search.", 0);
+      stringlist_append(textroot, "find [/sn] start, end, values -- Search the address range from \"start\" to \"end\" for a sequence of values. The \"values\" parameter is a list of numbers separated by commas.", 0);
       return true;
     } else if (TERM_EQU(cmdptr, "kbd", 3) || TERM_EQU(cmdptr, "keys", 4) || TERM_EQU(cmdptr, "keyboard", 8)) {
       stringlist_append(textroot, "Keyboard navigation and commands.", 0);
@@ -4529,23 +4565,40 @@ static bool handle_find_cmd(const char *command)
   assert(command != NULL);
   command = skipwhite(command);
   if (TERM_EQU(command, "find", 4)) {
-    static char pattern[50] = "";
-    SOURCELINE *item = source_firstline(source_cursorfile);
-    int linenr, found_on_curline;
-    const char *ptr;
-    if ((ptr = strchr(command, ' ')) != NULL) {
-      ptr = skipwhite(ptr);
-      if (*ptr != '\0')
+    /* check whether this is a memory search command */
+    const char *ptr = skipwhite(command + 4);
+    const char *p2 = ptr;
+    if (*p2 == '/') {
+      while (*p2 > ' ')
+        p2++;
+      p2 = skipwhite(p2);
+      long s, e, v;
+      if (sscanf(p2, "%li, %li, %li", &s, &e, &v) == 3)
+        return false; /* this is the syntax for GDB find command */
+    }
+    /* copy pattern the search for */
+    static char pattern[100] = "";
+    if (*ptr != '\0') {
+      size_t len = strlen(ptr);
+      if (*ptr == '"' && *(ptr + len - 1) == '"') {
+        strlcpy(pattern, ptr + 1, sizearray(pattern));
+        len -= 2;
+        if (len < sizearray(pattern))
+          pattern[len] = '\0';
+      } else {
         strlcpy(pattern, ptr, sizearray(pattern));
+      }
     }
     if (strlen(pattern) == 0)
       return true; /* invalid pattern, but command syntax is ok */
     /* find pattern, starting from source_cursorline */
-    linenr = 1;
+    SOURCELINE *item = source_firstline(source_cursorfile);
+    int linenr = 1;
     while (item != NULL && linenr < source_cursorline) {
       linenr++;
       item = item->next;
     }
+    int found_on_curline;
     if (item == NULL || source_cursorline <= 0) {
       found_on_curline = 0;
       item = source_firstline(source_cursorfile);
@@ -5311,6 +5364,31 @@ static void config_write_tabstate(const char *key, enum nk_collapse_states state
   ini_puts("Views", key, valstr, configfile);
 }
 
+static bool exist_monitor_cmd(const char *name, const char *list)
+{
+  if (list == NULL)
+    return false;
+
+  assert(name != NULL);
+  size_t name_len = strlen(name);
+  const char *head = list;
+  while (*head != '\0') {
+    /* the assumption is that the list of commands is "well-formed": no leading
+       or trailing spaces and the tokens separated by a single space */
+    assert(*head > ' ');
+    const char *tail = strchr(head, ' ');
+    if (tail == NULL)
+      tail = head + strlen(head);
+    size_t token_len = tail - head;
+    if (token_len == name_len && strncmp(name, head, name_len) == 0)
+      return true;
+    head = tail;
+    while (*head != '\0' && *head <= ' ')
+      head++;
+  }
+  return false;
+}
+
 typedef struct tagAPPSTATE {
   int curstate;                 /**< current (or new) state */
   int prevstate;                /**< previous state (to detect state changes) */
@@ -5418,6 +5496,7 @@ enum {
 #define MOVESTATE(app, state)   ((app)->waitidle = false, (app)->curstate = (state), log_state(app))
 #define STATESWITCH(app)        ((app)->curstate != (app)->prevstate)
 #define MARKSTATE(app)          ((app)->prevstate = (app)->curstate)
+#define ISSTATE(app, state)     ((app)->curstate == (state))
 
 
 static int log_state(const APPSTATE *state)
@@ -5885,7 +5964,7 @@ static void console_view(struct nk_context *ctx, APPSTATE *state,
             RESETSTATE(state, STATE_HARDRESET);
           } else if (result == LOAD_CUR_ELF) {
             state->force_download = nk_true;
-            RESETSTATE(state, STATE_MEMACCESS_1);
+            RESETSTATE(state, STATE_MEMACCESS);
           } else {
             if (result == LOAD_FILE_ELF || result == RESET_LOAD)
               state->force_download = nk_true;
@@ -5977,7 +6056,8 @@ static void console_view(struct nk_context *ctx, APPSTATE *state,
             TERM_EQU(state->console_edit, "delete", 6) ||
             TERM_EQU(state->console_edit, "clear", 5) ||
             TERM_EQU(state->console_edit, "disable", 7) ||
-            TERM_EQU(state->console_edit, "enable", 6))
+            TERM_EQU(state->console_edit, "enable", 6) ||
+            TERM_EQU(state->console_edit, "dprintf", 7))
           state->refreshflags |= REFRESH_BREAKPOINTS | IGNORE_DOUBLE_DONE;
 
         // save most recent keyboard command in the command history list list
@@ -6048,7 +6128,7 @@ static void panel_configuration(struct nk_context *ctx, APPSTATE *state,
   assert(state != NULL);
   assert(tab_state != NULL);
 
-  if (nk_tree_state_push(ctx, NK_TREE_TAB, "Configuration", tab_state)) {
+  if (nk_tree_state_push(ctx, NK_TREE_TAB, "Configuration", tab_state, NULL)) {
 #   define LABEL_WIDTH (5.0f * opt_fontsize)
     struct nk_rect bounds = nk_widget_bounds(ctx);
     float edtwidth = bounds.w - LABEL_WIDTH - BROWSEBTN_WIDTH - (2 * 5);
@@ -6264,7 +6344,7 @@ static void panel_configuration(struct nk_context *ctx, APPSTATE *state,
     {
       state->monitor_cmd_active = true;
       char cmd[50];
-      if (state->monitor_cmds != NULL && strstr(state->monitor_cmds, "connect_srst") != NULL)
+      if (exist_monitor_cmd("connect_srst", state->monitor_cmds))
         strcpy(cmd, "monitor connect_srst");
       else
         strcpy(cmd, "monitor connect_rst");
@@ -6298,7 +6378,7 @@ static void panel_breakpoints(struct nk_context *ctx, APPSTATE *state,
   assert(tab_state != NULL);
 
   nk_sizer_refresh(&state->sizerbar_breakpoints);
-  if (nk_tree_state_push(ctx, NK_TREE_TAB, "Breakpoints", tab_state)) {
+  if (nk_tree_state_push(ctx, NK_TREE_TAB, "Breakpoints", tab_state, NULL)) {
     char label[300];
     /* find longest breakpoint description */
     struct nk_user_font const *font = ctx->style.font;
@@ -6440,7 +6520,7 @@ static void panel_locals(struct nk_context *ctx, APPSTATE *state,
 
   nk_sizer_refresh(&state->sizerbar_locals);
   int result = *tab_state;  /* save old state */
-  if (nk_tree_state_push(ctx, NK_TREE_TAB, "Locals", tab_state)) {
+  if (nk_tree_state_push(ctx, NK_TREE_TAB, "Locals", tab_state, NULL)) {
     if (result == NK_MINIMIZED)
       refresh_panel_contents(state, STATE_LIST_LOCALS, REFRESH_LOCALS);
 
@@ -6502,7 +6582,7 @@ static void panel_watches(struct nk_context *ctx, APPSTATE *state,
 
   nk_sizer_refresh(&state->sizerbar_watches);
   int result = *tab_state;  /* save old state */
-  if (nk_tree_state_push(ctx, NK_TREE_TAB, "Watches", tab_state)) {
+  if (nk_tree_state_push(ctx, NK_TREE_TAB, "Watches", tab_state, NULL)) {
     /* if previous state for the memory was closed, force an update of the memory view */
     if (result == NK_MINIMIZED)
       refresh_panel_contents(state, STATE_LIST_WATCHES, REFRESH_WATCHES);
@@ -6595,7 +6675,7 @@ static void panel_registers(struct nk_context *ctx, APPSTATE *state,
 
   nk_sizer_refresh(&state->sizerbar_registers);
   int result = *tab_state;  /* save old state */
-  if (nk_tree_state_push(ctx, NK_TREE_TAB, "Registers", tab_state)) {
+  if (nk_tree_state_push(ctx, NK_TREE_TAB, "Registers", tab_state, NULL)) {
     if (result == NK_MINIMIZED)
       refresh_panel_contents(state, STATE_LIST_REGISTERS, REFRESH_REGISTERS);
 
@@ -6636,7 +6716,7 @@ static void panel_memory(struct nk_context *ctx, APPSTATE *state,
 
   nk_sizer_refresh(&state->sizerbar_memory);
   int result = *tab_state;  /* save old state */
-  if (nk_tree_state_push(ctx, NK_TREE_TAB, "Memory", tab_state)) {
+  if (nk_tree_state_push(ctx, NK_TREE_TAB, "Memory", tab_state, NULL)) {
     /* if previous state for the memory was closed, force an update of the memory view */
     if (result == NK_MINIMIZED)
       refresh_panel_contents(state, STATE_VIEWMEMORY, REFRESH_MEMORY);
@@ -6665,7 +6745,7 @@ static void panel_semihosting(struct nk_context *ctx, APPSTATE *state,
   bool highlight = !(*tab_state) && stringlist_count(&semihosting_root) != state->semihosting_lines;
   if (highlight)
     nk_style_push_color(ctx, &ctx->style.tab.text, COLOUR_FG_YELLOW);
-  int result = nk_tree_state_push(ctx, NK_TREE_TAB, "Semihosting output", tab_state);
+  int result = nk_tree_state_push(ctx, NK_TREE_TAB, "Semihosting output", tab_state, NULL);
   if (highlight)
     nk_style_pop_color(ctx);
 
@@ -6689,7 +6769,7 @@ static void panel_serialmonitor(struct nk_context *ctx, APPSTATE *state,
   bool highlight = !(*tab_state) && sermon_countlines() != state->sermon_lines;
   if (highlight)
     nk_style_push_color(ctx, &ctx->style.tab.text, COLOUR_FG_YELLOW);
-  int result = nk_tree_state_push(ctx, NK_TREE_TAB, "Serial console", tab_state);
+  int result = nk_tree_state_push(ctx, NK_TREE_TAB, "Serial console", tab_state, NULL);
   if (highlight)
     nk_style_pop_color(ctx);
 
@@ -6752,7 +6832,7 @@ static void panel_traceswo(struct nk_context *ctx, APPSTATE *state,
   bool highlight = !(*tab_state) && tracestring_count() != state->swo_lines;
   if (highlight)
     nk_style_push_color(ctx, &ctx->style.tab.text, COLOUR_FG_YELLOW);
-  int result = nk_tree_state_push(ctx, NK_TREE_TAB, "SWO tracing", tab_state);
+  int result = nk_tree_state_push(ctx, NK_TREE_TAB, "SWO tracing", tab_state, NULL);
   if (highlight)
     nk_style_pop_color(ctx);
 
@@ -6765,6 +6845,33 @@ static void panel_traceswo(struct nk_context *ctx, APPSTATE *state,
     nk_sizer(ctx, &state->sizerbar_swo);
     nk_tree_state_pop(ctx);
   }
+}
+
+static bool bmp_parsetracereply(const char *reply, unsigned char *endpoint)
+{
+  bool ok = false;
+
+  /* first try the old reply format (1.6 up to 1.8.2): <serial>:<interface>:<endpoint> */
+  const char *ptr = strchr(reply, ':');
+  if (ptr != NULL && strtol(ptr + 1, (char**)&ptr, 16) == BMP_IF_TRACE && *ptr == ':') {
+    long ep = strtol(ptr + 1, NULL, 16);
+    ok = (ep > 0x80); /* this must be an IN enpoint, so high bit must be set */
+    if (endpoint != NULL)
+      *endpoint = (unsigned char)ep;
+  }
+
+  /* reply changed in release 1.9: "Trace enabled for BMP serial <serial>, USB EP <endpoint>>" */
+  if (!ok && strncmp(reply, "Trace enabled", 13) == 0) {
+    ptr = strstr(reply, "USB EP");
+    if (ptr != NULL) {
+      long ep = strtol(ptr + 6, NULL, 16);
+      if (endpoint != NULL)
+        *endpoint = (unsigned char)(ep | 0x80); /* direction flag is not set in the reply */
+      ok = true;
+    }
+  }
+
+  return ok;
 }
 
 static void handle_kbdinput_main(struct nk_context *ctx, APPSTATE *state)
@@ -7032,10 +7139,10 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
         MARKSTATE(state);
       } else if (gdbmi_isresult() != NULL) {
         if (strncmp(gdbmi_isresult(), "done", 4) == 0) {
-          int type;
           assert(state->console_mark != NULL && state->console_mark->text != NULL);
           assert(state->console_mark->flags & STRFLG_RESULT);
           state->console_mark = state->console_mark->next;  /* skip the mark */
+          int type;
           while (state->console_mark != NULL && (state->console_mark->flags & STRFLG_RESULT) == 0
                  && (type = check_versionstring(state->console_mark->text)) == PROBE_UNKNOWN)
             state->console_mark = state->console_mark->next;
@@ -7047,14 +7154,15 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
             else if (state->probe_type == PROBE_CTXLINK)
               state->swo.mode = SWOMODE_ASYNC;
           }
-          MOVESTATE(state, STATE_PROBE_CMDS);
+          MOVESTATE(state, STATE_PROBE_CMDS_1);
           state->console_mark = NULL;
         }
         log_console_strings(state);
         gdbmi_sethandled(false);
       }
       break;
-    case STATE_PROBE_CMDS:
+    case STATE_PROBE_CMDS_1:
+    case STATE_PROBE_CMDS_2:
       if (!state->atprompt)
         break;
       if (STATESWITCH(state)) {
@@ -7097,7 +7205,10 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
             }
             state->monitor_cmds = cmdlist;
           }
-          MOVESTATE(state, STATE_CONNECT_SRST);
+          if (ISSTATE(state, STATE_PROBE_CMDS_1))
+            MOVESTATE(state, STATE_CONNECT_SRST);
+          else
+            MOVESTATE(state, STATE_GET_SOURCES);
           state->console_mark = NULL;
         }
         log_console_strings(state);
@@ -7112,7 +7223,7 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
           break;
         if (STATESWITCH(state)) {
           char cmd[50];
-          if (state->monitor_cmds != NULL && strstr(state->monitor_cmds, "connect_srst") != NULL)
+          if (exist_monitor_cmd("connect_srst", state->monitor_cmds))
             strcpy(cmd, "monitor connect_srst enable");
           else
             strcpy(cmd, "monitor connect_rst enable");
@@ -7248,7 +7359,7 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
       } else if (gdbmi_isresult() != NULL) {
         if (strncmp(gdbmi_isresult(), "done", 4) == 0) {
           state->is_attached = true;
-          MOVESTATE(state, STATE_GET_SOURCES);
+          MOVESTATE(state, STATE_PROBE_CMDS_2);
         } else {
           MOVESTATE(state, STATE_STOPPED);
         }
@@ -7279,7 +7390,7 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
           sources_reload(state->ELFfile, state->debugmode);
           state->sourcefiles = sources_getnames(&state->sourcefiles_count); /* create array with names for the dropdown */
           state->warn_source_tstamps = !elf_up_to_date(state->ELFfile);     /* check timestamps of sources against elf file */
-          MOVESTATE(state, STATE_MEMACCESS_1);
+          MOVESTATE(state, STATE_MEMACCESS);
         } else {
           if (strncmp(gdbmi_isresult(), "error", 5) == 0) {
             strlcpy(state->cmdline, gdbmi_isresult(), CMD_BUFSIZE);
@@ -7292,7 +7403,7 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
         gdbmi_sethandled(false);
       }
       break;
-    case STATE_MEMACCESS_1:
+    case STATE_MEMACCESS:
       if (!state->atprompt)
         break;
       if (STATESWITCH(state)) {
@@ -7303,13 +7414,13 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
         /* GDB tends to "forget" this setting, so before running a script we
            drop back to this state, but then proceed with the appropriate
            script for the state */
-        MOVESTATE(state, (state->nextstate > 0) ? state->nextstate : STATE_MEMACCESS_2);
+        MOVESTATE(state, (state->nextstate > 0) ? state->nextstate : STATE_MEMMAP);
         state->nextstate = -1;
         log_console_strings(state);
         gdbmi_sethandled(false);
       }
       break;
-    case STATE_MEMACCESS_2:
+    case STATE_MEMMAP:
       if (!state->atprompt)
         break;
       if (STATESWITCH(state)) {
@@ -7321,7 +7432,7 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
           console_replaceflags = STRFLG_LOG;  /* move LOG to SCRIPT, to hide script output by default */
           console_xlateflags = STRFLG_SCRIPT;
         } else {
-          MOVESTATE(state, STATE_PARTID);
+          MOVESTATE(state, STATE_PARTID_1);
         }
       } else if (gdbmi_isresult() != NULL) {
         /* run next line from the script (on the end of the script, move to
@@ -7331,13 +7442,48 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
           state->atprompt = false;
         } else {
           console_replaceflags = console_xlateflags = 0;
-          MOVESTATE(state, STATE_PARTID);
+          MOVESTATE(state, STATE_PARTID_1);
         }
         log_console_strings(state);
         gdbmi_sethandled(false);
       }
       break;
-    case STATE_PARTID:
+
+    case STATE_PARTID_1:
+      if (!exist_monitor_cmd("partid", state->monitor_cmds)) {
+        MOVESTATE(state, STATE_PARTID_2);  /* no command for part id, use a script */
+      } else {
+        if (!state->atprompt)
+          break;
+        if (STATESWITCH(state)) {
+          state->console_mark = stringlist_getlast(&consolestring_root, STRFLG_RESULT, 0);
+          assert(state->console_mark != NULL);
+          task_stdin(&state->gdb_task, "monitor partid\n");
+          state->atprompt = false;
+          MARKSTATE(state);
+        } else if (gdbmi_isresult() != NULL) {
+          if (strncmp(gdbmi_isresult(), "done", 4) == 0) {
+            assert(state->console_mark != NULL && state->console_mark->text != NULL);
+            assert(state->console_mark->flags & STRFLG_RESULT);
+            state->console_mark = state->console_mark->next;  /* skip the mark */
+            while (state->console_mark != NULL && (state->console_mark->flags & STRFLG_RESULT) == 0) {
+              if (strncmp(state->console_mark->text, "Part ID", 7) == 0) {
+                const char *ptr = state->console_mark->text + 7;
+                if (*ptr == ':')
+                  ptr++;
+                state->mcu_partid = strtoul(ptr, NULL, 0);
+              }
+              state->console_mark = state->console_mark->next;
+            }
+            MOVESTATE(state, state->force_download ? STATE_DOWNLOAD : STATE_VERIFY);
+            state->console_mark = NULL;
+          }
+          log_console_strings(state);
+          gdbmi_sethandled(false);
+        }
+      }
+
+    case STATE_PARTID_2:
       if (!state->atprompt)
         break;
       if (STATESWITCH(state)) {
@@ -7546,10 +7692,11 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
       if (STATESWITCH(state)) {
         state->monitor_cmd_active = true;
         if (state->tpwr) {
+          /* when probe powers the target, do reset by power cycle */
           task_stdin(&state->gdb_task, "monitor tpwr disable\n");  /* will be enabled before re-attach */
         } else {
           char cmd[50];
-          if (state->monitor_cmds != NULL && strstr(state->monitor_cmds, "hard_srst") != NULL)
+          if (exist_monitor_cmd("hard_srst", state->monitor_cmds))
             strcpy(cmd, "monitor hard_srst\n");
           else
             strcpy(cmd, "monitor reset\n");  /* "monitor hard_srst" is renamed to "monitor reset" in version 1.9 */
@@ -7853,13 +8000,8 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
       } else if (gdbmi_isresult() != NULL) {
         /* check the reply of "monitor traceswo" to get the endpoint */
         STRINGLIST *item = stringlist_getlast(&consolestring_root, STRFLG_STATUS, 0);
-        char *ptr;
         assert(item != NULL);
-        if ((ptr = strchr(item->text, ':'))!= NULL && strtol(ptr + 1, &ptr, 16) == 5 && *ptr == ':') {
-          long ep = strtol(ptr + 1, NULL, 16);
-          if (ep > 0x80)
-            state->trace_endpoint = (unsigned char)ep;
-        }
+        bmp_parsetracereply(item->text, &state->trace_endpoint);
         /* initial setup (only needs to be done once) */
         if (state->trace_status != TRACESTAT_OK) {
           /* trace_init() does nothing if initialization had already succeeded */
@@ -7880,7 +8022,7 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
            so we jump back to the state, after making sure that the state
            that follows this is the one to run the SWO script */
         state->nextstate = STATE_SWODEVICE;
-        MOVESTATE(state, STATE_MEMACCESS_1);
+        MOVESTATE(state, STATE_MEMACCESS);
         log_console_strings(state);
         gdbmi_sethandled(false);
       }
@@ -8414,6 +8556,7 @@ int main(int argc, char *argv[])
     if (idx++ > 50)
       break;  /* limit the number of memorized commands */
   }
+  console_history_match(NULL, NULL, NULL, 0); /* clear history cache */
   /* save selected debug probe */
   if (is_ip_address(appstate.IPaddr))
     ini_puts("Settings", "ip-address", appstate.IPaddr, txtConfigFile);

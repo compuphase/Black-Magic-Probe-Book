@@ -3108,7 +3108,7 @@ NK_API void nk_tree_pop(struct nk_context*);
 ///
 /// Returns `true(1)` if visible and fillable with widgets or `false(0)` otherwise
 */
-NK_API nk_bool nk_tree_state_push(struct nk_context*, enum nk_tree_type, const char *title, enum nk_collapse_states *state);
+NK_API nk_bool nk_tree_state_push(struct nk_context*, enum nk_tree_type, const char *title, enum nk_collapse_states *state, nk_bool *toggled);
 /*/// #### nk_tree_state_image_push
 /// Start a collapsable UI section with image and label header and external state management
 /// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~c
@@ -3125,7 +3125,7 @@ NK_API nk_bool nk_tree_state_push(struct nk_context*, enum nk_tree_type, const c
 ///
 /// Returns `true(1)` if visible and fillable with widgets or `false(0)` otherwise
 */
-NK_API nk_bool nk_tree_state_image_push(struct nk_context*, enum nk_tree_type, struct nk_image, const char *title, enum nk_collapse_states *state);
+NK_API nk_bool nk_tree_state_image_push(struct nk_context*, enum nk_tree_type, struct nk_image, const char *title, enum nk_collapse_states *state, nk_bool *toggled);
 /*/// #### nk_tree_state_pop
 /// Ends a collapsabale UI section
 /// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~c

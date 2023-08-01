@@ -56,9 +56,8 @@ const char **get_probelist(int *probe, int *netprobe)
     if (usbprobes == 0) {
       probelist[0] = strdup("-");
     } else {
-      char portname[64];
-      int idx;
-      for (idx = 0; idx < usbprobes; idx++) {
+      for (int idx = 0; idx < usbprobes; idx++) {
+        char portname[64];
         find_bmp(idx, BMP_IF_GDB, portname, sizearray(portname));
         probelist[idx] = strdup(portname);
       }
@@ -78,8 +77,7 @@ const char **get_probelist(int *probe, int *netprobe)
 void clear_probelist(const char **probelist, int netprobe)
 {
   if (probelist != NULL) {
-    int idx;
-    for (idx = 0; idx < netprobe + 1; idx++)
+    for (int idx = 0; idx < netprobe + 1; idx++)
       free((void*)probelist[idx]);
     free((void*)probelist);
   }

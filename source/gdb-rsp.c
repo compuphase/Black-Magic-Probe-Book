@@ -102,6 +102,72 @@ bool gdbrsp_hex2array(const char *hex, unsigned char *byte, size_t size)
   return *hex == '\0';
 }
 
+#if !defined NDEBUG
+  static FILE *log_file = NULL;
+  static char *log_buf = NULL;
+  static size_t log_bufsz = 0;
+  static void gdbrsp_log(const char *text, size_t size, bool transmit)
+  {
+    assert(text != NULL);
+    assert(size > 0);
+    if (log_file == NULL)
+      log_file = fopen("gdbrsp.log", "wt");
+    if (log_file != NULL) {
+      /* get size after escaping */
+      size_t sz = 0;
+      for (size_t i = 0; i < size; i++)
+        sz += (text[i] >= ' ' && text[i] < 127) ? 1 : 4;
+      sz += 5;  /* for leading '>> ' and terminating '\n\0' */
+      /* grow the buffer, if necessary */
+      if (sz > log_bufsz) {
+        char *buf = malloc(sz);
+        if (buf != NULL) {
+          if (log_buf != NULL)
+            free(log_buf);
+          log_buf = buf;
+          log_bufsz = sz;
+        }
+      }
+      /* fill the buffer */
+      if (sz <= log_bufsz) {
+        memcpy(log_buf, transmit ? ">> " : "<< ", 3);
+        size_t j = 3;
+        for (size_t i = 0; i < size; i++) {
+          if (text[i] >= ' ' && text[i] < 127) {
+            log_buf[j] = text[i];
+            j += 1;
+          } else {
+            log_buf[j] = '\\';
+            log_buf[j+1] = 'x';
+            log_buf[j+2] = int2hex((text[i] >> 4) & 0x0f);
+            log_buf[j+3] = int2hex(text[i] & 0x0f);
+            j += 4;
+          }
+        }
+        log_buf[j] = '\n';
+        log_buf[j+1] = '\0';
+        /* dump it to file */
+        fputs(log_buf, log_file);
+      }
+    }
+  }
+  static void gdbrsp_closelog(void)
+  {
+    if (log_file != NULL) {
+      fclose(log_file);
+      log_file = NULL;
+    }
+    if (log_buf != NULL) {
+      free(log_buf);
+      log_buf = NULL;
+    }
+    log_bufsz = 0;
+  }
+#else
+# define gdbrsp_log(text, size, transmit)
+# define gdbrsp_closelog()
+#endif
+
 /** gdbrsp_packetsize() sets the maximum size of incoming packets. It uses
  *  this to allocate a buffer for incoming data. If the size is set to 0, the
  *  current buffer is freed. Otherwise, the cache for incoming packets is only
@@ -116,6 +182,7 @@ void gdbrsp_packetsize(size_t size)
     }
     cache_size = size;
     cache_idx = 0;
+    gdbrsp_closelog();
   } else if (size > cache_size) {
     unsigned char *buf = malloc(size * sizeof(char));
     if (buf != NULL) {
@@ -131,9 +198,9 @@ void gdbrsp_packetsize(size_t size)
 
 /** gdbrsp_recv() returns a received packet (from the gdbserver).
  *
- *  \param buffer   Will hold the received data, but the payload only (so the
- *                  '$' at the start and the checksum at the end are stripped
- *                  off).
+ *  \param buffer   [OUT] Will hold the received data, but the payload only (so
+ *                  the '$' at the start and the checksum at the end are
+ *                  stripped off).
  *  \param size     The maximum number of bytes that the buffer can hold. Note
  *                  that the checksum bytes are stored in this buffer before
  *                  analysis, so the buffer must be 3 bytes larger than the
@@ -231,6 +298,7 @@ size_t gdbrsp_recv(char *buffer, size_t size, int timeout)
           if (tail < cache_idx)
             memmove(cache, cache + tail, cache_idx - tail);
           cache_idx -= tail;
+          gdbrsp_log(buffer, count, false);
           return count; /* return payload size (excluding checksum) */
         } else {
           /* send NAK */
@@ -248,8 +316,10 @@ size_t gdbrsp_recv(char *buffer, size_t size, int timeout)
         head = 0;
       }
     }
-    if (cycles > 0 && --cycles == 0)
+    if (cycles > 0 && --cycles == 0) {
+      gdbrsp_log("-", 1, false);
       return 0;       /* nothing received within timeout period */
+    }
 #   if defined _WIN32
       Sleep(POLL_INTERVAL);
 #   else
@@ -266,9 +336,9 @@ size_t gdbrsp_recv(char *buffer, size_t size, int timeout)
 
 /** gdbrsp_xmit() transmits a packet to the gdbserver.
  *
- *  \param buffer   The buffer. It must contain a complete command, but without
- *                  the '$' prefix and the '#nn' suffix (where 'nn' is the
- *                  checksum).
+ *  \param buffer   [IN] The buffer. It must contain a complete command, but
+ *                  without the '$' prefix and the '#nn' suffix (where 'nn' is
+ *                  the checksum).
  *  \param size     The number of characters/bytes in the buffer. If set to -1,
  *                  the buffer is assumed to contain a zero-terminated string.
  *
@@ -279,6 +349,8 @@ bool gdbrsp_xmit(const char *buffer, int size)
   assert(buffer != NULL);
   if (!bmp_isopen())
     return false;
+
+  gdbrsp_log(buffer, (size == -1) ? strlen(buffer) : size, true);
 
   size_t buflen = (size == -1) ? strlen(buffer) : size;
   size_t payload_offs = 0;

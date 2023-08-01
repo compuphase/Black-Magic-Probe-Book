@@ -123,6 +123,9 @@ static const MCUINFO mcutable_lpc[] = {
   { 0x00008452, NULL, 0x10000, 0x4000, "LPC845M301 - M0+ 64K Flash 16K SRAM" },     /* UM11029 Rev 1.7 2021 Ch 8.6.49 Table 173 */
   { 0x00008453, NULL, 0x10000, 0x4000, "LPC845M301 - M0+ 64K Flash 16K SRAM" },     /* UM11029 Rev 1.7 2021 Ch 8.6.49 Table 173 */
   { 0x00008454, NULL, 0x10000, 0x4000, "LPC845M301 - M0+ 64K Flash 16K SRAM" },     /* UM11029 Rev 1.7 2021 Ch 8.6.49 Table 173 */
+  { 0x00008651, NULL, 0x10000, 0x2000, "LPC865M201 - M0+ 64K Flash 8K SRAM" },      /* UM11607 Rev 3 2023 Ch 4.5.12 Table 20 */
+  { 0x00008652, NULL, 0x10000, 0x2000, "LPC865M201 - M0+ 64K Flash 8K SRAM" },      /* UM11607 Rev 3 2023 Ch 4.5.12 Table 20 */
+  { 0x00008654, NULL, 0x10000, 0x2000, "LPC865M201 - M0+ 64K Flash 8K SRAM" },      /* UM11607 Rev 3 2023 Ch 4.5.12 Table 20 */
   { 0x2500102B, NULL,  0x8000, 0x2000, "LPC1102 - M0 32K Flash 8K SRAM" },          /* UM10429 Rev 6 2013 Ch 17.5.11 Table 173 */
   { 0x2548102B, NULL,  0x8000, 0x2000, "LPC1104 - M0 32K Flash 8K SRAM" },          /* UM10429 Rev 6 2013 Ch 17.5.11 Table 173 */
   { 0x0A07102B, NULL,  0x1000,  0x400, "LPC1110 - M0 4K Flash 1K SRAM" },           /* UM10398 Rev 12.4 2016 Ch 26.5.11 Table 387 */
@@ -162,6 +165,15 @@ static const MCUINFO mcutable_lpc[] = {
   { 0x00040060, NULL,  0xc000, 0x2000, "LPC1114/323 - M0 48K Flash 8K SRAM" },      /* UM10398 Rev 12.4 2016 Ch 26.5.11 Table 387 */
   { 0x00040070, NULL,  0xe000, 0x2000, "LPC1114/333 - M0 56K Flash 8K SRAM" },      /* UM10398 Rev 12.4 2016 Ch 26.5.11 Table 387 */
   { 0x00050080, NULL, 0x10000, 0x2000, "LPC1115/303 - M0 64K Flash 8K SRAM" },      /* UM10398 Rev 12.4 2016 Ch 26.5.11 Table 387 */
+//{          0, NULL,  0x8000, 0x2000, "LPC1124 - M0 32K Flash 8K SRAM" },          /* UM10839 Rev 1.0 2015, no part id is given */
+//{          0, NULL, 0x10000, 0x2000, "LPC1125 - M0 64K Flash 8K SRAM" },          /* UM10839 Rev 1.0 2015, no part id is given */
+  { 0x4D4C802B, NULL, 0x4000, 0x1000, "LPC11A02UK - M0 16K Flash 4K SRAM" },        /* UM10527 Rev 3 2012, Ch 20.7.11 Table 228 */
+  { 0x4D80002B, NULL, 0x8000, 0x2000, "LPC11A04UK - M0 32K Flash 8K SRAM" },        /* UM10527 Rev 3 2012, Ch 20.7.11 Table 228 */
+  { 0x455EC02B, NULL, 0x2000,  0x800, "LPC11A11/001 - M0 8K Flash 2K SRAM" },       /* UM10527 Rev 3 2012, Ch 20.7.11 Table 228 */
+  { 0x4574802B, NULL, 0x4000, 0x1000, "LPC11A12/101 - M0 16K Flash 4K SRAM" },      /* UM10527 Rev 3 2012, Ch 20.7.11 Table 228 */
+  { 0x458A402B, NULL, 0x6000, 0x1800, "LPC11A13/201 - M0 24K Flash 6K SRAM" },      /* UM10527 Rev 3 2012, Ch 20.7.11 Table 228 */
+  { 0x35A0002B, NULL, 0x8000, 0x2000, "LPC11A14/301 - M0 32K Flash 8K SRAM" },      /* UM10527 Rev 3 2012, Ch 20.7.11 Table 228 */
+  { 0x45A0002B, NULL, 0x8000, 0x2000, "LPC11A14/301 - M0 32K Flash 8K SRAM" },      /* UM10527 Rev 3 2012, Ch 20.7.11 Table 228 */
   { 0x1421102B, NULL,  0x4000, 0x2000, "LPC11C12/301 - M0 16K Flash 8K SRAM" },     /* UM10398 Rev 12.4 2016 Ch 26.5.11 Table 387 */
   { 0x1440102B, NULL,  0x8000, 0x2000, "LPC11C14/301 - M0 32K Flash 8K SRAM" },     /* UM10398 Rev 12.4 2016 Ch 26.5.11 Table 387 */
   { 0x1431102B, NULL,  0x4000, 0x2000, "LPC11C22/301 - M0 16K Flash 8K SRAM" },     /* UM10398 Rev 12.4 2016 Ch 26.5.11 Table 387 */
@@ -200,11 +212,11 @@ static const MCUINFO mcutable_lpc[] = {
   { 0x0000BC80, NULL, 0x20000, 0x4000, "LPC11U67 - M0+ 128K Flash 16K SRAM" },      /* UM10732 Rev 1.8 2016 Ch 27.5.11 Table 377 */
   { 0x00007C08, NULL, 0x40000, 0x8000, "LPC11U68 - M0+ 256K Flash 32K SRAM" },      /* UM10732 Rev 1.8 2016 Ch 27.5.11 Table 377 */
   { 0x00007C00, NULL, 0x40000, 0x8000, "LPC11U68 - M0+ 256K Flash 32K SRAM" },      /* UM10732 Rev 1.8 2016 Ch 27.5.11 Table 377 */
-  { 0x3640C02B, NULL,  0x8000, 0x1000, "LPC1224/101 - M0 32K Flash 4K SRAM" },     /* UM10441 Rev 2.2 2017 Ch 20.7.11 Table 303 */
-  { 0x3642C02B, NULL,  0xc000, 0x1000, "LPC1224/121 - M0 48K Flash 4K SRAM" },     /* UM10441 Rev 2.2 2017 Ch 20.7.11 Table 303 */
-  { 0x3650002B, NULL, 0x10000, 0x2000, "LPC1225/301 - M0 64K Flash 8K SRAM" },     /* UM10441 Rev 2.2 2017 Ch 20.7.11 Table 303 */
-  { 0x3652002B, NULL, 0x14000, 0x2000, "LPC1225/321 - M0 80K Flash 8K SRAM" },     /* UM10441 Rev 2.2 2017 Ch 20.7.11 Table 303 */
-  { 0x3660002B, NULL, 0x18000, 0x2000, "LPC1226/301 - M0 96K Flash 8K SRAM" },     /* UM10441 Rev 2.2 2017 Ch 20.7.11 Table 303 */
+  { 0x3640C02B, NULL,  0x8000, 0x1000, "LPC1224/101 - M0 32K Flash 4K SRAM" },      /* UM10441 Rev 2.2 2017 Ch 20.7.11 Table 303 */
+  { 0x3642C02B, NULL,  0xc000, 0x1000, "LPC1224/121 - M0 48K Flash 4K SRAM" },      /* UM10441 Rev 2.2 2017 Ch 20.7.11 Table 303 */
+  { 0x3650002B, NULL, 0x10000, 0x2000, "LPC1225/301 - M0 64K Flash 8K SRAM" },      /* UM10441 Rev 2.2 2017 Ch 20.7.11 Table 303 */
+  { 0x3652002B, NULL, 0x14000, 0x2000, "LPC1225/321 - M0 80K Flash 8K SRAM" },      /* UM10441 Rev 2.2 2017 Ch 20.7.11 Table 303 */
+  { 0x3660002B, NULL, 0x18000, 0x2000, "LPC1226/301 - M0 96K Flash 8K SRAM" },      /* UM10441 Rev 2.2 2017 Ch 20.7.11 Table 303 */
   { 0x3670002B, NULL, 0x20000, 0x2000, "LPC1227/301 & LPC12D27/301 - M0 128K Flash 8K SRAM" },/* UM10441 Rev 2.2 2017 Ch 20.7.11 Table 303 */
   { 0x2C42502B, NULL,  0x2000, 0x1000, "LPC1311 - M3 8K Flash 4K SRAM" },           /* UM10375 Rev 5 2012 Ch 21.13.11 Table 329 */
   { 0x1816902B, NULL,  0x2000, 0x1000, "LPC1311/01 - M3 8K Flash 4K SRAM" },        /* UM10375 Rev 5 2012 Ch 21.13.11 Table 329 */
@@ -248,19 +260,31 @@ static const MCUINFO mcutable_lpc[] = {
   { 0x281D1F43, NULL, 0x40000,0x10000, "LPC1786 - M3 256K Flash 64K SRAM" },        /* UM10470 Rev 4.0 2016 Ch 37.7.11 Table 747 */
   { 0x281D3747, NULL, 0x80000,0x10000, "LPC1787 - M3 512K Flash 64K SRAM" },        /* UM10470 Rev 4.0 2016 Ch 37.7.11 Table 747 */
   { 0x281D3F47, NULL, 0x80000,0x10000, "LPC1788 - M3 512K Flash 64K SRAM" },        /* UM10470 Rev 4.0 2016 Ch 37.7.11 Table 747 */
-  { 0x5284E02B, NULL,       0,0x22000, "LPC18[S]x0 - M3 no Flash 104K~136K SRAM" }, /* UM10430 Rev 3.1 2019 Ch 10.4.10 Yable 97, note: single "CHIP ID" for a group of MCUs with different memory sizes */
-  { 0x6284E02B, NULL,       0,0x22000, "LPC18[S]x0 - M3 no Flash 104K~136K SRAM" }, /* UM10430 Rev 3.1 2019 Ch 10.4.10 Yable 97, note: single "CHIP ID" for a group of MCUs with different memory sizes */
-  { 0x4284E02B, NULL,0x100000,0x12000, "LPC18[S]xx - M3 512K~1M Flash 72K SRAM" },  /* UM10430 Rev 3.1 2019 Ch 10.4.10 Yable 97, note: single "CHIP ID" for a group of MCUs with different memory sizes */
-  { 0x7284E02B, NULL,0x100000,0x12000, "LPC18[S]xx - M3 512K~1M Flash 72K SRAM" },  /* UM10430 Rev 3.1 2019 Ch 10.4.10 Yable 97, note: single "CHIP ID" for a group of MCUs with different memory sizes */
+  { 0x5284E02B, NULL,       0,0x22000, "LPC18[S]x0 - M3 no Flash 104K~136K SRAM" }, /* UM10430 Rev 3.1 2019 Ch 10.4.10 Table 97, note: single "CHIP ID" for a group of MCUs with different memory sizes */
+  { 0x6284E02B, NULL,       0,0x22000, "LPC18[S]x0 - M3 no Flash 104K~136K SRAM" }, /* UM10430 Rev 3.1 2019 Ch 10.4.10 Table 97, note: single "CHIP ID" for a group of MCUs with different memory sizes */
+  { 0x4284E02B, NULL,0x100000,0x12000, "LPC18[S]xx - M3 512K~1M Flash 72K SRAM" },  /* UM10430 Rev 3.1 2019 Ch 10.4.10 Table 97, note: single "CHIP ID" for a group of MCUs with different memory sizes */
+  { 0x7284E02B, NULL,0x100000,0x12000, "LPC18[S]xx - M3 512K~1M Flash 72K SRAM" },  /* UM10430 Rev 3.1 2019 Ch 10.4.10 Table 97, note: single "CHIP ID" for a group of MCUs with different memory sizes */
 //{          0, NULL, 0x10000, 0x6000, "LPC4072 - M4 64K Flash 24K SRAM" },         /* UM10562 Rev 3 2014, no part id is given */
   { 0x47011132, NULL, 0x20000, 0xa000, "LPC4074 - M4 128K Flash 40K SRAM" },        /* UM10562 Rev 3 2014 Ch 38.7.11 Table 753 */
   { 0x47191F43, NULL, 0x40000,0x14000, "LPC4076 - M4 256K Flash 80K SRAM" },        /* UM10562 Rev 3 2014 Ch 38.7.11 Table 753 */
   { 0x47193F47, NULL, 0x80000,0x18000, "LPC4078 - M4 512K Flash 96K SRAM" },        /* UM10562 Rev 3 2014 Ch 38.7.11 Table 753 */
   { 0x481D3F47, NULL, 0x80000,0x18000, "LPC4088 - M4 512K Flash 96K SRAM" },        /* UM10562 Rev 3 2014 Ch 38.7.11 Table 753 */
-  { 0x5906002B, NULL,       0,0x32000, "LPC43[S]x0 - M4/M0 no Flash 136K~200K SRAM" },/* UM10503 Rev 2.3 2017, note: single "CHIP ID" for a group of MCUs with different memory sizes */
-  { 0x6906002B, NULL,       0,0x32000, "LPC43[S]x0 - M4/M0 no Flash 136K~200K SRAM" },/* UM10503 Rev 2.3 2017, note: single "CHIP ID" for a group of MCUs with different memory sizes */
-  { 0x4906002B, NULL,0x100000,0x12000, "LPC43[S]xx - M4/M0 512K~1M Flash 72K SRAM" }, /* UM10503 Rev 2.3 2017, note: single "CHIP ID" for a group of MCUs with different memory sizes */
-  { 0x7906002B, NULL,0x100000,0x12000, "LPC43[S]xx - M4/M0 512K~1M Flash 72K SRAM" }, /* UM10503 Rev 2.3 2017, note: single "CHIP ID" for a group of MCUs with different memory sizes */
+  { 0x5906002B, NULL,       0,0x32000, "LPC43[S]x0 - M4/M0 no Flash 136K~200K SRAM" },/* UM10503 Rev 2.3 2017, Ch 11.4.11 Table 106, note: single "CHIP ID" for a group of MCUs with different memory sizes */
+  { 0x6906002B, NULL,       0,0x32000, "LPC43[S]x0 - M4/M0 no Flash 136K~200K SRAM" },/* UM10503 Rev 2.3 2017, Ch 11.4.11 Table 106, note: single "CHIP ID" for a group of MCUs with different memory sizes */
+  { 0x4906002B, NULL,0x100000,0x12000, "LPC43[S]xx - M4/M0 512K~1M Flash 72K SRAM" }, /* UM10503 Rev 2.3 2017, Ch 11.4.11 Table 106, note: single "CHIP ID" for a group of MCUs with different memory sizes */
+  { 0x7906002B, NULL,0x100000,0x12000, "LPC43[S]xx - M4/M0 512K~1M Flash 72K SRAM" }, /* UM10503 Rev 2.3 2017, Ch 11.4.11 Table 106, note: single "CHIP ID" for a group of MCUs with different memory sizes */
+  { 0x06451A68, NULL, 0x40000,0x18000, "LPC51U68 - M0+ 256K Flash 96K SRAM" },      /* UM11071 Rev 1.2 2019, Ch 4.5.12 Table 21 */
+  { 0x06451B68, NULL, 0x40000,0x18000, "LPC51U68 - M0+ 256K Flash 96K SRAM" },      /* UM11071 Rev 1.2 2019, Ch 4.5.12 Table 21 */
+  { 0x01FD4005, NULL,       0,0x5a000, "LPC54S005 - M4 no Flash 96K SRAM" },        /* UM11060 Rev 1.5 2019, Ch 8.5.99 Table 216 */
+  { 0x01FD4016, NULL,       0,0x5a000, "LPC54S016 - M4 no Flash 96K SRAM" },        /* UM11060 Rev 1.5 2019, Ch 8.5.99 Table 216 */
+  { 0x01FD4018, NULL,       0,0x5a000, "LPC54S018 - M4 no Flash 96K SRAM" },        /* UM11060 Rev 1.5 2019, Ch 8.5.99 Table 216 */
+  { 0x88454101, NULL, 0x40000,0x1a000, "LPC54101J256 - M4/M0+ 256K Flash 104K SRAM" },/* UM10850 Rev 2.6 2019, Ch 4.5.12 Table 20 */
+  { 0x88854101, NULL, 0x80000,0x1a000, "LPC54101J512 - M4/M0+ 512K Flash 104K SRAM" },/* UM10850 Rev 2.6 2019, Ch 4.5.12 Table 20 */
+  { 0x88454102, NULL, 0x40000,0x1a000, "LPC54102J256 - M4/M0+ 256K Flash 104K SRAM" },/* UM10850 Rev 2.6 2019, Ch 4.5.12 Table 20 */
+  { 0x88854102, NULL, 0x80000,0x1a000, "LPC54102J512 - M4/M0+ 512K Flash 104K SRAM" },/* UM10850 Rev 2.6 2019, Ch 4.5.12 Table 20 */
+  { 0x06254113, NULL, 0x20000,0x30000, "LPC54113J128 - M4/M0+ 128K Flash 192K SRAM" },/* UM10914 Rev 2.0 2018, Ch 4.5.12 Table 21 */
+  { 0x36454113, NULL, 0x40000,0x30000, "LPC54113J256 - M4/M0+ 256K Flash 192K SRAM" },/* UM10914 Rev 2.0 2018, Ch 4.5.12 Table 21 */
+  { 0x36454114, NULL, 0x40000,0x30000, "LPC54114J256 - M4/M0+ 256K Flash 192K SRAM" },/* UM10914 Rev 2.0 2018, Ch 4.5.12 Table 21 */
   { 0x7F954605, NULL, 0x40000,0x20000, "LPC54605J256 - M4 256K Flash 128K SRAM" },  /* UM10912 Rev 2.4 2019 Ch 7.5.99 Table 232 */
   { 0xFFF54605, NULL, 0x80000,0x30000, "LPC54605J512 - M4 512K Flash 192K SRAM" },  /* UM10912 Rev 2.4 2019 Ch 7.5.99 Table 232 */
   { 0x7F954606, NULL, 0x40000,0x20000, "LPC54606J256 - M4 256K Flash 128K SRAM" },  /* UM10912 Rev 2.4 2019 Ch 7.5.99 Table 232 */

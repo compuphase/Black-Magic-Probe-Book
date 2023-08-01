@@ -53,7 +53,7 @@ void bmscript_clearcache(void);
 bool bmscript_line(const char *name, uint16_t *oper, OPERAND *lvalue, OPERAND *rvalue);
 bool bmscript_line_fmt(const char *name, char *line, const unsigned long *params, size_t paramcount);
 
-bool architecture_match(const char *architecture, const char *mcufamily);
+int architecture_match(const char *architecture, const char *mcufamily);
 
 #if defined __cplusplus
   }
