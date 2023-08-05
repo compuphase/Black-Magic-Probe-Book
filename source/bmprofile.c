@@ -1266,6 +1266,10 @@ static void handle_stateaction(APPSTATE *state)
          state->swomode = MODE_ASYNC;
         if (strncmp(state->mcu_architecture, "M0", 2) == 0)
           tracelog_statusmsg(TRACESTATMSG_BMP, "Cortex M0/M0+ architecture does not support profiling.", BMPSTAT_NOTICE);
+        /* get probe commands again, to also get the target-specific commands */
+        if (state->monitor_cmds != NULL)
+          free((void*)state->monitor_cmds);
+        state->monitor_cmds = bmp_get_monitor_cmds();
       }
       state->curstate = (state->attached) ? STATE_LOAD_DWARF : STATE_IDLE;
     } else {

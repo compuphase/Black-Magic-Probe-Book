@@ -961,6 +961,12 @@ static void handle_stateaction(APPSTATE *state)
         probe_set_options(state);
         result = bmp_attach(true, state->mcu_family, sizearray(state->mcu_family),
                             state->mcu_architecture, sizearray(state->mcu_architecture));
+        if (result) {
+          /* get probe commands again, to also get the target-specific commands */
+          if (state->monitor_cmds != NULL)
+            free((void*)state->monitor_cmds);
+          state->monitor_cmds = bmp_get_monitor_cmds();
+        }
       } else {
         state->trace_status = TRACESTAT_NO_CONNECT;
       }

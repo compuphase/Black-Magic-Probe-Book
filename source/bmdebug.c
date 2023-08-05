@@ -1444,7 +1444,7 @@ static bool disasm_callback(uint32_t address, const char *text, void *user)
       last_instr = item;
     item = item->next;
   }
-  if ((item == NULL || address < item->address) && address > last_instr->address)
+  if (last_instr != NULL && (item == NULL || address < item->address) && address > last_instr->address)
     item = last_instr;
   if (item == NULL)
     sourceline_append(root, text, address, 0);
@@ -3712,17 +3712,19 @@ static void source_widget(struct nk_context *ctx, const char *id, float rowheigh
       }
       if (saved_cursorline != source_cursorline) {
         /* calculate scrolling: make cursor line fit in the window */
-        int topline;
+        int extra_lines = min(source_vp_rows / 2, 8); /* show extra lines above/below scroll position */
         unsigned xscroll, yscroll;
         nk_group_get_scroll(ctx, id, &xscroll, &yscroll);
-        topline = (int)(yscroll / source_lineheight);
+        int topline = (int)(yscroll / source_lineheight);
         if (source_cursorline < topline + 1) {
-          topline = source_cursorline - 1;
+          topline = source_cursorline - 1 - extra_lines;
           if (topline < 0)
             topline = 0;
           nk_group_set_scroll(ctx, id, 0, (nk_uint)(topline * source_lineheight));
         } else if (source_cursorline >= topline + source_vp_rows - 1 && lines > 3) {
-          topline = source_cursorline - source_vp_rows + 1;
+          topline = source_cursorline - source_vp_rows + 1 + extra_lines;
+          if (topline + source_vp_rows >= lines)
+            topline = source_cursorline - source_vp_rows + 1;
           nk_group_set_scroll(ctx, id, 0, (nk_uint)(topline * source_lineheight));
         }
         saved_cursorline = source_cursorline;
@@ -4637,7 +4639,8 @@ static bool handle_find_cmd(const char *command)
  *  \param command    [in] command string.
  *  \param memdump    [out] the various settings, see below.
  *
- *  \note * expr      numeric address, or expression that resolves to an address
+ *  \note syntax expr /[count][fmt][size]
+ *        * expr      numeric address, or expression that resolves to an address
  *        * count     count of elements
  *        * fmt       'x', 'd', 'u', 'o', 't', 'f', 'c', 'a', 'i', 's'
  *        * size      1, 2, 4, 8
@@ -7482,6 +7485,7 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
           gdbmi_sethandled(false);
         }
       }
+      break;
 
     case STATE_PARTID_2:
       if (!state->atprompt)
@@ -8239,7 +8243,7 @@ int main(int argc, char *argv[])
   config_read_tabstate("breakpoints", &tab_states[TAB_BREAKPOINTS], &appstate.sizerbar_breakpoints, NK_MAXIMIZED, 5 * ROW_HEIGHT, txtConfigFile);
   config_read_tabstate("locals", &tab_states[TAB_LOCALS], &appstate.sizerbar_locals, NK_MAXIMIZED, 5 * ROW_HEIGHT, txtConfigFile);
   config_read_tabstate("watches", &tab_states[TAB_WATCHES], &appstate.sizerbar_watches, NK_MINIMIZED, 5 * ROW_HEIGHT, txtConfigFile);
-  config_read_tabstate("locals", &tab_states[TAB_REGISTERS], &appstate.sizerbar_registers, NK_MAXIMIZED, 5 * ROW_HEIGHT, txtConfigFile);
+  config_read_tabstate("registers", &tab_states[TAB_REGISTERS], &appstate.sizerbar_registers, NK_MINIMIZED, 5 * ROW_HEIGHT, txtConfigFile);
   config_read_tabstate("memory", &tab_states[TAB_MEMORY], &appstate.sizerbar_memory, NK_MINIMIZED, 5 * ROW_HEIGHT, txtConfigFile);
   config_read_tabstate("semihosting", &tab_states[TAB_SEMIHOSTING], &appstate.sizerbar_semihosting, NK_MINIMIZED, 5 * ROW_HEIGHT, txtConfigFile);
   config_read_tabstate("serialmon", &tab_states[TAB_SERMON], &appstate.sizerbar_serialmon, NK_MINIMIZED, 5 * ROW_HEIGHT, txtConfigFile);
@@ -8575,6 +8579,8 @@ int main(int argc, char *argv[])
   svd_clear();
   locals_clear();
   memdump_cleanup(&appstate.memdump);
+  if (appstate.memdump.expr != NULL)
+    free(appstate.memdump.expr);
   console_clear();
   sources_clear(true, appstate.sourcefiles);
   bmscript_clear();

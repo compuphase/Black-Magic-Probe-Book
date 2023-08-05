@@ -1721,6 +1721,7 @@ static bool handle_stateaction(APPSTATE *state, enum nk_collapse_states tab_stat
       probe_set_options(state);
     gdbrsp_clear();
     state->skip_download = false;
+    state->partid = 0;
     break;
 
   case STATE_SAVE:
@@ -1746,13 +1747,16 @@ static bool handle_stateaction(APPSTATE *state, enum nk_collapse_states tab_stat
     result = bmp_connect(state->probe, (state->probe == state->netprobe) ? state->IPaddr : NULL);
     if (result) {
       if (state->monitor_cmds == NULL)
-        state->monitor_cmds = bmp_get_monitor_cmds();
+        state->monitor_cmds = bmp_get_monitor_cmds(); /* get probe commands before attaching, to set the options for "attach" */
       probe_set_options(state);
       state->is_attached = bmp_attach(false, state->mcufamily, sizearray(state->mcufamily), NULL, 0);
       if (state->is_attached) {
         char msg[128];
         sprintf(msg, "Target found: %s\n", state->mcufamily);
         log_addstring(msg);
+        if (state->monitor_cmds != NULL)  /* get probe commands again, to also get the target-specific commands */
+          free((void*)state->monitor_cmds);
+        state->monitor_cmds = bmp_get_monitor_cmds();
       }
       if (bmp_flashtotal(NULL, NULL) == 0)
         result = 0; /* no use downloading firmware to a chip that has no Flash */
@@ -1857,6 +1861,8 @@ static bool handle_stateaction(APPSTATE *state, enum nk_collapse_states tab_stat
     if (!state->skip_download) {
       bool ok = true;
       if (state->isrunning_download == THRD_IDLE) {
+        if (state->partid == 0)
+          target_partid(state);
         const char *tgtdriver = target_is_lpc(state->mcufamily);
         if (tgtdriver != NULL)
           bmp_runscript("memremap", tgtdriver, NULL, NULL, 0);

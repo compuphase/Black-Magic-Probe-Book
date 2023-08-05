@@ -607,8 +607,8 @@ uint32_t bmp_get_partid(void)
         else
           strlcpy(line, buffer, sizearray(line));
         if (strchr(line, '\n') != NULL) {
-          if (strncmp(line, "Part ID", 7) == 0) {
-            const char *ptr = line + 7;
+          if (strncmp(line + 1, "Part ID", 7) == 0) {
+            const char *ptr = line + 1 + 7;
             if (*ptr == ':')
               ptr++;
             partid = strtoul(ptr, NULL, 0);
