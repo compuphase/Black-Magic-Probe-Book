@@ -1387,11 +1387,22 @@ static void sourcefile_load(FILE *fp, SOURCELINE *root)
   assert(root->next == NULL); /* line list should be empty */
 
   int linenumber = 1;
-  char line[512]; /* source code really should not have lines as long as this */
-  while (fgets(line, sizearray(line), fp) != NULL) {
-    char *ptr = strchr(line, '\n');
-    if (ptr != NULL)
-      *ptr = '\0';
+  char input[512]; /* source code really should not have lines as long as this */
+  while (fgets(input, sizearray(input), fp) != NULL) {
+    /* reformat input text (at the moment, only TAB expansion) */
+    #define TABSIZE 4 /* should be parametrizable */
+    char line[512];
+    int idx = 0;
+    for (const char *ptr = input; *ptr != '\0' && *ptr != '\n' && idx < sizearray(line) - 1; ptr++) {
+      if (*ptr == '\t') {
+        line[idx++] = ' ';
+        while (idx < sizearray(line) - 1 && idx % TABSIZE != 0)
+          line[idx++] = ' ';
+      } else {
+        line[idx++] = *ptr;
+      }
+    }
+    line[idx] = '\0';
     sourceline_append(root, line, 0, linenumber++);
   }
 }
@@ -3539,6 +3550,7 @@ static float source_lineheight = 0;
 static float source_charwidth = 0;
 static int source_vp_rows = 0;
 static bool source_force_refresh = false;
+static bool source_autoscroll = true;    /* scrolling due to stepping through code (as opposed to explicit scrolling) */
 
 /* returns the line number as appears in the source code widget, that maps to
    the line in the source code; these two are the same in source view, but
@@ -3712,19 +3724,22 @@ static void source_widget(struct nk_context *ctx, const char *id, float rowheigh
       }
       if (saved_cursorline != source_cursorline) {
         /* calculate scrolling: make cursor line fit in the window */
-        int extra_lines = min(source_vp_rows / 2, 8); /* show extra lines above/below scroll position */
+        int extra_lines = source_autoscroll ? min(source_vp_rows / 2, 8) : 0; /* show extra lines above/below scroll position */
         unsigned xscroll, yscroll;
         nk_group_get_scroll(ctx, id, &xscroll, &yscroll);
         int topline = (int)(yscroll / source_lineheight);
-        if (source_cursorline < topline + 1) {
-          topline = source_cursorline - 1 - extra_lines;
-          if (topline < 0)
-            topline = 0;
-          nk_group_set_scroll(ctx, id, 0, (nk_uint)(topline * source_lineheight));
+        int newtop = topline;
+        if (source_cursorline <= topline + 1) {
+          newtop = source_cursorline - 1 - extra_lines;
+          if (newtop < 0)
+            newtop = 0;
         } else if (source_cursorline >= topline + source_vp_rows - 1 && lines > 3) {
-          topline = source_cursorline - source_vp_rows + 1 + extra_lines;
-          if (topline + source_vp_rows >= lines)
-            topline = source_cursorline - source_vp_rows + 1;
+          newtop = source_cursorline - source_vp_rows + 1 + extra_lines;
+          if (newtop + source_vp_rows >= lines)
+            newtop = source_cursorline - source_vp_rows + 1;
+        }
+        if (newtop != topline) {
+          topline = newtop;
           nk_group_set_scroll(ctx, id, 0, (nk_uint)(topline * source_lineheight));
         }
         saved_cursorline = source_cursorline;
@@ -3733,6 +3748,7 @@ static void source_widget(struct nk_context *ctx, const char *id, float rowheigh
   }
   nk_style_pop_color(ctx);
   guidriver_setfont(ctx, fonttype);
+  source_autoscroll = true; /* auto-scrolling is set to false before explicit scrolling, but automatically switched back on */
 }
 
 /** source_mouse2char()
@@ -5876,8 +5892,10 @@ static void sourcecode_view(struct nk_context *ctx, APPSTATE *state)
         toggle_breakpoint(state, source_cursorfile, line_phys2source(source_cursorfile, row));
       } else {
         /* set the cursor line */
-        if (row > 0 && row <= source_linecount(source_cursorfile))
+        if (row > 0 && row <= source_linecount(source_cursorfile)) {
           source_cursorline = row;
+          source_autoscroll = false;
+        }
       }
       state->prev_clicked_line = row;
     } else {
@@ -6881,21 +6899,27 @@ static void handle_kbdinput_main(struct nk_context *ctx, APPSTATE *state)
 {
   if (nk_input_is_key_pressed(&ctx->input, NK_KEY_UP) && source_cursorline > 1) {
     source_cursorline--;
+    source_autoscroll = false;
   } else if (nk_input_is_key_pressed(&ctx->input, NK_KEY_DOWN) && source_cursorline < source_linecount(source_cursorfile)) {
     source_cursorline++;
+    source_autoscroll = false;
   } else if (nk_input_is_key_pressed(&ctx->input, NK_KEY_SCROLL_UP)) {
     source_cursorline -= source_vp_rows;
     if (source_cursorline < 1)
       source_cursorline = 1;
+    source_autoscroll = false;
   } else if (nk_input_is_key_pressed(&ctx->input, NK_KEY_SCROLL_DOWN)) {
     int linecount = source_linecount(source_cursorfile);
     source_cursorline += source_vp_rows;
     if (source_cursorline > linecount)
       source_cursorline = linecount;
+    source_autoscroll = false;
   } else if (nk_input_is_key_pressed(&ctx->input, NK_KEY_SCROLL_TOP)) {
     source_cursorline = 1;
+    source_autoscroll = false;
   } else if (nk_input_is_key_pressed(&ctx->input, NK_KEY_SCROLL_BOTTOM)) {
     source_cursorline = source_linecount(source_cursorfile);
+    source_autoscroll = false;
   } else if (nk_input_is_key_pressed(&ctx->input, NK_KEY_FIND)) {
     strlcpy(state->console_edit, "find ", sizearray(state->console_edit));
     state->console_activate = 2;

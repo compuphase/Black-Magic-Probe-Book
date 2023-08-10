@@ -771,10 +771,14 @@ int bmscript_load(const char *mcu, const char *arch)
       if (script == NULL) {
         script = (SCRIPT*)malloc(sizeof(SCRIPT));
         if (script != NULL) {
+          memset(script, 0, sizeof(SCRIPT));
           script->name = strdup(script_defaults[idx].name);
           if (script->name == NULL) {
             free(script);
             script = NULL;
+          } else {
+            script->next = script_root.next;
+            script_root.next = script;
           }
         }
       }
@@ -791,8 +795,6 @@ int bmscript_load(const char *mcu, const char *arch)
         script->count = line_count;
         assert(mcu_level > 0 || arch_level > 0);  /* only one of these should be set */
         script->matchlevel = (mcu_level > 0) ? mcu_level : arch_level;
-        script->next = script_root.next;
-        script_root.next = script;
       }
     }
   }
@@ -809,10 +811,11 @@ int bmscript_load(const char *mcu, const char *arch)
       if (*skipleading(line, true) == '\0')
         continue;     /* ignore empty lines (after stripping comments) */
       /* check whether this matches a register definition line */
+      int mcu_level, arch_level;
       if (sscanf(line, "define %s [%[^]]]", scriptname, mcu_list) == 2 && strchr(line, '=') == NULL) {
         assert(!inscript);  /* if inscript is set, the previous script had no 'end' */
-        int mcu_level = mcu_match(mcu, mcu_list);
-        int arch_level = (arch_name[0] != '\0') ? mcu_match(arch_name, mcu_list) : 0;
+        mcu_level = mcu_match(mcu, mcu_list);
+        arch_level = (arch_name[0] != '\0') ? mcu_match(arch_name, mcu_list) : 0;
         if (mcu_level > 0 || arch_level == 1) {
           script = (SCRIPT*)find_script(scriptname);
           if (script != NULL && ((mcu_level > 0 && mcu_level <= script->matchlevel) || (arch_level > 0 && arch_level <= script->matchlevel))) {
@@ -841,6 +844,9 @@ int bmscript_load(const char *mcu, const char *arch)
             if (script->name == NULL) {
               free(script);
               script = NULL;
+            } else {
+              script->next = script_root.next;
+              script_root.next = script;
             }
           }
         }
@@ -855,8 +861,8 @@ int bmscript_load(const char *mcu, const char *arch)
               line_count = 0;
           }
           script->count = line_count;
-          script->next = script_root.next;
-          script_root.next = script;
+          assert(mcu_level > 0 || arch_level > 0);  /* only one of these should be set */
+          script->matchlevel = (mcu_level > 0) ? mcu_level : arch_level;
         }
         inscript = false;
       } else if (inscript) {
