@@ -106,7 +106,7 @@
 #endif
 
 
-static DWARF_LINELOOKUP dwarf_linetable = { NULL };
+static DWARF_LINETABLE dwarf_linetable = { NULL };
 static DWARF_SYMBOLLIST dwarf_symboltable = { NULL };
 static DWARF_PATHLIST dwarf_filetable = { NULL };
 

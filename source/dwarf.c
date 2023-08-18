@@ -120,6 +120,7 @@ typedef struct tagSTATE {
   int file;
   int line;
   int column;
+  int view;
   int is_stmt;          /* whether the address is the start of a statement */
   int basic_block;      /* whether the address is the start of a basic block */
   int end_seq;
@@ -128,6 +129,8 @@ typedef struct tagSTATE {
   int isa;              /* DWARF 3+, instruction set architecture */
   unsigned op_index;    /* DWARF 4+, index within a "Very-Long-Instruction-Word" (VLIW) */
   int discriminator;    /* DWARF 4+, compiler-assigned id for a "block" to which the instruction belongs */
+  /* ----- */
+  int dirty;            /* line number advanced, but "copy" opcode is lacking; store on "end-sequence" opcode */
 } STATE;
 
 typedef struct tagPUBNAME_HDR32 {
@@ -697,73 +700,77 @@ static int path_find(const DWARF_PATHLIST *root,const char *name)
   return (cur!=NULL) ? index : -1;
 }
 
-
-static DWARF_LINELOOKUP *line_findline(const DWARF_LINELOOKUP *root,int line,int fileindex)
+static DWARF_LINEENTRY *line_findaddress(const DWARF_LINETABLE *root,unsigned address)
 {
-  DWARF_LINELOOKUP *cur;
-
   assert(root!=NULL);
-  for (cur=root->next; cur!=NULL && (cur->line!=line || cur->fileindex!=fileindex); cur=cur->next)
-    {}
-  return cur;
-}
-
-static DWARF_LINELOOKUP *line_findaddress(const DWARF_LINELOOKUP *root,unsigned address,int fileindex)
-{
-  DWARF_LINELOOKUP *cur;
-
-  assert(root!=NULL);
-  for (cur=root->next; cur!=NULL && (cur->address!=address || cur->fileindex!=fileindex); cur=cur->next)
-    {}
-  return cur;
-}
-
-static DWARF_LINELOOKUP *line_insert(DWARF_LINELOOKUP *root,int line,unsigned address,int fileindex)
-{
-  DWARF_LINELOOKUP *cur;
-
-  assert(root!=NULL);
-  /* first try to find an item with that line number, if it exists, keep the
-     lowest address in the item;
-     then try to find an item with the same address, if it exists, keep the
-     highest line number */
-  if ((cur=line_findline(root,line,fileindex))!=NULL) {
-    if (address<cur->address)
-      cur->address=address;
-  } else if ((cur=line_findaddress(root,address,fileindex))!=NULL) {
-    if (line>cur->line)
-      cur->line=line;
-    assert(fileindex==cur->fileindex);
-  } else {
-    DWARF_LINELOOKUP *pred;
-    if ((cur=(DWARF_LINELOOKUP*)malloc(sizeof(DWARF_LINELOOKUP)))==NULL)
-      return NULL;      /* insufficient memory */
-    cur->line=line;
-    cur->address=address;
-    cur->fileindex=fileindex;
-    /* find insertion position (keep the list sorted on address) */
-    for (pred=root; pred->next!=NULL && pred->next->address<address; pred=pred->next)
-      {}
-    /* insert */
-    assert(pred!=NULL);
-    cur->next=pred->next;
-    pred->next=cur;
+  if (root->entries==0 || root->table==NULL)
+    return NULL;
+  /* standard binary search (finds exact match only) */
+  int low=0;
+  int high=root->entries-1;
+  while (low<=high) {
+    int mid=(low+high)/2;
+    if (root->table[mid].address<address)
+      low=mid+1;
+    else if (root->table[mid].address>address)
+      high=mid-1;
+    else
+      return &root->table[mid];
   }
-  return cur;
+  return NULL;
 }
 
-static void line_deletetable(DWARF_LINELOOKUP *root)
+static DWARF_LINEENTRY *line_insert(DWARF_LINETABLE *root,int line,unsigned address,int fileindex,int view)
 {
-  DWARF_LINELOOKUP *cur,*next;
-
   assert(root!=NULL);
-  cur=root->next;
-  while (cur!=NULL) {
-    next=cur->next;
-    free(cur);
-    cur=next;
-  } /* while */
-  memset(root,0,sizeof(DWARF_LINELOOKUP));
+  if (root->table==NULL)
+    root->size=0;
+  /* if the address is already in the list, update its line number if the
+     current view is higher than the stored one (when the line number changes
+     while the address stays the same, it indicates that no code is generated
+     for the lower line) */
+  DWARF_LINEENTRY *entry=line_findaddress(root,address);
+  if (entry!=NULL && entry->fileindex==fileindex) {
+    if (view>entry->view) {
+      entry->line=line;
+      entry->view=view;
+    }
+    return entry;
+  }
+  /* check whether we need to grow the memory block */
+  if (root->entries>=root->size) {
+    unsigned newsize=(root->size==0) ? 256 : 2*root->size;
+    entry=malloc(newsize*sizeof(DWARF_LINEENTRY));
+    if (entry!=NULL) {
+      if (root->table!=NULL) {
+        memcpy(entry,root->table,root->entries*sizeof(DWARF_LINEENTRY));
+        free(root->table);
+      }
+      root->table=entry;
+      root->size=newsize;
+    }
+  }
+  if (root->entries>=root->size)
+    return NULL;
+  /* add the entry, keeping the array sorted on address */
+  unsigned idx=root->entries;
+  for (idx=root->entries; idx>0 && root->table[idx-1].address>address; idx--)
+    root->table[idx]=root->table[idx-1];
+  entry = &root->table[idx];
+  root->entries+=1;
+  entry->address=address;
+  entry->line=line;
+  entry->fileindex=fileindex;
+  entry->view=view;
+  return entry;
+}
+
+static void line_deletetable(DWARF_LINETABLE *root)
+{
+  assert(root!=NULL);
+  if (root->table!=NULL)
+    free(root->table);
+  memset(root,0,sizeof(DWARF_LINETABLE));
 }
 
 static DWARF_SYMBOLLIST *symname_insert(DWARF_SYMBOLLIST *root,const char *name,
@@ -1202,12 +1209,13 @@ static int read_prologue(FILE *fp,DWARF_PROLOGUE32 *prologue,int *size)
 
 static void clear_state(STATE *state,int default_is_stmt)
 {
-  /* set default state (see DWARF documentation, DWARF 2.0 pp. 52 / DWARF 3.0 pp. 94) */
+  /* set default state (see DWARF documentation, DWARF 5 pp. 150) */
   state->address=0;
   state->op_index=0;
   state->file=1;
   state->line=1;
   state->column=0;
+  state->view=0;
   state->is_stmt=default_is_stmt;
   state->basic_block=0;
   state->end_seq=0;
@@ -1215,41 +1223,43 @@ static void clear_state(STATE *state,int default_is_stmt)
   state->epiloge_begin=0;
   state->isa=0;
   state->discriminator=0;
+  state->dirty=0;
 }
 
 /* dwarf_linetable() parses the .debug_line table and retrieves the
    line-number/code-address tupples. DWARF implements the table as a state
    machine with pseudo-instructions to set/clear state fields. There may be
    several of such state programs in the section.
-   The output of this function is a list with line information structures and
+   The output of this function is an array with line information structures and
    a list of filenames. The each element of the line number structure includes
    an index into the file list. The line number list is sorted on the code
    address */
 static bool dwarf_linetable(FILE *fp,const DWARFTABLE tables[],
-                            DWARF_LINELOOKUP *linetable,DWARF_PATHLIST *filetable,
+                            DWARF_LINETABLE *linetable,DWARF_PATHLIST *filetable,
                             PATHXREF *xreftable)
 {
   DWARF_PROLOGUE32 prologue;
   STATE state;
   int dirpos,opcode,lebsize,prologue_size;
-  int unit,idx;
-  long value;
+  unsigned unit,idx;
+  long value,oper_advance;
   unsigned tableoffset,tablesize;
   char path[_MAX_PATH];
   DWARF_PATHLIST include_list = { NULL };
   DWARF_PATHLIST file_list = { NULL };
-  DWARF_LINELOOKUP line_list = { NULL };
+  DWARF_LINETABLE line_list;
   DWARF_PATHLIST *fileitem;
-  DWARF_LINELOOKUP *lineitem;
 
   assert(fp!=NULL);
   assert(tables!=NULL);
   assert(linetable!=NULL);
-  assert(linetable->next==NULL);  /* linetable should be empty */
+  assert(linetable->table==NULL); /* linetable should be empty */
   assert(filetable!=NULL);
   assert(filetable->next==NULL);  /* filetable should be empty */
   assert(xreftable!=NULL);
   assert(xreftable->next==NULL);  /* path cross-reference should be empty */
+
+  memset(&line_list,0,sizeof(DWARF_LINETABLE));
 
   tableoffset=tables[TABLE_LINE].offset;
   tablesize=tables[TABLE_LINE].size;
@@ -1269,7 +1279,10 @@ static bool dwarf_linetable(FILE *fp,const DWARFTABLE tables[],
     if (std_argcnt==NULL)
       return false;
     fread(std_argcnt,1,prologue.opcode_base-1,fp);
-    assert(prologue.version<5); //??? for DWARF 5+, the format for the include-paths and filenames tables is different
+    assert(prologue.version<5);
+    //??? ^^^^^ for DWARF 5+, the format for the include-paths and filenames
+    //          tables is different; however, GCC 12 still creates .debug_line
+    //          version 3 even when requesting -gdwarf-5
     /* read the include-paths table */
     while ((byte=fgetc(fp))!=EOF && byte!='\0') {
       for (idx=0; byte!=EOF && byte!='\0'; idx++) {
@@ -1317,7 +1330,8 @@ static bool dwarf_linetable(FILE *fp,const DWARFTABLE tables[],
           switch (opcode) {
           case DW_LNE_end_sequence:
             state.end_seq=1;
-            line_insert(&line_list,state.line,state.address,state.file-1);
+            if (state.dirty)
+              line_insert(&line_list,state.line,state.address,state.file-1,state.view);
             clear_state(&state,prologue.default_is_stmt);  /* reset to default values */
             break;
           case DW_LNE_set_address:
@@ -1326,6 +1340,8 @@ static bool dwarf_linetable(FILE *fp,const DWARFTABLE tables[],
             value|=(long)fgetc(fp) << 16;
             value|=(long)fgetc(fp) << 24;
             state.address=value;
+            state.view=0;
+            state.op_index=0;
             break;
           case DW_LNE_define_file:
             for (idx=0; (byte=fgetc(fp))!=EOF && byte!='\0'; idx++) {
@@ -1352,18 +1368,36 @@ static bool dwarf_linetable(FILE *fp,const DWARFTABLE tables[],
           }
           break;
         case DW_LNS_copy:
-          line_insert(&line_list,state.line,state.address,state.file-1);
+          line_insert(&line_list,state.line,state.address,state.file-1,state.view);
+          state.discriminator=0;
           state.basic_block=0;
+          state.prologue_end=0;
+          state.epiloge_begin=0;
+          state.view+=1;
+          state.dirty=0;
           break;
         case DW_LNS_advance_pc:
-          value=read_leb128(fp,0,&lebsize);
+          oper_advance=read_leb128(fp,0,&lebsize);
           count-=lebsize;
-          state.address+=value*prologue.min_instruction_size;
+          if (prologue.max_oper_per_instruction==1) {
+            assert(state.op_index==0);  /* see DWARF 5, p. 161*/
+            state.address+=oper_advance*prologue.min_instruction_size;
+            if (oper_advance!=0)
+              state.view=0;
+          } else {
+            /* for VLIW architecture, DWARF 4+ */
+            oper_advance+=state.op_index;
+            state.address+=(oper_advance/prologue.max_oper_per_instruction)*prologue.min_instruction_size;
+            state.op_index=oper_advance%prologue.max_oper_per_instruction;
+            if (oper_advance/prologue.max_oper_per_instruction!=0)
+              state.view=0;
+          }
           break;
         case DW_LNS_advance_line:
           value=read_leb128(fp,1,&lebsize);
           count-=lebsize;
           state.line+=value;
+          state.dirty=1;
           break;
         case DW_LNS_set_file:
           value=read_leb128(fp,0,&lebsize);
@@ -1382,13 +1416,28 @@ static bool dwarf_linetable(FILE *fp,const DWARFTABLE tables[],
           state.basic_block=1;
           break;
         case DW_LNS_const_add_pc:
-          state.address+=((255-prologue.opcode_base)/prologue.line_range)*prologue.min_instruction_size;
+          opcode=255-prologue.opcode_base;
+          oper_advance=opcode/prologue.line_range;
+          if (prologue.max_oper_per_instruction==1) {
+            assert(state.op_index==0);  /* see DWARF 5, p. 161*/
+            state.address+=oper_advance*prologue.min_instruction_size;
+            if (oper_advance!=0)
+              state.view=0;
+          } else {
+            /* for VLIW architecture, DWARF 4+ */
+            oper_advance+=state.op_index;
+            state.address+=(oper_advance/prologue.max_oper_per_instruction)*prologue.min_instruction_size;
+            state.op_index=oper_advance%prologue.max_oper_per_instruction;
+            if (oper_advance/prologue.max_oper_per_instruction!=0)
+              state.view=0;
+          }
           break;
         case DW_LNS_fixed_advance_pc:
           value=fgetc(fp);
           value|=fgetc(fp) << 8;
           state.address+=value;
           count-=2;
+          /* do not reset state.view */
           break;
         case DW_LNS_set_prologue_end:
           state.prologue_end=1;
@@ -1411,14 +1460,28 @@ static bool dwarf_linetable(FILE *fp,const DWARFTABLE tables[],
       } else {
         /* special opcode */
         opcode-=prologue.opcode_base;
-        assert(prologue.max_oper_per_instruction==1); /* for VLIW architecture, the calculation below must be adjusted */
-        state.address+=(opcode/prologue.line_range)*prologue.min_instruction_size;
+        oper_advance=opcode/prologue.line_range;
+        if (prologue.max_oper_per_instruction==1) {
+          assert(state.op_index==0);  /* see DWARF 5, p. 161*/
+          state.address+=oper_advance*prologue.min_instruction_size;
+          if (oper_advance!=0)
+            state.view=0;
+        } else {
+          /* for VLIW architecture, DWARF 4+ */
+          oper_advance+=state.op_index;
+          state.address+=(oper_advance/prologue.max_oper_per_instruction)*prologue.min_instruction_size;
+          state.op_index=oper_advance%prologue.max_oper_per_instruction;
+          if (oper_advance/prologue.max_oper_per_instruction!=0)
+            state.view=0;
+        }
         state.line+=prologue.line_base+opcode%prologue.line_range;
-        line_insert(&line_list,state.line,state.address,state.file-1);
+        line_insert(&line_list,state.line,state.address,state.file-1,state.view);
         state.basic_block=0;
         state.prologue_end=0;
         state.epiloge_begin=0;
         state.discriminator=0;
+        state.view+=1;
+        state.dirty=0;
       }
     }
 
@@ -1428,11 +1491,12 @@ static bool dwarf_linetable(FILE *fp,const DWARFTABLE tables[],
     idx=0;
     for (fileitem=file_list.next; fileitem!=NULL; fileitem=fileitem->next) {
       /* check whether this file is referenced at all */
-      for (lineitem=line_list.next; lineitem!=NULL && lineitem->fileindex!=idx; lineitem=lineitem->next)
-        {}
-      if (lineitem!=NULL) {
-        /* so this file is referenced, now see whether it is already in the global
-           file table */
+      unsigned li=0;
+      while (li<line_list.entries && line_list.table[li].fileindex!=idx)
+        li++;
+      if (li<line_list.entries) {
+        /* so this file is referenced, now see whether it is already in the
+           global file table */
         const char *name=path_get(&file_list,idx);
         assert(name!=NULL);
         if (path_find(filetable,name)<0) {
@@ -1448,9 +1512,11 @@ static bool dwarf_linetable(FILE *fp,const DWARFTABLE tables[],
 
     /* append the local line table to the global table (and translate the index
        in the local file table to the index in the global file table) */
-    for (lineitem=line_list.next; lineitem!=NULL; lineitem=lineitem->next) {
-      int fileidx=pathxref_find(xreftable,unit,lineitem->fileindex);
-      line_insert(linetable,lineitem->line,lineitem->address,fileidx);
+    idx=0;
+    while (idx<line_list.entries) {
+      int fileidx=pathxref_find(xreftable,unit,line_list.table[idx].fileindex);
+      line_insert(linetable,line_list.table[idx].line,line_list.table[idx].address,fileidx,line_list.table[idx].view);
+      idx++;
     }
     path_deletetable(&file_list);
     line_deletetable(&line_list);
@@ -1644,7 +1710,7 @@ static bool dwarf_infotable(FILE *fp,const DWARFTABLE tables[],
   return true;
 }
 
-static void dwarf_postprocess(DWARF_SYMBOLLIST *symboltable,const DWARF_LINELOOKUP *linetable)
+static void dwarf_postprocess(DWARF_SYMBOLLIST *symboltable,const DWARF_LINETABLE *linetable)
 {
   DWARF_SYMBOLLIST *sym;
 
@@ -1653,15 +1719,14 @@ static void dwarf_postprocess(DWARF_SYMBOLLIST *symboltable,const DWARF_LINELOOK
     if (DWARF_IS_FUNCTION(sym)) {
       /* go through the line table to find the line range for the function */
       uint32_t addr=sym->code_addr+sym->code_range;
-      const DWARF_LINELOOKUP *line;
-      DWARF_SYMBOLLIST *lcl;
       assert(linetable!=NULL);
-      for (line=linetable->next; line!=NULL && sym->line_limit==0; line=line->next) {
-        if (line->address<addr && (line->next==NULL || line->next->address>=addr)
-            && line->line>=sym->line_limit)
-          sym->line_limit=line->line+1; /* +1 for consistency with DWARF address range */
+      for (unsigned idx=0; idx<linetable->entries && sym->line_limit==0; idx++) {
+        const DWARF_LINEENTRY *entry=&linetable->table[idx];
+        if (entry->address<addr && ((idx+1)>=linetable->entries || linetable->table[idx+1].address>=addr))
+          sym->line_limit=entry->line+1;  /* +1 for consistency with DWARF address range */
       }
       /* collect all local variables that are declared within this line range */
+      DWARF_SYMBOLLIST *lcl;
       for (lcl=symboltable->next; lcl!=NULL; lcl=lcl->next) {
         if (lcl->fileindex==sym->fileindex
             && lcl->line>=sym->line && lcl->line<sym->line_limit
@@ -1681,12 +1746,12 @@ static void dwarf_postprocess(DWARF_SYMBOLLIST *symboltable,const DWARF_LINELOOK
  *  a list with functions and a list with the file paths (referred to by the
  *  other two lists)
  */
-bool dwarf_read(FILE *fp,DWARF_LINELOOKUP *linetable,DWARF_SYMBOLLIST *symboltable,
+bool dwarf_read(FILE *fp,DWARF_LINETABLE *linetable,DWARF_SYMBOLLIST *symboltable,
                 DWARF_PATHLIST *filetable,int *address_size)
 {
   assert(fp!=NULL);
   assert(linetable!=NULL);        /* tables must be valid, but empty */
-  assert(linetable->next==NULL);
+  assert(linetable->table==NULL);
   assert(symboltable!=NULL);
   assert(symboltable->next==NULL);
   assert(filetable!=NULL);
@@ -1731,7 +1796,7 @@ bool dwarf_read(FILE *fp,DWARF_LINELOOKUP *linetable,DWARF_SYMBOLLIST *symboltab
   return result;
 }
 
-void dwarf_cleanup(DWARF_LINELOOKUP *linetable,DWARF_SYMBOLLIST *symboltable,DWARF_PATHLIST *filetable)
+void dwarf_cleanup(DWARF_LINETABLE *linetable,DWARF_SYMBOLLIST *symboltable,DWARF_PATHLIST *filetable)
 {
   line_deletetable(linetable);
   symname_deletetable(symboltable);
@@ -1926,14 +1991,26 @@ int dwarf_fileindex_from_path(const DWARF_PATHLIST *filetable,const char *path)
   return -1;
 }
 
-const DWARF_LINELOOKUP *dwarf_line_from_address(const DWARF_LINELOOKUP *linetable,unsigned address)
+const DWARF_LINEENTRY *dwarf_line_from_address(const DWARF_LINETABLE *linetable,unsigned address)
 {
-  const DWARF_LINELOOKUP *line;
-
   assert(linetable!=NULL);
-  for (line=linetable->next; line!=NULL; line=line->next)
-    if (line->address<=address && (line->next==NULL || line->next->address>address))
-      return line;
-  return NULL;
+  if (linetable->entries==0 || linetable->table==NULL)
+    return NULL;
+  /* binary search (Hermann Bottenbruch variant) */
+  int low=0;
+  int high=linetable->entries-1;
+  while (low<high) {
+    int mid=(low+high+1)/2; /* round up */
+    if (linetable->table[mid].address>address)
+      high=mid-1;
+    else
+      low=mid;
+  }
+  assert(low==high);
+  if (address<linetable->table[low].address)
+    return NULL;  /* address is below lowest entry */
+  while (low>0 && linetable->table[low-1].address>=address)
+    low--;
+  return &linetable->table[low];
 }
 

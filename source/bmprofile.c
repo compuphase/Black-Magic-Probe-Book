@@ -91,7 +91,7 @@
 #endif
 
 
-static DWARF_LINELOOKUP dwarf_linetable = { NULL };
+static DWARF_LINETABLE dwarf_linetable = { NULL };
 static DWARF_SYMBOLLIST dwarf_symboltable = { NULL};
 static DWARF_PATHLIST dwarf_filetable = { NULL};
 
@@ -515,7 +515,7 @@ static void profile_graph(struct nk_context *ctx, const char *id, APPSTATE *stat
             state->addr2line = (unsigned*)malloc(addr_range * sizeof(unsigned));
           if (state->addr2line != NULL) {
             for (uint32_t addr = state->source_addr_low; addr < state->source_addr_high; addr += ADDRESS_ALIGN) {
-              const DWARF_LINELOOKUP *lineinfo = dwarf_line_from_address(&dwarf_linetable, addr);
+              const DWARF_LINEENTRY *lineinfo = dwarf_line_from_address(&dwarf_linetable, addr);
               if (lineinfo != NULL) {
                 unsigned idx = Address2Index(addr, state->source_addr_low);
                 assert(idx < addr_range);
@@ -649,7 +649,7 @@ static bool profile_save(const char *filename, APPSTATE *state)
       if (addr >= functionlist[func_idx].addr_low && addr < functionlist[func_idx].addr_high) {
         name = functionlist[func_idx].name;
         /* get line number & file path */
-        const DWARF_LINELOOKUP *lineinfo = dwarf_line_from_address(&dwarf_linetable, addr);
+        const DWARF_LINEENTRY *lineinfo = dwarf_line_from_address(&dwarf_linetable, addr);
         if (lineinfo != NULL) {
           linenr = lineinfo->line;
           const char *p = dwarf_path_from_fileindex(&dwarf_filetable, lineinfo->fileindex);

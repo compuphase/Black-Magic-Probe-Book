@@ -17,6 +17,7 @@
  * limitations under the License.
  */
 #include <assert.h>
+#include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -39,7 +40,6 @@
 # include <alloc/fortify.h>
 #endif
 
-
 struct tagPERIPHERAL;
 
 typedef struct tagBITFIELD {
@@ -54,11 +54,12 @@ typedef struct tagREGISTER {
   const char *description;
   unsigned long offset;         /* offset from base address */
   struct tagPERIPHERAL *peripheral;
-  unsigned short range;         /* for arrays: top of the array range */
-  unsigned short increment;     /* for arrays: increment in bytes */
+  unsigned short count;         /* element count (for arrays), 1 for single fields */
+  unsigned short size;          /* register size, for arrays: increment to next item */
+  unsigned short indexbase;     /* for arrays: first element index (typically 0) */
   BITFIELD *field;
-  unsigned field_count;
-  unsigned field_size;
+  unsigned field_count;         /* number of valid entries in the bitfield array */
+  unsigned field_size;          /* allocation size for the bitfield array */
 } REGISTER;
 
 typedef struct tagPERIPHERAL {
@@ -68,8 +69,8 @@ typedef struct tagPERIPHERAL {
   unsigned range;               /* size of the address block, for finding a peripheral on address */
   REGISTER *reg;
   unsigned reg_count;
-  unsigned reg_size;
-} PERIPHERAL;
+  unsigned reg_size;            /* number of valid entries in the register array */
+} PERIPHERAL;               /* allocation size for the register array */
 
 #define INVALID_ADDRESS (unsigned long)(~0)
 
@@ -99,14 +100,14 @@ static PERIPHERAL *peripheral_find(const char *name)
 
 static PERIPHERAL *peripheral_add(const char *name, const char *description, unsigned long address)
 {
-  assert(peripheral_find(name) == NULL);  /* should not already exist */
   assert(name != NULL);
+  assert(peripheral_find(name) == NULL);  /* should not already exist */
 
   PERIPHERAL entry;
   entry.name = strdup(name);
   entry.description = (description != NULL && strlen(description) > 0) ? strdup(description): NULL;
   entry.address = address;
-  entry.range = 0;      /* filled in later */
+  entry.range = 0;  /* filled in later */
   entry.reg = NULL;
   entry.reg_count = 0;
   entry.reg_size = 0;
@@ -160,8 +161,8 @@ static REGISTER *register_find(const PERIPHERAL *per, const char *name)
   return NULL;
 }
 
-static REGISTER *register_add(PERIPHERAL *per, const char *name, const char *description,
-                              unsigned long offset, unsigned short range, unsigned short increment)
+static REGISTER *register_add(PERIPHERAL *per, const char *name, const char *description, unsigned long offset,
+                                  unsigned short size, unsigned short count, unsigned short arraybase)
 {
   assert(per != NULL);
   assert(name != NULL);
@@ -178,8 +179,9 @@ static REGISTER *register_add(PERIPHERAL *per, const char *name, const char *des
   entry.name = strdup(name);
   entry.description = (description != NULL && strlen(description) > 0) ? strdup(description) : NULL;
   entry.offset = offset;
-  entry.range = range;
-  entry.increment = increment;
+  entry.count = count;      /* element count (1 for single fields) */
+  entry.size = size;        /* element size in bytes */
+  entry.indexbase = arraybase;
   entry.peripheral = NULL;  /* filled in later */
   entry.field = NULL;
   entry.field_count = 0;
@@ -453,10 +455,12 @@ bool svd_load(const char *filename)
           unsigned long offset = (xmlfield != NULL) ? strtoul(xmlfield->content, NULL, 0) : 0;
           xmlfield = xt_find_child(xmlreg, "dim");
           unsigned short dim = (xmlfield != NULL) ? (unsigned)strtoul(xmlfield->content, NULL, 0) : 1;
+          xmlfield = xt_find_child(xmlreg, "dimIndex");
+          unsigned short indexbase = (xmlfield != NULL) ? (unsigned)strtoul(xmlfield->content, NULL, 0) : 0;
           xmlfield = xt_find_child(xmlreg, "dimIncrement");
-          unsigned short increment = (xmlfield != NULL) ? (unsigned)strtoul(xmlfield->content, NULL, 0) : (unsigned short)(svd_regsize / 8);
+          unsigned short regsize = (xmlfield != NULL) ? (unsigned)strtoul(xmlfield->content, NULL, 0) : (unsigned short)(svd_regsize / 8);
           /* add the register information to the list */
-          REGISTER *reg = register_add(per, reg_name, reg_descr, offset, dim, increment);
+          REGISTER *reg = register_add(per, reg_name, reg_descr, offset, regsize, dim, indexbase);
           /* check for bit fields, add these too if present */
           xt_Node *xmlbitf = xt_find_child(xmlreg, "fields");
           if (xmlbitf != NULL && reg != NULL) {
@@ -481,6 +485,12 @@ bool svd_load(const char *filename)
                 strncpy(bitf_range, xmlfield->content, xmlfield->szcontent);
                 bitf_range[xmlfield->szcontent] = '\0';
               }
+              xmlfield = xt_find_child(xmlbitf, "bitOffset");  /* alternative syntax for bit field range */
+              int bitoffs = (xmlfield != NULL) ? (int)strtol(xmlfield->content, NULL, 0) : -1;
+              xmlfield = xt_find_child(xmlbitf, "bitWidth");
+              int bitwidth = (xmlfield != NULL) ? (int)strtol(xmlfield->content, NULL, 0) : -1;
+              if (bitoffs >= 0 && bitwidth >= 0)
+                sprintf(bitf_range, "[%d-%d]", bitoffs, bitoffs + bitwidth - 1);
               bitfield_add(reg, bitf_name, bitf_descr, bitf_range);
               xmlbitf = xt_find_sibling(xmlbitf, "field");
             }
@@ -505,11 +515,10 @@ bool svd_load(const char *filename)
     unsigned long top = 0;
     for (unsigned ridx = 0; ridx < peripheral[idx].reg_count; ridx++) {
       peripheral[idx].reg[ridx].peripheral = &peripheral[idx];
-      assert(peripheral[idx].reg[ridx].range > 0);
-      assert(peripheral[idx].reg[ridx].increment > 0);
+      assert(peripheral[idx].reg[ridx].count > 0);
+      assert(peripheral[idx].reg[ridx].size > 0);
       if (peripheral[idx].reg[ridx].offset > top)
-        top = peripheral[idx].reg[ridx].offset
-              + (peripheral[idx].reg[ridx].range - 1) * peripheral[idx].reg[ridx].increment;
+        top = peripheral[idx].reg[ridx].offset + peripheral[idx].reg[ridx].count * peripheral[idx].reg[ridx].size;
     }
     peripheral[idx].range = top;
   }
@@ -543,6 +552,20 @@ const char *svd_peripheral(unsigned index, unsigned long *address, const char **
   return peripheral[index].name;
 }
 
+/** svd_register() returns the register at the given index.
+ *  \param peripheral   [in] The name of the peripheral.
+ *  \param index        The index of the peripheral to return, starting from 0.
+ *  \param address      [out] The base address of the register. This parameter
+ *                      may be NULL.
+ *  \param range        [out] The address range of the register (in bytes). This
+ *                      parameter may be NULL.
+ *  \param description  [out] An optional description of the register. This
+ *                      parameter may be NULL.
+ *
+ *  \return A pointer to the name of the register on success, or NULL on
+ *          failure. Reasons for failure are that the peripheral is not found,
+ *          or that the index parameter is out of range.
+ */
 const char *svd_register(const char *peripheral, unsigned index, unsigned long *offset,
                          int *range, const char **description)
 {
@@ -556,19 +579,40 @@ const char *svd_register(const char *peripheral, unsigned index, unsigned long *
   if (offset != NULL)
     *offset = per->reg[index].offset;
   if (range != NULL)
-    *range = per->reg[index].range;
+    *range = per->reg[index].count * per->reg[index].size;
   if (description != NULL)
     *description = per->reg[index].description;
   return per->reg[index].name;
 }
 
+/** svd_bitfield() returns information of a bitfield in a register.
+ *  \param peripheral   [in] The name of the peripheral.
+ *  \param regname      [in] The name of the register.
+ *  \param index        The index of the peripheral to return, starting from 0.
+ *  \param low_bit      [out] The first bit in the field range. This parameter
+ *                      may be NULL.
+ *  \param high_bit     [out] The last bit in the field range (the number of
+ *                      bits is (high_bit - low_bit + 1). This parameter may be
+ *                      NULL.
+ *  \param description  [out] An optional description of the bit field. This
+ *                      parameter may be NULL.
+ *
+ *  \return A pointer to the name of the name of the bitfield on success, or
+ *          NULL on failure. Reasons for failure are that the peripheral or
+ *          register are not found, or that the index parameter is out of range.
+ *
+ *  \note To get cleaned-up names for the peripheral and register from user
+ *        input, use svd_lookup().
+ */
 const char *svd_bitfield(const char *peripheral, const char *regname, unsigned index,
                          short *low_bit, short *high_bit, const char **description)
 {
-  const REGISTER *reg = NULL;
+  assert(peripheral != NULL);
+  assert(regname != NULL);
   const PERIPHERAL *per = peripheral_find(peripheral);
-  if (per != NULL)
-    reg = register_find(per, regname);
+  if (per == NULL)
+    return NULL;
+  const REGISTER *reg = register_find(per, regname);
   if (reg == NULL)
     return NULL;
 
@@ -583,6 +627,14 @@ const char *svd_bitfield(const char *peripheral, const char *regname, unsigned i
   return reg->field[index].name;
 }
 
+/** register_parse() looks up a peripheral/register combination and returns
+ *  the structure with the information.
+ *  \param symbol       [in] The register name (must include the peripheral).
+ *  \param suffix       [out] Will point to the first character behind the
+ *                      register name upon return. This parameter may be NULL.
+ *
+ *  \return The register structure on success, NULL on failure.
+ */
 static const REGISTER *register_parse(const char *symbol, const char **suffix)
 {
   char reg_name[100] = "";
@@ -637,6 +689,17 @@ static const REGISTER *register_parse(const char *symbol, const char **suffix)
   return reg;
 }
 
+/** svd_xlate_name() translates a peripheral/register name to an address
+ *  specification in a format used by GDB.
+ *  \param symbol       [in] The register name (must include the peripheral; the
+ *                      prefix is optional).
+ *  \param alias        [out] The output buffer. In-place translation is
+ *                      allowed: parameter "alias" may be the same buffer as
+ *                      parameter "symbol".
+ *  \param alias_size   The size of the output buffer.
+ *
+ *  \return true on success, false on failure.
+ */
 bool svd_xlate_name(const char *symbol, char *alias, size_t alias_size)
 {
   const REGISTER *reg;
@@ -672,7 +735,7 @@ bool svd_xlate_name(const char *symbol, char *alias, size_t alias_size)
     }
     if (strlen(regindex) == 0)
       return false;
-    snprintf(alias, alias_size, "{unsigned}(0x%lx+%d*(%s))", address, reg->increment, regindex);
+    snprintf(alias, alias_size, "{unsigned}(0x%lx+%d*(%s))", address, reg->size, regindex);
   } else {
     snprintf(alias, alias_size, "{unsigned}0x%lx", address);
   }
@@ -725,17 +788,23 @@ int svd_xlate_all_names(char *text, size_t maxsize)
 }
 
 /** svd_lookup() looks up a peripheral or register.
- *  \param symbol       Input name, may include a prefix or register.
- *  \param periph_name  Set to the name of the peripheral (or NULL on failure).
- *                      This name excludes any MCU prefix. This parameter may be
- *                      set to NULL.
- *  \param reg_name     Set to the name of the register (or NULL if regsiter
- *                      name is absent). This parameter may be set to NULL.
- *  \param address      Set to the base address of the peripheral or to the
- *                      address of the register. This parameter may be set to
+ *  \param symbol       [in] Input name, may include a prefix, and it may be the
+ *                      name of a peripheral or a register.
+ *  \param index        The number of matches to skip. If there are multiple
+ *                      registers that match the description, incrementing the
+ *                      index on each call lets you look up each match.
+ *  \param periph_name  [out] Set to point to the name of the peripheral (or to
+ *                      point to NULL on failure). This name excludes any MCU
+ *                      prefix. This parameter may be set to NULL.
+ *  \param reg_name     [out] Set to point to the name of the register (or to
+ *                      point to NULL if register name is absent). This
+ *                      parameter may be set to NULL.
+ *  \param address      [out] Set to the base address of the peripheral or to
+ *                      the address of the register. This parameter may be set
+ *                      to NULL.
+ *  \param description  [out] Set to point to the description string of the
+ *                      peripheral or register. This parameter may be set to
  *                      NULL.
- *  \param description  Set to the description string of the peripheral or
- *                      register. This parameter may be set to NULL.
  *
  *  \return number of matches, or 0 on failure.
  */
@@ -792,10 +861,16 @@ int svd_lookup(const char *symbol, int index, const char **periph_name, const ch
   }
 
   /* remove array suffix from the register name */
+  int arrayindex = -1;
   if (r_name[0] != '\0') {
     char *p2 = strchr(r_name, '[');
-    if (p2 != NULL)
-      *p2 = '\0'; /* strip off suffix */
+    if (p2 != NULL) {
+      *p2++ = '\0'; /* strip off suffix */
+      while (*p2 != ' ')
+        p2++;
+      if (isdigit(*p2))
+        arrayindex = (int)strtol(p2, NULL, 0);
+    }
   }
 
   /* look up peripheral */
@@ -854,10 +929,13 @@ int svd_lookup(const char *symbol, int index, const char **periph_name, const ch
   if (reg != NULL) {
     if (reg_name != NULL)
       *reg_name = reg->name;
-    if (address != NULL)
-      *address = per->address + reg->offset;
     if (description != NULL)
       *description = reg->description;
+    if (address != NULL) {
+      *address = per->address + reg->offset;
+      if (arrayindex >= 0 && arrayindex >= reg->indexbase && (arrayindex - reg->indexbase) <= reg->count)
+        *address += (arrayindex - reg->indexbase);
+    }
   } else {
     if (address != NULL)
       *address = per->address;
@@ -867,3 +945,4 @@ int svd_lookup(const char *symbol, int index, const char **periph_name, const ch
 
   return count;
 }
+

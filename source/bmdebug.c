@@ -132,7 +132,7 @@ static char *translate_path(char *path, bool native);
 static const char *source_getname(unsigned idx);
 static time_t file_timestamp(const char *path);
 
-static DWARF_LINELOOKUP dwarf_linetable = { NULL };
+static DWARF_LINETABLE dwarf_linetable = { NULL };
 static DWARF_SYMBOLLIST dwarf_symboltable = { NULL};
 static DWARF_PATHLIST dwarf_filetable = { NULL};
 
@@ -443,11 +443,11 @@ static void semihosting_add(STRINGLIST *root, const char *text, unsigned short f
       assert(item != NULL);
       item->flags |= STRFLG_HANDLED;
       /* look up file:line information from addresses */
-      if (dwarf_linetable.next != NULL && dwarf_filetable.next != NULL
+      if (dwarf_linetable.entries > 0 && dwarf_filetable.next != NULL
           && (start = strstr(item->text, "*0x")) != NULL)
       {
         unsigned long addr = strtoul(start + 3, (char**)&tail, 16);
-        const DWARF_LINELOOKUP *lineinfo = dwarf_line_from_address(&dwarf_linetable, addr);
+        const DWARF_LINEENTRY *lineinfo = dwarf_line_from_address(&dwarf_linetable, addr);
         if (lineinfo != NULL) {
           const char *path = dwarf_path_from_fileindex(&dwarf_filetable, lineinfo->fileindex);
           if (path != NULL) {
@@ -589,7 +589,7 @@ static char *format_value(char *buffer, size_t size)
     ptr = (char*)skipwhite(ptr);
     if (*ptr == '\0') {
       /* so the buffer contains a single integer value -> reformat it */
-      snprintf(buffer, size, "%ld [0x%lx]", v, v);
+      snprintf(buffer, size, "%ld [0x%lx]", v, (unsigned long)v);
     }
   }
   return buffer;
@@ -1431,43 +1431,49 @@ static int source_linecount(int srcindex)
   return count;
 }
 
-static SOURCELINE *source_firstline(int srcindex)
+/** sourceline_get() returns the physical line of the file (which is the same
+ *  as the source line if on source mode, but not in disassembly mode). The
+ *  linenr parameter is 1-based.
+ */
+static SOURCELINE *sourceline_get(int srcindex, int linenr)
 {
   SOURCEFILE *src = source_fromindex(srcindex);
-  return (src != NULL) ? src->root.next : NULL;
+  if (src == NULL)
+    return NULL;
+  SOURCELINE *line = src->root.next;
+  while (line != NULL && linenr > 1) {
+    line = line->next;
+    linenr -= 1;
+  }
+  return line;
 }
 
 static bool disasm_callback(uint32_t address, const char *text, void *user)
 {
-  /* cache previous source line, to use as a starting point for the next line */
-  static SOURCELINE *prev_src = NULL;
-  if (address == ~0) {  /* special call to clear the cache */
-    prev_src = NULL;
-    return false;
+  const DWARF_LINEENTRY *entry = dwarf_line_from_address(&dwarf_linetable, address);
+  if (entry != NULL) {
+    SOURCELINE *root = (SOURCELINE*)user;
+    assert(root != NULL);
+    SOURCELINE *item = root->next;
+    while (item != NULL && item->linenumber != entry->line)
+      item = item->next;
+    /* dropped on the source line with the given line number, now skip any
+       assembly lines that follow */
+    if (item != NULL) {
+      while (item->next != NULL && item->next->linenumber == 0 && item->next->address < address)
+        item = item->next;
+    }
+    if (item == NULL)
+      sourceline_append(root, text, address, 0);
+    else
+      sourceline_insert(item, text, address, 0);
   }
-
-  SOURCELINE *root =(SOURCELINE*)user;
-  assert(root != NULL);
-  SOURCELINE *last_instr = NULL;
-  SOURCELINE *item = (prev_src != NULL) ? prev_src : root->next;
-  while (item != NULL && address > item->address) {
-    if (item->address != 0 && item->linenumber == 0)
-      last_instr = item;
-    item = item->next;
-  }
-  if (last_instr != NULL && (item == NULL || address < item->address) && address > last_instr->address)
-    item = last_instr;
-  if (item == NULL)
-    sourceline_append(root, text, address, 0);
-  else
-    sourceline_insert(item, text, address, 0);
-  prev_src = item;
   return true;
 }
 
 static void disasm_show_hide(int fileindex, bool visible)
 {
-  SOURCELINE *item = source_firstline(fileindex);
+  SOURCELINE *item = sourceline_get(fileindex, 1);
   while (item != NULL) {
     if (item->linenumber == 0)
       item->hidden = !visible;
@@ -1524,20 +1530,26 @@ static bool sourcefile_disassemble(const char *path, const SOURCEFILE *source, A
 
   /* associate addresses to source lines */
   assert(source != NULL);
+  for (SOURCELINE *item = source->root.next; item != NULL; item = item->next)
+    item->address = 0;  /* clear any old address mappings */
   SOURCELINE *item = source->root.next;
   int curline = 1;
-  for (DWARF_LINELOOKUP *lineaddr = dwarf_linetable.next; lineaddr != NULL; lineaddr = lineaddr->next) {
-    if (lineaddr->fileindex == fileidx) {
-      if (curline > lineaddr->line) {
-        item = source->root.next;
-        curline = 1;
-      }
-      while (curline < lineaddr->line) {
-        item = item->next;
-        curline += 1;
-      }
-      if (curline == lineaddr->line)
-        item->address = lineaddr->address;
+  for (unsigned idx = 0; idx < dwarf_linetable.entries; idx++) {
+    if (dwarf_linetable.table[idx].fileindex != fileidx)
+      continue;         /* address belongs to a different file, ignore */
+    if (curline > dwarf_linetable.table[idx].line) {
+      item = source->root.next; /* restart line count from the root */
+      curline = 1;
+    }
+    while (curline < dwarf_linetable.table[idx].line && item != NULL) {
+      item = item->next;
+      curline += 1;
+    }
+    if (curline == dwarf_linetable.table[idx].line && item != NULL) {
+      /* there may be multiple addresses associated to a single source line;
+         keep the lowest non-zero address */
+      if (item->address == 0 || item->address < dwarf_linetable.table[idx].address)
+        item->address = dwarf_linetable.table[idx].address;
     }
   }
 
@@ -1568,12 +1580,17 @@ static bool sourcefile_disassemble(const char *path, const SOURCEFILE *source, A
     /* find the section to read and read the portion relevant for this source file */
     unsigned long offset, address, length;
     if (elf_section_by_name(fp, ".text", &offset, &address, &length) == ELFERR_NONE) {
-      assert(address <= addr_low);
-      assert(addr_high <= address + length);
-      bincode = malloc(addr_range * sizeof(unsigned char));
-      if (bincode != NULL) {
-        fseek(fp, offset + (addr_low - address), SEEK_SET);
-        fread(bincode, 1, addr_range, fp);
+      if (address <= addr_low && addr_high <= address + length) {
+        /* address <= addr_low           => .text section address must be <= object code address
+           addr_high <= address + length => .text section must exceed object code range
+           if one of the above criterions is not true, we are trying to
+           disassemble data in a different section than .text
+         */
+        bincode = malloc(addr_range * sizeof(unsigned char));
+        if (bincode != NULL) {
+          fseek(fp, offset + (addr_low - address), SEEK_SET);
+          fread(bincode, 1, addr_range, fp);
+        }
       }
     }
     fclose(fp);
@@ -1582,7 +1599,6 @@ static bool sourcefile_disassemble(const char *path, const SOURCEFILE *source, A
     return false;   /* unable to read the ELF file, or insufficient memory */
 
   /* finally, start the disassembly */
-  disasm_callback(~0, NULL, NULL);  /* clear cache in the callback */
   disasm_address(armstate, addr_low);
   disasm_buffer(armstate, bincode, addr_range, mode, disasm_callback, (void*)&source->root);
   disasm_compact_codepool(armstate, addr_low, addr_range);
@@ -3560,7 +3576,7 @@ static int line_source2phys(int fileindex, int source_line)
   assert(fileindex >= 0);
   int line = 1;
   SOURCELINE *item;
-  for (item = source_firstline(fileindex); item != NULL; item = item->next) {
+  for (item = sourceline_get(fileindex, 1); item != NULL; item = item->next) {
     if (item->hidden)
       continue;
     if (item->linenumber == source_line)
@@ -3576,8 +3592,7 @@ static int line_phys2source(int fileindex, int phys_line)
 {
   assert(fileindex >= 0);
   int line = 1;
-  SOURCELINE *item;
-  for (item = source_firstline(fileindex); item != NULL && phys_line > 0; item = item->next) {
+  for (SOURCELINE *item = sourceline_get(fileindex, 1); item != NULL && phys_line > 0; item = item->next) {
     if (item->hidden)
       continue;
     if (item->linenumber > 0)
@@ -3595,17 +3610,30 @@ static int line_addr2phys(int fileindex, uint32_t address)
   int best_line = 1;
   uint32_t low_addr = 0;
   int line = 1;
-  for (SOURCELINE *item = source_firstline(fileindex); item != NULL; item = item->next) {
+  for (SOURCELINE *item = sourceline_get(fileindex, 1); item != NULL; item = item->next) {
     if (item->hidden)
       continue;
-    if (item->address > low_addr && item->address <= address) {
+    if (item->address >= low_addr && item->address <= address) {
+      low_addr = item->address;
       best_line = line;
-      if (item->address == address)
-        break;  /* exact match found, no need to search further */
     }
     line += 1;
   }
   return best_line;
+}
+
+/* returns the address for the given line number in the source file, or 0 on error */
+static uint32_t line_phys2addr(int fileindex, int phys_line)
+{
+  assert(fileindex >= 0);
+  SOURCELINE *item;
+  for (item = sourceline_get(fileindex, 1); item != NULL; item = item->next) {
+    if (item->hidden)
+      continue;
+    if (--phys_line == 0)
+      break;
+  }
+  return (item == NULL) ? 0 : item->address;
 }
 
 /* source_widget() draws the text of a source file */
@@ -3630,7 +3658,7 @@ static void source_widget(struct nk_context *ctx, const char *id, float rowheigh
   if (nk_group_begin(ctx, id, NK_WINDOW_BORDER)) {
     int lines = 0, maxlen = 0;
     float maxwidth = 0;
-    for (SOURCELINE *item = source_firstline(source_cursorfile); item != NULL; item = item->next) {
+    for (SOURCELINE *item = sourceline_get(source_cursorfile, 1); item != NULL; item = item->next) {
       if (item->hidden)
         continue;
       lines++;
@@ -3792,9 +3820,7 @@ static bool source_getsymbol(char *symname, size_t symlen, int row, int col)
   *symname = '\0';
   if (row < 1 || col < 1)
     return false;
-  SOURCELINE *item;
-  for (item = source_firstline(source_cursorfile); item != NULL && row > 1; item = item->next)
-    row--;
+  SOURCELINE *item = sourceline_get(source_cursorfile, row);
   if (item == NULL)
     return false;
   assert(item->text != NULL);
@@ -3968,10 +3994,14 @@ enum {
 };
 
 
-static void svd_info(const char *params, STRINGLIST *textroot)
+static bool svd_info(const char *params, STRINGLIST *textroot, bool bitfields, unsigned long value)
 {
-  stringlist_append(textroot, "System View Description", 0);
-  stringlist_append(textroot, "", 0);
+  if (!bitfields) {
+    stringlist_append(textroot, "System View Description", 0);
+    stringlist_append(textroot, "", 0);
+  }
+
+  bool retvalue = true;
 
   assert(params != NULL);
   if (*params == '\0') {
@@ -4001,8 +4031,10 @@ static void svd_info(const char *params, STRINGLIST *textroot)
       stringlist_append(textroot, line, 0);
       idx += 1;
     }
-    if (!has_info)
+    if (!has_info) {
       stringlist_append(textroot, "No SVD file loaded, no information available", 0);
+      retvalue = false;
+    }
   } else {
     char *params_upcase = NULL;
     unsigned long address;
@@ -4019,13 +4051,15 @@ static void svd_info(const char *params, STRINGLIST *textroot)
 #     endif
     }
     if (result > 0) {
-      char line[200];
+      char line[256];
       if (reg_name != NULL && result == 1) {
         /* register details */
-        sprintf(line, "[%lx] %s%s->%s:", address, svd_mcu_prefix(), periph_name, reg_name);
+        sprintf(line, "[%lx] %s%s->%s", address, svd_mcu_prefix(), periph_name, reg_name);
+        if (bitfields)
+          sprintf(line + strlen(line), " = %ld [0x%08lx]", (long)value, value);
         stringlist_append(textroot, line, 0);
         /* full description, reformatted in strings of 80 characters */
-        if (description != NULL) {
+        if (description != NULL && !bitfields) {
           const char *head = description;
           while (*head != '\0') {
             int cutoff = strlen(head);
@@ -4067,6 +4101,12 @@ static void svd_info(const char *params, STRINGLIST *textroot)
           else if (low_bit >= 0)
             sprintf(line + strlen(line), "[%d] ", low_bit);
           strlcat(line, name, sizearray(line));
+          if (bitfields) {
+            int numbits = high_bit - low_bit + 1;
+            unsigned long mask = ~(~0 << numbits);
+            unsigned long field = (value >> low_bit) & mask;
+            sprintf(line + strlen(line), " = %lu [0x%lx] ", field, field);
+          }
           if (description != NULL) {
             strlcat(line, " -- ", sizearray(line));
             strlcat(line, description, sizearray(line));
@@ -4145,11 +4185,18 @@ static void svd_info(const char *params, STRINGLIST *textroot)
         }
       }
     } else {
-      stringlist_append(textroot, "Specified register of peripheral is not found", 0);
+      /* check whether SVD is available at all */
+      const char *name = svd_peripheral(0, NULL, NULL);
+      if (name == NULL)
+        stringlist_append(textroot, "No SVD file loaded, no information available", 0);
+      else
+        stringlist_append(textroot, "Specified register of peripheral is not found", 0);
+      retvalue = false;
     }
     if (params_upcase != NULL)
       free((void*)params_upcase);
   }
+  return retvalue;
 }
 
 static bool handle_help_cmd(char *command, STRINGLIST *textroot, int *active,
@@ -4327,7 +4374,7 @@ static bool handle_help_cmd(char *command, STRINGLIST *textroot, int *active,
 }
 
 static bool handle_info_cmd(char *command, STRINGLIST *textroot, int *active,
-                            nk_bool *reformat, const SWOSETTINGS *swo)
+                            nk_bool *reformat, const SWOSETTINGS *swo, TASK *task)
 {
   assert(command != NULL);
   assert(textroot != NULL);
@@ -4336,31 +4383,108 @@ static bool handle_info_cmd(char *command, STRINGLIST *textroot, int *active,
   assert(swo != NULL);
 
   command = (char*)skipwhite(command);
-  if (TERM_EQU(command, "info", 4)) {
-    const char *cmdptr = skipwhite(command + 4);
+  bool is_info = TERM_EQU(command, "info", 4);
+  bool is_print = TERM_EQU(command, "print", 5) || TERM_EQU(command, "p", 1);
+  if (!is_info && !is_print) {
+    if (*active == POPUP_INFO)
+      *active = POPUP_NONE;
+    return false;
+  }
+
+  const char *cmdptr = command;
+  if (is_info) {
+    cmdptr = skipwhite(cmdptr + 4);
+  } else {
+    while (isalpha(*cmdptr))
+      cmdptr++;
+    cmdptr = skipwhite(cmdptr);
+  }
+
+  if (is_info) {
+    /* always pop up info view when the "info" command is given (for the "print"
+       command, this is handled later) */
     *active = POPUP_INFO;
     *reformat = nk_false; /* never reformat "info" */
-    if (*cmdptr == '\0') {
-      stringlist_append(textroot, "Front-end topics.", 0);
-      stringlist_append(textroot, "", 0);
-      stringlist_append(textroot, "serial -- status of the serial monitor.", 0);
-      stringlist_append(textroot, "svd -- list peripherals and registers.", 0);
-      stringlist_append(textroot, "trace -- status SWO tracing.", 0);
-      stringlist_append(textroot, "", 0);
-      /* drop to the default "return false", so that GDB's info follows */
-    } else if (TERM_EQU(cmdptr, "trace", 5)) {
-      trace_info_mode(swo, 1, textroot);
-      return true;
-    } else if (TERM_EQU(cmdptr, "serial", 6)) {
-      serial_info_mode(textroot);
-      return true;
-    } else if (TERM_EQU(cmdptr, "svd", 3)) {
-      svd_info(skipwhite(cmdptr + 3), textroot);
-      return true;
-    }
-  } else if (*active == POPUP_INFO) {
-    *active = POPUP_NONE;
   }
+
+  if (is_info && *cmdptr == '\0') {
+    stringlist_append(textroot, "Front-end topics.", 0);
+    stringlist_append(textroot, "", 0);
+    stringlist_append(textroot, "serial -- status of the serial monitor.", 0);
+    stringlist_append(textroot, "svd -- list peripherals and registers.", 0);
+    stringlist_append(textroot, "trace -- status SWO tracing.", 0);
+    stringlist_append(textroot, "", 0);
+    /* drop to the default "return false", so that GDB's info follows */
+  } else if (is_info && TERM_EQU(cmdptr, "trace", 5)) {
+    trace_info_mode(swo, 1, textroot);
+    return true;
+  } else if (is_info && TERM_EQU(cmdptr, "serial", 6)) {
+    serial_info_mode(textroot);
+    return true;
+  } else if (is_info && TERM_EQU(cmdptr, "svd", 3)) {
+    svd_info(skipwhite(cmdptr + 3), textroot, false, 0);
+    return true;
+  } else {
+    /* check whether the parameter is a register name (defined in SVD) */
+    char symbol[128];
+    strlcpy(symbol, cmdptr, sizearray(symbol));
+    const char *periph_name, *reg_name;
+    int matches = svd_lookup(symbol, 0, &periph_name, &reg_name, NULL, NULL);
+    /* only decode the register when it is fully specified (so not for multiple
+       matches); also only pop up the "info" view for the info command, or when
+       the register has bitfields */
+    if (matches == 1 && is_info || svd_bitfield(periph_name, reg_name, 0, NULL, NULL, NULL) != NULL) {
+      /* make cleaned-up name */
+      strlcpy(symbol, periph_name, sizearray(symbol));
+      strlcat(symbol, "->", sizearray(symbol));
+      strlcat(symbol, reg_name, sizearray(symbol));
+      /* look up its value */
+      char alias[40] = "p ";
+      svd_xlate_name(symbol, alias + 2, sizearray(alias) - 2);
+      strlcat(alias, "\n", sizearray(alias));
+      if (task_stdin(task, alias))
+        gdbmi_sethandled(false); /* clear result on new input */
+      unsigned long regvalue = 0;
+      bool valid_result = false;
+      bool done = false;
+      while (!done) {
+        char buffer[256];
+        while (task_stdout(task, buffer, sizearray(buffer)) > 0) {
+          char *start = buffer;
+          while (start != NULL && *start != '\0') {
+            int flags;
+            start = (char*)skipwhite(start);
+            const char *ptr = gdbmi_leader(start, &flags, &start);
+            if (*ptr == '$' && isdigit(*(ptr + 1))) {
+              /* get the value behind the '=' */
+              ptr++;  /* skip '$' */
+              while (isdigit(*ptr))
+                ptr++;
+              ptr = (char*)skipwhite(ptr);
+              if (*ptr == '=') {
+                regvalue = strtoul(ptr + 1, NULL, 0);
+                valid_result = true;
+              }
+            } else if (strncmp(ptr, "done", 4) == 0 && (*(ptr + 4) == '\n' || *(ptr + 4) == '\r')) {
+              done = true;
+            }
+          }
+        }
+      }
+      /* now decode the register */
+      if (valid_result) {
+        svd_info(symbol, textroot, true, regvalue);
+        if (is_print) {
+          /* only go to popup mode for a print command, if the print command
+             has the details */
+          *active = POPUP_INFO;
+          *reformat = nk_false;
+        }
+      }
+      return valid_result;
+    }
+  }
+
   return false;
 }
 
@@ -4610,17 +4734,13 @@ static bool handle_find_cmd(const char *command)
     if (strlen(pattern) == 0)
       return true; /* invalid pattern, but command syntax is ok */
     /* find pattern, starting from source_cursorline */
-    SOURCELINE *item = source_firstline(source_cursorfile);
-    int linenr = 1;
-    while (item != NULL && linenr < source_cursorline) {
-      linenr++;
-      item = item->next;
-    }
+    int linenr = source_cursorline;
+    SOURCELINE *item = sourceline_get(source_cursorfile, linenr);
     int found_on_curline;
     if (item == NULL || source_cursorline <= 0) {
       found_on_curline = 0;
-      item = source_firstline(source_cursorfile);
       linenr = 1;
+      item = sourceline_get(source_cursorfile, linenr);
     } else {
       found_on_curline = find_substring(item->text, pattern);
       item = item->next;
@@ -4635,8 +4755,8 @@ static bool handle_find_cmd(const char *command)
       item = item->next;
       linenr++;
       if (item == NULL) {
-        item = source_firstline(source_cursorfile);
         linenr = 1;
+        item = sourceline_get(source_cursorfile, linenr);
         if (source_cursorline == 0)
           source_cursorline = 1;
       }
@@ -5549,6 +5669,42 @@ static void log_console_strings(const APPSTATE *state)
   }
 }
 
+static void follow_address(const APPSTATE *state, int direction)
+{
+  assert(state != NULL);
+  assert(direction == -1 || direction == 1);
+  if (state->disassemble_mode && source_isvalid(source_cursorfile)) {
+    /* get address of current line (the line that the cursor is on) */
+    uint32_t addr = line_phys2addr(source_cursorfile, source_cursorline);
+    for (int retries = 0; retries < 2; retries++) {
+      if (direction < 0)
+        addr -= 2;  /* size of a thumb instruction is 2 bytes, so decrementing by 2 is sufficient */
+      else
+        addr += 2;
+      /* look up the new address in the line table, basically because we need
+         to check for file switches */
+      const DWARF_LINEENTRY *entry = dwarf_line_from_address(&dwarf_linetable, addr);
+      if (entry == NULL)
+        break;  /* previous/next address is invalid, do nothing */
+      /* check whether source file must change (previous or next address may be
+         in a different file, as as what happens with inline functions declared
+         in a header file) */
+      int fileidx = source_cursorfile;  /* preset */
+      const char *path = dwarf_path_from_fileindex(&dwarf_filetable, entry->fileindex);
+      if (path != NULL)
+        fileidx = source_getindex(path);
+      int linenr = line_addr2phys(fileidx, addr);
+      if (linenr != source_cursorline || source_cursorfile != fileidx) {
+        source_cursorfile = fileidx;
+        source_cursorline = linenr;
+        break;  /* position updated */
+      }
+      /* the next address drops onto the same instruction, advance the address
+         some more and retry (Thumb2 instructions may be 16-bit or 32-bit) */
+    }
+  }
+}
+
 static bool save_targetoptions(const char *filename, const APPSTATE *state)
 {
   if (filename == NULL || strlen(filename) == 0)
@@ -5646,6 +5802,8 @@ static void help_popup(struct nk_context *ctx, APPSTATE *state, float canvas_wid
     w = canvas_width - 20;
   float h = canvas_height * 0.75f;
   struct nk_rect rc = nk_rect((canvas_width - w) / 2, (canvas_height - h) / 2, w, h);
+  nk_style_push_color(ctx, &ctx->style.window.popup_border_color, COLOUR_FG_YELLOW);
+  nk_style_push_float(ctx, &ctx->style.window.popup_border, 2);
   if (nk_popup_begin(ctx, NK_POPUP_STATIC, "Help", NK_WINDOW_NO_SCROLLBAR, rc)) {
     static const float bottomrow_ratio[] = {0.15f, 0.68f, 0.17f};
     nk_layout_row_dynamic(ctx, h - 1.75f*ROW_HEIGHT, 1);
@@ -5664,7 +5822,7 @@ static void help_popup(struct nk_context *ctx, APPSTATE *state, float canvas_wid
         memmove(state->help_edit, (state->popup_active == POPUP_INFO) ? "info " : "help ", 5);
       }
       if (!handle_help_cmd(state->help_edit, &helptext_root, &state->popup_active, &state->reformat_help)
-          && !handle_info_cmd(state->help_edit, &helptext_root, &state->popup_active, &state->reformat_help, &state->swo))
+          && !handle_info_cmd(state->help_edit, &helptext_root, &state->popup_active, &state->reformat_help, &state->swo, &state->gdb_task))
       {
         strlcat(state->help_edit, "\n", sizearray(state->help_edit));
         if (task_stdin(&state->gdb_task, state->help_edit))
@@ -5719,6 +5877,8 @@ static void help_popup(struct nk_context *ctx, APPSTATE *state, float canvas_wid
     state->popup_active = POPUP_NONE;
     state->atprompt = true;
   }
+  nk_style_pop_float(ctx);
+  nk_style_pop_color(ctx);
 }
 
 static void button_bar(struct nk_context *ctx, APPSTATE *state, float panel_width)
@@ -5869,9 +6029,11 @@ static void sourcecode_view(struct nk_context *ctx, APPSTATE *state)
   /* if disassembly is requested, check whether to do this first */
   if (state->disassemble_mode && source_isvalid(source_cursorfile)) {
     SOURCELINE *item;
-    for (item = source_firstline(source_cursorfile); item != NULL && item->linenumber != 0; item = item->next)
+    for (item = sourceline_get(source_cursorfile, 1); item != NULL && item->linenumber != 0; item = item->next)
       {}  /* lines in assembly have address set, but no linenumber */
     if (item == NULL) {
+      /* no disassembly present yet (disassemble each source file only once,
+         until they get reloaded) */
       bool ok = sourcefile_disassemble(state->ELFfile, source_fromindex(source_cursorfile), &state->armstate);
       if (!ok) {
         /* on failure, switch disassembly off (otherwise, this routine will be
@@ -6052,7 +6214,7 @@ static void console_view(struct nk_context *ctx, APPSTATE *state,
           }
         } else if (!handle_list_cmd(state->console_edit, &dwarf_symboltable, &dwarf_filetable)
                    && !handle_find_cmd(state->console_edit)
-                   && !handle_info_cmd(state->console_edit, &helptext_root, &state->popup_active, &state->reformat_help, &state->swo)
+                   && !handle_info_cmd(state->console_edit, &helptext_root, &state->popup_active, &state->reformat_help, &state->swo, &state->gdb_task)
                    && !handle_disasm_cmd(state->console_edit, &state->disassemble_mode)
                    && !handle_semihosting_cmd(state->console_edit)
                    && !handle_directory_cmd(state->console_edit, state->sourcepath, sizearray(state->sourcepath)))
@@ -6920,6 +7082,10 @@ static void handle_kbdinput_main(struct nk_context *ctx, APPSTATE *state)
   } else if (nk_input_is_key_pressed(&ctx->input, NK_KEY_SCROLL_BOTTOM)) {
     source_cursorline = source_linecount(source_cursorfile);
     source_autoscroll = false;
+  } else if (nk_input_is_key_pressed(&ctx->input, NK_KEY_ALT_UP) || nk_input_is_key_pressed(&ctx->input, NK_KEY_ALT_LEFT)) {
+    follow_address(state, -1);
+  } else if (nk_input_is_key_pressed(&ctx->input, NK_KEY_ALT_DOWN) || nk_input_is_key_pressed(&ctx->input, NK_KEY_ALT_RIGHT)) {
+    follow_address(state, 1);
   } else if (nk_input_is_key_pressed(&ctx->input, NK_KEY_FIND)) {
     strlcpy(state->console_edit, "find ", sizearray(state->console_edit));
     state->console_activate = 2;
@@ -7289,6 +7455,7 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
       if (!state->atprompt)
         break;
       if (STATESWITCH(state)) {
+        gdbmi_sethandled(false);
         state->console_mark = stringlist_getlast(&consolestring_root, STRFLG_RESULT, 0);
         assert(state->console_mark != NULL);
         task_stdin(&state->gdb_task, "monitor swdp_scan\n");

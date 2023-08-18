@@ -951,7 +951,10 @@ nk_gdip_handle_event(HWND wnd, UINT msg, WPARAM wparam, LPARAM lparam)
             if (ctrl) {
                 nk_input_key(&gdip.ctx, NK_KEY_TEXT_WORD_LEFT, down);
                 return 1;
-            } else if (!shift && !alt) {
+            } else if (alt) {
+                nk_input_key(&gdip.ctx, NK_KEY_ALT_LEFT, down);
+                return 1;
+            } else if (!shift) {
                 nk_input_key(&gdip.ctx, NK_KEY_LEFT, down);
                 return 1;
             }
@@ -961,24 +964,37 @@ nk_gdip_handle_event(HWND wnd, UINT msg, WPARAM wparam, LPARAM lparam)
             if (ctrl) {
                 nk_input_key(&gdip.ctx, NK_KEY_TEXT_WORD_RIGHT, down);
                 return 1;
-            } else if (!shift && !alt) {
+            } else if (alt) {
+                nk_input_key(&gdip.ctx, NK_KEY_ALT_RIGHT, down);
+                return 1;
+            } else if (!shift) {
                 nk_input_key(&gdip.ctx, NK_KEY_RIGHT, down);
                 return 1;
             }
             break;
 
         case VK_UP:
-            if (!shift && !alt) {
-                nk_input_key(&gdip.ctx, ctrl ? NK_KEY_PAR_UP
-				                             : NK_KEY_UP, down);
+            if (ctrl) {
+                nk_input_key(&gdip.ctx, NK_KEY_PAR_UP, down);
+                return 1;
+            } else if (alt) {
+                nk_input_key(&gdip.ctx, NK_KEY_ALT_UP, down);
+                return 1;
+            } else if (!shift) {
+                nk_input_key(&gdip.ctx, NK_KEY_UP, down);
                 return 1;
             }
             break;
 
         case VK_DOWN:
-            if (!shift && !alt) {
-                nk_input_key(&gdip.ctx, ctrl ? NK_KEY_PAR_DOWN
-				                             : NK_KEY_DOWN, down);
+            if (ctrl) {
+                nk_input_key(&gdip.ctx, NK_KEY_PAR_DOWN, down);
+                return 1;
+            } else if (alt) {
+                nk_input_key(&gdip.ctx, NK_KEY_ALT_DOWN, down);
+                return 1;
+            } else if (!shift) {
+                nk_input_key(&gdip.ctx, NK_KEY_DOWN, down);
                 return 1;
             }
             break;

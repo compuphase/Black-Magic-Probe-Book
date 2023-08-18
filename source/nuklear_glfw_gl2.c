@@ -273,7 +273,7 @@ NK_API void
 nk_glfw3_new_frame(void)
 {
     int i, shift, ctrl, alt;
-    int plain, ctrl_plain, shift_plain;
+    int plain, ctrl_plain, shift_plain, alt_plain;
     double x, y;
     struct nk_context *ctx = &glfw.ctx;
     struct GLFWwindow *win = glfw.win;
@@ -300,6 +300,7 @@ nk_glfw3_new_frame(void)
     plain = !(shift || ctrl || alt);
     ctrl_plain = ctrl && !(shift || alt);
     shift_plain = shift && !(ctrl || alt);
+    alt_plain = alt && !(shift || ctrl);
 
     nk_input_key(ctx, NK_KEY_SHIFT, shift);
     nk_input_key(ctx, NK_KEY_CTRL, ctrl);
@@ -332,6 +333,11 @@ nk_glfw3_new_frame(void)
     nk_input_key(ctx, NK_KEY_F10,           plain && glfwGetKey(win, GLFW_KEY_F10) == GLFW_PRESS);
     nk_input_key(ctx, NK_KEY_F11,           plain && glfwGetKey(win, GLFW_KEY_F11) == GLFW_PRESS);
     nk_input_key(ctx, NK_KEY_F12,           plain && glfwGetKey(win, GLFW_KEY_F12) == GLFW_PRESS);
+
+    nk_input_key(ctx, NK_KEY_ALT_LEFT,      alt_plain && glfwGetKey(win, GLFW_KEY_LEFT) == GLFW_PRESS);
+    nk_input_key(ctx, NK_KEY_ALT_RIGHT,     alt_plain && glfwGetKey(win, GLFW_KEY_RIGHT) == GLFW_PRESS);
+    nk_input_key(ctx, NK_KEY_ALT_UP,        alt_plain && glfwGetKey(win, GLFW_KEY_UP) == GLFW_PRESS);
+    nk_input_key(ctx, NK_KEY_ALT_DOWN,      alt_plain && glfwGetKey(win, GLFW_KEY_DOWN) == GLFW_PRESS);
 
     nk_input_key(ctx, NK_KEY_SHIFT_F1,      shift_plain && glfwGetKey(win, GLFW_KEY_F1) == GLFW_PRESS);
     nk_input_key(ctx, NK_KEY_SHIFT_F2,      shift_plain && glfwGetKey(win, GLFW_KEY_F2) == GLFW_PRESS);
