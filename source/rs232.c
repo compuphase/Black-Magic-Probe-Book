@@ -33,6 +33,10 @@
 #endif
 #include "rs232.h"
 
+#if defined FORTIFY
+# include <alloc/fortify.h>
+#endif
+
 #if defined _MSC_VER
 # define strdup(s)   _strdup(s)
 #endif

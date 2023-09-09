@@ -228,6 +228,9 @@ static BITFIELD *bitfield_add(REGISTER *reg, const char *name, const char *descr
   assert(reg != NULL);
   assert(name != NULL);
 
+  /* the documented pattern style (CMSIS-SVD specification 1.3.1) is [4:6] (where
+     4 & 6 are arbitrary numbers), but I have seen [4-6], [4~6] and [4..6] in
+     practice */
   short low = -1, high = -1;
   if (bitrange != NULL && strlen(bitrange) > 0) {
     if (*bitrange == '[')
@@ -479,18 +482,26 @@ bool svd_load(const char *filename)
                 bitf_descr[xmlfield->szcontent] = '\0';
                 reformat_description(bitf_descr);
               }
+              /* three syntaxes for specifying a bit range exist (!) */
               char bitf_range[256] = "";
-              xmlfield = xt_find_child(xmlbitf, "bitRange");
+              xmlfield = xt_find_child(xmlbitf, "bitRange");    /* pattern style */
               if (xmlfield != NULL && xmlfield->szcontent < sizearray(bitf_range)) {
                 strncpy(bitf_range, xmlfield->content, xmlfield->szcontent);
                 bitf_range[xmlfield->szcontent] = '\0';
               }
-              xmlfield = xt_find_child(xmlbitf, "bitOffset");  /* alternative syntax for bit field range */
+              xmlfield = xt_find_child(xmlbitf, "bitOffset");   /* offset/width style */
               int bitoffs = (xmlfield != NULL) ? (int)strtol(xmlfield->content, NULL, 0) : -1;
               xmlfield = xt_find_child(xmlbitf, "bitWidth");
               int bitwidth = (xmlfield != NULL) ? (int)strtol(xmlfield->content, NULL, 0) : -1;
               if (bitoffs >= 0 && bitwidth >= 0)
-                sprintf(bitf_range, "[%d-%d]", bitoffs, bitoffs + bitwidth - 1);
+                sprintf(bitf_range, "[%d:%d]", bitoffs, bitoffs + bitwidth - 1);
+              xmlfield = xt_find_child(xmlbitf, "lsb");       /* LSB/MSB style */
+              bitoffs = (xmlfield != NULL) ? (int)strtol(xmlfield->content, NULL, 0) : -1;
+              xmlfield = xt_find_child(xmlbitf, "msb");
+              bitwidth = (xmlfield != NULL) ? (int)strtol(xmlfield->content, NULL, 0) : -1;
+              if (bitoffs >= 0 && bitwidth >= 0)
+                sprintf(bitf_range, "[%d:%d]", bitoffs, bitwidth);
+              //??? parse enumeratedValues attached to the bit field
               bitfield_add(reg, bitf_name, bitf_descr, bitf_range);
               xmlbitf = xt_find_sibling(xmlbitf, "field");
             }

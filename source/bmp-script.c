@@ -117,8 +117,8 @@ static const struct {
   { "PART_ID",              0x40000FF8, 4, "LPC51Uxx,LPC54S0xx,LPC546xx,"
                                            "LPC553x" },                         /**< DEVICE_ID0 register, LPC51Uxx, LPC5411x, LPC546xx & LPC553x series */
   { "PART_ID",              0x400003F8, 4, "LPC5410x" },                        /**< DEVICE_ID0 register, LPC5410x series */
-  { "PART_ID",              0x50000FF8, 4, "LPC550x,LPC551x,LPC552x,LPC55S0x,"
-                                           "LPC55S1x,LPC55S2x,LPC55S6x" },      /**< DEVICE_ID0 register, LPC55[S]0x, LPC55[S]1x, LPC55[S]2x &LPC55S6x series */
+  { "PART_ID",              0x50000FF8, 4, "LPC55[S]0x,LPC55[S]1x,LPC55[S]2x,LPC553x,"
+                                           "LPC55S6x" },      /**< DEVICE_ID0 register, LPC55[S]0x, LPC55[S]1x, LPC55[S]2x &LPC55S6x series */
 
   { "RCC_APB2ENR",          0x40021018, 4, "STM32F1*" },                        /**< STM32F1 APB2 Peripheral Clock Enable Register */
   { "AFIO_MAPR",            0x40010004, 4, "STM32F1*" },                        /**< STM32F1 AF remap and debug I/O configuration */

@@ -79,7 +79,7 @@ static HCOM* hCom;
 static char comport[64] = "";
 static int baudrate = 0;
 static int bmp_seqnr = -1;
-static char tdsl_metadata[_MAX_PATH];
+static char tsdl_metadata[_MAX_PATH];
 static thrd_t serial_thread;
 static bool serial_thread_valid = false;
 
@@ -89,7 +89,7 @@ static void sermon_addstring(const unsigned char *buffer, size_t length)
   assert(buffer != NULL);
   assert(length > 0);
 
-  if (tdsl_metadata[0] != '\0') {
+  if (tsdl_metadata[0] != '\0') {
     /* CTF mode */
     int count = ctf_decode(buffer, length, 0);
     if (count > 0) {
@@ -302,14 +302,14 @@ int sermon_getbaud(void)
 
 void sermon_setmetadata(const char *tsdlfile)
 {
-  tdsl_metadata[0] = '\0';
-  if (tsdlfile != NULL && access(tsdlfile, 0) == 0)
-    strlcpy(tdsl_metadata, tsdlfile, sizearray(tdsl_metadata));
+  tsdl_metadata[0] = '\0';
+  if (tsdlfile != NULL && strcmp(tsdlfile, "-") != 0 && access(tsdlfile, 0) == 0)
+    strlcpy(tsdl_metadata, tsdlfile, sizearray(tsdl_metadata));
 }
 
 const char *sermon_getmetadata(void)
 {
-  return tdsl_metadata;
+  return tsdl_metadata;
 }
 
 int sermon_save(const char *filename)

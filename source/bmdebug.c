@@ -2843,15 +2843,17 @@ static const char *lastdirsep(const char *path)
   return (ptr == path) ? NULL : ptr;
 }
 
-static int ctf_findmetadata(const char *target, char *metadata, size_t metadata_len)
+static bool ctf_findmetadata(const char *target, char *metadata, size_t metadata_len)
 {
-  char basename[_MAX_PATH];// path[_MAX_PATH], *ptr;
-
   assert(target != NULL);
   assert(metadata != NULL);
 
+  if (strcmp(metadata, "-") == 0)
+    return false; /* metadata explicitly disabled */
+
   /* if no metadata filename was set, create the base name (without path) from
      the target name; add a .tsdl extension */
+  char basename[_MAX_PATH];
   if (strlen(metadata) == 0) {
     char *ptr = (char*)lastdirsep(target);
     strlcpy(basename, (ptr == NULL) ? target : ptr + 1, sizearray(basename));
@@ -2887,7 +2889,7 @@ static int ctf_findmetadata(const char *target, char *metadata, size_t metadata_
   /* try current directory */
   if (access(basename, 0) == 0) {
     strlcpy(metadata, basename, metadata_len);
-    return 1;
+    return true;
   }
 
   /* try target directory (if there is one) */
@@ -2902,7 +2904,7 @@ static int ctf_findmetadata(const char *target, char *metadata, size_t metadata_
     translate_path(path, true);
     if (access(path, 0) == 0) {
       strlcpy(metadata, path, metadata_len);
-      return 1;
+      return true;
     }
   }
 
@@ -2919,12 +2921,12 @@ static int ctf_findmetadata(const char *target, char *metadata, size_t metadata_
       translate_path(path, true);
       if (access(path, 0) == 0) {
         strlcpy(metadata, path, metadata_len);
-        return 1;
+        return true;
       }
     }
   }
 
-  return 0;
+  return false;
 }
 
 int ctf_error_notify(int code, int linenr, const char *message)
@@ -4338,7 +4340,7 @@ static bool handle_help_cmd(char *command, STRINGLIST *textroot, int *active,
       stringlist_append(textroot, "trace passive -- activate Manchester tracing, without configuration.", 0);
       stringlist_append(textroot, "trace async [target-clock] [bitrate] -- configure asynchronous tracing.", 0);
       stringlist_append(textroot, "trace async passive [bitrate] -- activate asynchronous tracing, without configuration.", 0);
-      stringlist_append(textroot, "trace bitrate [bitrate] -- set only the bitrate, without changing other parameters.", 0);
+      stringlist_append(textroot, "trace bitrate [value] -- set only the bitrate, without changing other parameters.", 0);
       stringlist_append(textroot, "      The target-clock may be given as 12000000 or as 12MHZ.", 0);
       stringlist_append(textroot, "      The bitrate may be given as 115200 or as 115.2kbps.", 0);
       stringlist_append(textroot, "      The option \"passive\" can be abbreviated to \"pasv\".", 0);
@@ -4433,7 +4435,7 @@ static bool handle_info_cmd(char *command, STRINGLIST *textroot, int *active,
     /* only decode the register when it is fully specified (so not for multiple
        matches); also only pop up the "info" view for the info command, or when
        the register has bitfields */
-    if (matches == 1 && is_info || svd_bitfield(periph_name, reg_name, 0, NULL, NULL, NULL) != NULL) {
+    if (matches == 1 && (is_info || svd_bitfield(periph_name, reg_name, 0, NULL, NULL, NULL) != NULL)) {
       /* make cleaned-up name */
       strlcpy(symbol, periph_name, sizearray(symbol));
       strlcat(symbol, "->", sizearray(symbol));
@@ -4932,7 +4934,7 @@ static void trace_info_mode(const SWOSETTINGS *swo, int showchannels, STRINGLIST
   assert(swo->metadata != NULL);
   if (textroot != NULL) {
     strlcpy(msg, "CTF / TSDL: ", sizearray(msg));
-    if (strlen(swo->metadata) > 0) {
+    if (strlen(swo->metadata) > 0 && strcmp(swo->metadata, "-") != 0) {
       const char *basename = lastdirsep(swo->metadata);
       strlcat(msg, (basename != NULL) ? basename + 1 : swo->metadata, sizearray(msg));
     } else {
@@ -4940,7 +4942,7 @@ static void trace_info_mode(const SWOSETTINGS *swo, int showchannels, STRINGLIST
     }
     stringlist_append(textroot, msg, 0);
   } else {
-    if (strlen(swo->metadata) > 0) {
+    if (strlen(swo->metadata) > 0 && strcmp(swo->metadata, "-") != 0) {
       const char *basename = lastdirsep(swo->metadata);
       snprintf(msg, sizearray(msg), "CTF / TSDL = %s\n", (basename != NULL) ? basename + 1 : swo->metadata);
       console_add(msg, STRFLG_STATUS);
@@ -5133,7 +5135,7 @@ static int handle_trace_cmd(const char *command, SWOSETTINGS *swo)
   /* optionally clear a TSDL file */
   ptr = (char*)skipwhite(cmdcopy + 6);  /* reset to start */
   if (TERM_EQU(ptr, "plain", 5)) {
-    swo->metadata[0] = '\0';
+    strcpy(swo->metadata, "-"); /* set it explicitly to "none" */
     memset(ptr, ' ', 5);    /* erase the setting from the string */
     swo->force_plain = 1;
   }
@@ -5302,7 +5304,7 @@ static void serial_info_mode(STRINGLIST *textroot)
 
   if (sermon_isopen()) {
     const char *tdsl = sermon_getmetadata();
-    if (strlen(tdsl) > 0) {
+    if (strlen(tdsl) > 0 && strcmp(tdsl, "-") != 0) {
       sprintf(msg, "CTF mode: %s", tdsl);
       if (textroot != NULL) {
         stringlist_append(textroot, msg, 0);
@@ -6167,7 +6169,7 @@ static void console_view(struct nk_context *ctx, APPSTATE *state,
             sermon_open(state->port_sermon, state->sermon_baud);
             if (sermon_isopen()) {
               sermon_setmetadata(state->swo.metadata);
-              if (strlen(state->swo.metadata) > 0) {
+              if (strlen(state->swo.metadata) > 0 && strcmp(state->swo.metadata, "-") != 0) {
                 ctf_parse_cleanup();
                 ctf_decode_cleanup();
                 ctf_error_notify(CTFERR_NONE, 0, NULL);
@@ -7262,8 +7264,8 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
           /* read a CMSIS "SVD" file if any was provided */
           if (strlen(state->SVDfile) > 0)
             svd_load(state->SVDfile);
-          /* (re-)load a TSDL metadata file. if any was provided */
-          if (strlen(state->swo.metadata) > 0) {
+          /* (re-)load a TSDL metadata file, if any was provided */
+          if (strlen(state->swo.metadata) > 0 && strcmp(state->swo.metadata, "-") != 0) {
             ctf_parse_cleanup();
             ctf_decode_cleanup();
             ctf_error_notify(CTFERR_NONE, 0, NULL);
@@ -8631,7 +8633,8 @@ int main(int argc, char *argv[])
 
     /* GUI */
     guidriver_appsize(&canvas_width, &canvas_height);
-    if (nk_begin(ctx, "MainPanel", nk_rect(0, 0, (float)canvas_width, (float)canvas_height), NK_WINDOW_NO_SCROLLBAR)) {
+    if (nk_begin(ctx, "MainPanel", nk_rect(0, 0, (float)canvas_width, (float)canvas_height), NK_WINDOW_NO_SCROLLBAR)
+        && canvas_width > 0 && canvas_height > 0) {
       nk_splitter_resize(&splitter_hor, (float)canvas_width - 2 * SPACING, RESIZE_TOPLEFT);
       nk_splitter_resize(&splitter_ver, (float)canvas_height - 4 * SPACING, RESIZE_TOPLEFT);
       nk_hsplitter_layout(ctx, &splitter_hor, (float)canvas_height - 2 * SPACING);
@@ -8766,6 +8769,7 @@ int main(int argc, char *argv[])
   stringlist_clear(&appstate.consoleedit_root);
   stringlist_clear(&semihosting_root);
   tracelog_statusclear();
+  tracestring_clear();
   breakpoint_clear();
   svd_clear();
   locals_clear();

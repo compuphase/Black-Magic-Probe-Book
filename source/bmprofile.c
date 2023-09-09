@@ -1550,7 +1550,8 @@ int main(int argc, char *argv[])
 
     /* GUI */
     guidriver_appsize(&canvas_width, &canvas_height);
-    if (nk_begin(ctx, "MainPanel", nk_rect(0, 0, (float)canvas_width, (float)canvas_height), NK_WINDOW_NO_SCROLLBAR)) {
+    if (nk_begin(ctx, "MainPanel", nk_rect(0, 0, (float)canvas_width, (float)canvas_height), NK_WINDOW_NO_SCROLLBAR)
+        && canvas_width > 0 && canvas_height > 0) {
       nk_splitter_resize(&splitter_hor, (float)canvas_width - 3 * SPACING, RESIZE_TOPLEFT);
       nk_hsplitter_layout(ctx, &splitter_hor, (float)canvas_height - 2 * SPACING);
       ctx->style.window.padding.x = 2;
