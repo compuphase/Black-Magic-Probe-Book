@@ -100,8 +100,10 @@ static void cache_grow(size_t extra)
       cache = (unsigned char*)malloc(cache_size);
     } else {
       unsigned char *newcache = (unsigned char*)realloc(cache, cache_size);
-      if (newcache == NULL)
+      if (newcache == NULL) {
         free((void*)cache);
+        cache_size = 0;
+      }
       cache = newcache;
     }
     assert(cache != NULL);  /* should be handled as a run-time error */
@@ -134,8 +136,10 @@ static void msgbuffer_grow(size_t extra)
       msgbuffer = (char*)malloc(msgbuffer_size);
     } else {
       char *newbuffer = (char*)realloc(msgbuffer, msgbuffer_size);
-      if (newbuffer == NULL)
+      if (newbuffer == NULL) {
         free((void*)msgbuffer);
+        msgbuffer_size = 0;
+      }
       msgbuffer = newbuffer;
     }
     assert(msgbuffer != NULL);
@@ -379,6 +383,10 @@ static char *fmt_int64(int64_t num, char *str, int base)
 
 static void format_field(const char *fieldname, const CTF_TYPE *type, const unsigned char *data)
 {
+  assert(fieldname);
+  assert(type);
+  assert(data);
+
   msgbuffer_append(fieldname, -1);
   msgbuffer_append(" = ", 3);
 
@@ -466,6 +474,12 @@ static void format_field(const char *fieldname, const CTF_TYPE *type, const unsi
     msgbuffer_append(" }", 2);
     break;
 
+  case CLASS_BOOL:
+    assert(type->size == 8);
+    assert(!(type->flags & TYPEFLAG_SIGNED));
+    msgbuffer_append(*data ? "true" : "false", -1);
+    break;
+
   default:
     assert(0);
   } /* switch (typeclass) */
@@ -478,7 +492,6 @@ int ctf_decode(const unsigned char *stream, size_t size, long channel)
   if (event_count(-1) == 0)     /* no events defined, nothing to do */
     return 0;
 
-  cache_reset();
   result = 0;
   idx = 0;
 
@@ -520,6 +533,7 @@ restart:
       }
     }
     if (state == STATE_SCAN_MAGIC) {
+      /* scanning for header (so cache check failed) */
       while (idx < size) {
         while (idx < size && stream[idx] != magic[0])
           idx++;  /* find first byte of the magic */
@@ -528,7 +542,7 @@ restart:
           len = pkt_header->header.magic_size / 8;
           if (idx + len > size)
             len = size - idx;
-          if (memcmp(stream, magic + cache_filled, len) == 0) {
+          if (memcmp(stream + idx, magic + cache_filled, len) == 0) {
             /* match, check whether this is still a patial match */
             if (len == pkt_header->header.magic_size / 8u) {
               state++;  /* full match -> advance state & restart */
@@ -712,6 +726,7 @@ restart:
     switch (field->type.typeclass) {
     case CLASS_INTEGER:
     case CLASS_FLOAT:
+    case CLASS_BOOL:
     case CLASS_ENUM:
     case CLASS_STRUCT:
       assert(field->type.size / 8 > 0);

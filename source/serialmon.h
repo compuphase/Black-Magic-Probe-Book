@@ -25,7 +25,7 @@ bool   sermon_isopen(void);
 void   sermon_clear(void);
 int    sermon_countlines(void);
 void   sermon_rewind(void);
-const char *sermon_next(void);
+const char *sermon_next(bool *is_error);
 
 const char *sermon_getport(int translated);
 int    sermon_getbaud(void);
@@ -33,6 +33,7 @@ int    sermon_getbaud(void);
 void sermon_setmetadata(const char *tsdlfile);
 const char *sermon_getmetadata(void);
 
+void sermon_statusmsg(const char *message, bool is_error);
 int sermon_save(const char *filename);
 
 #endif /* _SERIALMON_H */

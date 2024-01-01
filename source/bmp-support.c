@@ -231,9 +231,9 @@ bool bmp_connect(int probe, const char *ipaddress)
         gdbrsp_xmit("qRcmd,version", -1);
         do {
           size = gdbrsp_recv(buffer, sizearray(buffer)-1, 250);
-        } while (size > 0 && size < 2);
+        } while (!testreply(buffer, size, "OK"));
         if (!testreply(buffer, size, "OK")) {
-          notice(BMPERR_NORESPONSE, "No response on %s", devname);
+          notice(BMPERR_NORESPONSE, "No valid response on %s", devname);
           hCom = rs232_close(hCom);
           return false;
         }
@@ -1259,6 +1259,9 @@ bool bmp_dumpflash(const char *path, unsigned flashsize)
  *                        this parameter. This parameter may be NULL.
  *
  *  \return true on success, false on failure.
+ *
+ *  \note Versions 1.6 .. 1.8.2: <serial>:<interface>:<endpoint>
+ *        Version 1.9: Trace enabled for BMP serial <serial>, USB EP <endpoint>
  */
 static bool bmp_parsetracereply(const char *reply, unsigned char *endpoint)
 {
@@ -1273,7 +1276,7 @@ static bool bmp_parsetracereply(const char *reply, unsigned char *endpoint)
       *endpoint = (unsigned char)ep;
   }
 
-  /* reply changed in release 1.9: "Trace enabled for BMP serial <serial>, USB EP <endpoint>>" */
+  /* reply changed in release 1.9: "Trace enabled for BMP serial <serial>, USB EP <endpoint>" */
   if (!ok && strncmp(reply, "Trace enabled", 13) == 0) {
     ptr = strstr(reply, "USB EP");
     if (ptr != NULL) {
@@ -1315,10 +1318,29 @@ bool bmp_enabletrace(int async_bitrate, unsigned char *endpoint)
     if (rcvd > 0)
       break;
   }
-  /* a correct answer starts with 'o' and contains a serial number, the
-     interface for trace capture (0x05) and the endpoint (0x85, on the original
-     Black Magic Probe) */
-  buffer[rcvd] = '\0';
+  buffer[rcvd] = '\0';  /* force to zero-terminate */
+
+  /* the probe answers with a message (which starts with 'o' in the GDB RSP
+     protocol), with the USB endpoint for trace capture (0x85, on the original
+     Black Magic Probe); plus possibly the probe's serial number and the
+     interface for trace capture (the format of the message depends on the
+     version of the firmware) */
+
+  /* probes implementing asynchronous mode will post their baudrate first */
+  if (strncmp(buffer, "oBaudrate:", 10) == 0) {
+    /* get another packet which should contain the actual EP number */
+    rcvd = gdbrsp_recv(buffer, sizearray(buffer), 250);
+    buffer[rcvd] = '\0';
+  }
+  /* probes implementing Manchester mode will post their channel decode mask
+     first: 'Channel mask: 00000000000000000000000000000000' */
+  if (strncmp(buffer, "oChannel mask:", 14) == 0) {
+    /* drain the bits of mask coming in separate putchar-like packets */
+    do {
+      rcvd = gdbrsp_recv(buffer, sizearray(buffer), 250);
+    } while (rcvd > 0 && rcvd < 3);
+    buffer[rcvd] = '\0';
+  }
   bool ok = (buffer[0] == 'o') && bmp_parsetracereply(buffer + 1, endpoint);
   if (!ok)
     notice(BMPERR_MONITORCMD, "Trace setup failed");

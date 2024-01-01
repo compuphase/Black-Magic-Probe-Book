@@ -938,7 +938,7 @@ static void handle_stateaction(APPSTATE *state)
 {
   if (state->reinitialize == 1) {
     int result;
-    char msg[100];
+    char msg[200];
     tracelog_statusclear();
     tracestring_clear();
     trace_overflowerrors(true);
@@ -1037,7 +1037,7 @@ static void handle_stateaction(APPSTATE *state)
     case TRACESTAT_OK:
       if (state->init_target || state->init_bmp) {
         assert(strlen(state->mcu_family) > 0);
-        sprintf(msg, "Connected [%s]", state->mcu_family);
+        snprintf(msg, sizearray(msg), "Connected [%s]", state->mcu_family);
         tracelog_statusmsg(TRACESTATMSG_BMP, msg, BMPSTAT_SUCCESS);
       } else {
         tracelog_statusmsg(TRACESTATMSG_BMP, "Listening (passive mode)...", BMPSTAT_SUCCESS);
@@ -1047,10 +1047,13 @@ static void handle_stateaction(APPSTATE *state)
     case TRACESTAT_NO_INTERFACE:
     case TRACESTAT_NO_DEVPATH:
     case TRACESTAT_NO_PIPE:
-      strlcpy(msg, "Trace interface not available", sizearray(msg));
-      if (state->probe == state->netprobe && state->swomode != MODE_ASYNC)
-        strlcat(msg, "; try NRZ/Async mode", sizearray(msg));
-      tracelog_statusmsg(TRACESTATMSG_BMP, msg, BMPERR_GENERAL);
+      { int loc;
+        unsigned long error = trace_errno(&loc);
+        snprintf(msg, sizearray(msg), "Trace interface not available (%d), error %d:%lu", state->trace_status, loc, error);
+        if (state->probe == state->netprobe && state->swomode != MODE_ASYNC)
+          strlcat(msg, "; try NRZ/Async mode", sizearray(msg));
+        tracelog_statusmsg(TRACESTATMSG_BMP, msg, BMPERR_GENERAL);
+      }
       break;
     case TRACESTAT_NO_ACCESS:
       { int loc;

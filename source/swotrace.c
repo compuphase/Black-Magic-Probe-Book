@@ -361,8 +361,16 @@ int tracestring_process(bool enabled)
       size_t buflen = 0;
       unsigned len;
 
-      if (itm_cachefilled>0) {
-        int skip = 0;
+      /* we require that if a packet is incomplete, the remainder follows
+         immediately behind it; clear the cache if there is too long of a gap
+         from the previous packet */
+      static double prev_timestamp = 0;
+      double delta_stamp = trace_queue[tracequeue_head].timestamp - prev_timestamp;
+      if (delta_stamp < 0.0 || delta_stamp > 0.05)
+        itm_cachefilled = 0;
+      prev_timestamp = trace_queue[tracequeue_head].timestamp;
+
+      if (itm_cachefilled > 0) {
         chan = ITM_CHANNEL(itm_cache[0]);
         len = ITM_LENGTH(itm_cache[0]);
         if (len > itm_datasize) {
@@ -375,18 +383,26 @@ int tracestring_process(bool enabled)
           }
         }
         assert(itm_cachefilled <= 4);
-        if (itm_cachefilled > 1) {
-          /* copy data bytes still in the cache */
-          memcpy(buffer + buflen, itm_cache + 1, itm_cachefilled - 1);
-          buflen += itm_cachefilled - 1;
+        int append = len - (itm_cachefilled - 1);
+        assert(append > 0);     /* there must be data left to copy (otherwise nothing would be cached) */
+        if (append > pktlen) {
+          /* data left in the packet (combined with the cache) is still too small
+             to make a complete packet -> append to cache */
+          memcpy(itm_cache + itm_cachefilled, pktdata, pktlen);
+          itm_cachefilled += pktlen;
+          pktlen = 0;
+        } else {
+          if (itm_cachefilled > 1) {
+            /* copy data bytes still in the cache */
+            memcpy(buffer + buflen, itm_cache + 1, itm_cachefilled - 1);
+            buflen += itm_cachefilled - 1;
+          }
+          memcpy(buffer + buflen, pktdata, append);
+          buflen += append;
+          pktdata += append;
+          pktlen -= append;
+          itm_cachefilled = 0;
         }
-        skip = len - (itm_cachefilled - 1);
-        assert(skip > 0);       /* there must be data left to copy (otherwise nothing would be cached) */
-        memcpy(buffer + buflen, pktdata, skip);
-        buflen += skip;
-        pktdata += skip;
-        pktlen -= skip;
-        itm_cachefilled = 0;
       } else {
         assert(pktlen > 0);
         chan = ITM_CHANNEL(*pktdata);
@@ -530,7 +546,7 @@ int tracestring_save(const char *filename)
     return 0;
   }
 
-  fprintf(fp, "Number,Name,Timestamp,Text\n");
+  fprintf(fp, "Channel,Name,Timestamp,Text\n");
   for (item = tracestring_root.next; item != NULL; item = item->next) {
     memcpy(buffer, item->text, item->length);
     buffer[item->length] = '\0';
@@ -900,7 +916,7 @@ static BOOL usb_ConfigEndpoint(USB_INTERFACE_HANDLE hUSB, unsigned char endpoint
 }
 
 /** get_timestamp() returns a precision timestamp; the returned value is in
- *  seconds, but the fractional part has a precision of at least milliseconds.
+ *  seconds, but the fractional part has a precision of at least a millisecond.
  */
 double get_timestamp(void)
 {
@@ -939,6 +955,7 @@ static DWORD __stdcall trace_read(LPVOID arg)
   } else if (WinUsb_IsActive()) {
     for ( ;; ) {
       uint32_t numread = 0;
+      double tstamp = get_timestamp();
       if (_WinUsb_ReadPipe(hUSBiface, usbTraceEP, buffer, sizearray(buffer), &numread, NULL)) {
         /* add the packet to the queue */
         if (numread > 0) {
@@ -946,7 +963,7 @@ static DWORD __stdcall trace_read(LPVOID arg)
           if (next != tracequeue_head) {
             memcpy(trace_queue[tracequeue_tail].data, buffer, numread);
             trace_queue[tracequeue_tail].length = numread;
-            trace_queue[tracequeue_tail].timestamp = get_timestamp();
+            trace_queue[tracequeue_tail].timestamp = tstamp;//get_timestamp();
             tracequeue_tail = next;
             PostMessage((HWND)guidriver_apphandle(), WM_USER, 0, 0L); /* just a flag to wake up the GUI */
           } else {

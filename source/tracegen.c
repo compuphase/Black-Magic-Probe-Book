@@ -119,6 +119,9 @@ static const char *type_to_string(const CTF_TYPE *type, char *typedesc, int size
       strlcat(typedesc, "double", size);
     }
     break;
+  case CLASS_BOOL:
+    strlcat(typedesc, "_Bool", size);
+    break;
   case CLASS_STRING:
     strlcat(typedesc, "const char*", size);
     break;
@@ -244,16 +247,19 @@ void generate_prototypes(FILE *fp, unsigned flags, const char *trace_func,
               "#ifndef TRACEGEN_PROTOTYPE_FUNCTIONS\n"
               "#define TRACEGEN_PROTOTYPE_FUNCTIONS\n\n");
 
-  if (flags & FLAG_C99)
+  if (flags & FLAG_C99) {
+    fprintf(fp, "#include <stdbool.h>\n");
     fprintf(fp, "#include <stdint.h>\n");
+  }
   if (includepaths != NULL) {
     const PATHLIST *path;
-    for (path = includepaths->next; path != NULL; path = path->next) {
+    for (path = includepaths->next; path != NULL; path = path->next)
       if (path->system)
-        fprintf(fp, "#include <%s>\n\n", path->path);
-      else
-        fprintf(fp, "#include \"%s\"\n\n", path->path);
-    }
+        fprintf(fp, "#include <%s>\n", path->path);
+    for (path = includepaths->next; path != NULL; path = path->next)
+      if (!path->system)
+        fprintf(fp, "#include \"%s\"\n", path->path);
+    fprintf(fp, "\n");
   }
 
   assert(trace_func != NULL && strlen(trace_func) > 0);
@@ -454,8 +460,9 @@ void generate_funcstubs(FILE *fp, unsigned flags, const char *trace_func,
           fprintf(fp, "  memcpy(buffer + %d, ", pos);
         else
           fprintf(fp, "  memcpy(buffer + %d + %s, ", pos, var_index);
-        if (field->type.typeclass == CLASS_INTEGER || field->type.typeclass == CLASS_FLOAT
-            || field->type.typeclass == CLASS_ENUM || field->type.typeclass == CLASS_STRUCT)
+        if (field->type.typeclass == CLASS_INTEGER || field->type.typeclass == CLASS_BOOL
+            || field->type.typeclass == CLASS_FLOAT || field->type.typeclass == CLASS_ENUM
+            || field->type.typeclass == CLASS_STRUCT)
           fprintf(fp, "&");
         fprintf(fp, "%s, ", field->name);
         if (field->type.typeclass == CLASS_STRING) {

@@ -32,7 +32,7 @@
 #define BMP_IF_UART       2     /* interface 2 -> 3.3V TTL UART */
 #define BMP_IF_DFU        4
 #define BMP_IF_TRACE      5
-#define BMP_EP_TRACE      0x85  /* endpoint 5 is bulk data endpoint for trace interface */
+#define BMP_EP_TRACE      0x85  /* endpoint 5 is bulk data endpoint for trace interface on the original BMP; may be overruled */
 
 #define BMP_IF_SERIAL     9     /* pseudo-interface for getting the serial number */
 

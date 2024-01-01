@@ -21,6 +21,7 @@
 #include <assert.h>
 #include <ctype.h>
 #include <stdarg.h>
+#include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -113,6 +114,7 @@ typedef struct tagINCLUDEFILE {
 } INCLUDEFILE;
 #define INCLUDE_NESTING 8
 
+static char rootpath[_MAX_PATH] = "";
 static FILE *inputfile = NULL;
 static INCLUDEFILE includestack[INCLUDE_NESTING] = { NULL };
 static char *linebuffer = NULL;
@@ -215,7 +217,7 @@ static int recent_error = -1;
     vsprintf(message, "Clock must be mapped to integer type", args);
     break;
   case CTFERR_EXCEED_INCLUDES:
-    vsprintf(message, "#includes too deeply nested", args);
+    vsprintf(message, "Includes too deeply nested", args);
     break;
   default:
     assert(code != CTFERR_NONE);
@@ -510,7 +512,7 @@ static const char *token_keywords[] = {
   "event", "fields", "float", "floating_point", "header", "int", "integer",
   "long", "packet", "short", "signed", "stream", "string", "struct", "trace",
   "typealias", "typedef", "unsigned", "variant", "void",
-  "#include" };
+  "include" };
 static const char *token_operators[] = {
   ":=", "->", "::", "..." };
 static const char *token_generic[] = {
@@ -1583,6 +1585,10 @@ static void parse_typealias(void)
 
 static void parse_trace(void)
 {
+  /* check whether we are at the root level; in included files, the "trace"
+     block is still parsed, but not stored */
+  bool rootlevel = (includestack[0].file == NULL);
+
   token_need('{');
   while (!token_match('}')) {
     int tok = token_next();
@@ -1592,28 +1598,35 @@ static void parse_trace(void)
       token_need('=');
       if (strcmp(identifier, "major") == 0) {
         token_need(TOK_LINTEGER);
-        ctf_trace.major = (uint8_t)token_getlong();
+        if (rootlevel)
+          ctf_trace.major = (uint8_t)token_getlong();
       } else if (strcmp(identifier, "minor") == 0) {
         token_need(TOK_LINTEGER);
-        ctf_trace.minor = (uint8_t)token_getlong();
+        if (rootlevel)
+          ctf_trace.minor = (uint8_t)token_getlong();
       } else if (strcmp(identifier, "version") == 0) {
         token_need(TOK_LFLOAT);
-        ctf_trace.major = (uint8_t)token_getreal();
-        ctf_trace.minor = (uint8_t)(token_getreal() - ctf_trace.major) * 10;
+        if (rootlevel) {
+          ctf_trace.major = (uint8_t)token_getreal();
+          ctf_trace.minor = (uint8_t)(token_getreal() - ctf_trace.major) * 10;
+        }
       } else if (strcmp(identifier, "byte_order") == 0) {
         token_need(TOK_IDENTIFIER);
-        ctf_trace.byte_order = (strcmp(token_gettext(), "be") == 0) ? BYTEORDER_BE : BYTEORDER_LE;
+        if (rootlevel)
+          ctf_trace.byte_order = (strcmp(token_gettext(), "be") == 0) ? BYTEORDER_BE : BYTEORDER_LE;
       } else if (strcmp(identifier, "uuid") == 0) {
         token_need(TOK_LSTRING);
-        /* convert string to byte array */
-        memset(ctf_trace.uuid, 0, sizearray(ctf_trace.uuid));
-        const char *ptr = token_gettext();
-        for (int idx = 0; idx < sizearray(ctf_trace.uuid); idx++) {
-          if (*ptr == '-')
-            ptr++;
-          if (!isxdigit(ptr[0]) || !isxdigit(ptr[1]))
-            break;
-          ctf_trace.uuid[idx] = (uint8_t)((hexdigit(ptr[0]) << 4) | hexdigit(ptr[1]));
+        if (rootlevel) {
+          /* convert string to byte array */
+          memset(ctf_trace.uuid, 0, sizearray(ctf_trace.uuid));
+          const char *ptr = token_gettext();
+          for (int idx = 0; idx < sizearray(ctf_trace.uuid); idx++) {
+            if (*ptr == '-')
+              ptr++;
+            if (!isxdigit(ptr[0]) || !isxdigit(ptr[1]))
+              break;
+            ctf_trace.uuid[idx] = (uint8_t)((hexdigit(ptr[0]) << 4) | hexdigit(ptr[1]));
+          }
         }
       }
       token_need(';');
@@ -1920,7 +1933,7 @@ static void parse_event(void)
     }
   }
 
-  /* mark stream that this event is part of as active */
+  /* mark the stream (that this event is part of) as active */
   if (stream_by_id(event->stream_id) == NULL
       && event_count(event->stream_id) == 2) /* warn for the 2nd event in this stream, but not for the 3rd, 4th, etc, */
     ctf_error(CTFERR_STREAM_NO_DEF, event->stream_id);
@@ -1938,7 +1951,35 @@ static void do_include(void)
   } else {
     if (token_need(TOK_LSTRING) > 0) {
       const char *name = token_gettext();
+#     if defined _Windows || defined _WIN32 || defined WIN32 || defined __WIN32__
+        /* on Windows, replace '/' by '\\' */
+        char *path = NULL;
+        if (strchr(name, '/') != NULL) {
+          path = strdup(name);
+          if (path) {
+            char *ptr;
+            while ((ptr = strchr(path, '/')) != NULL)
+              *ptr = '\\';
+            name = path;
+          }
+        }
+#     endif
       FILE *fp = fopen(name, "rt");
+      if (fp == NULL && rootpath[0] != '\0' && name[0] != '/' && name[0] != '\\') {
+        /* file open failed, retry with the path prefix of the root TSDL file */
+        char *fullpath = malloc(strlen(name) + strlen(rootpath) + 1);
+        if (fullpath) {
+          strcpy(fullpath, rootpath);
+          strcat(fullpath, name);
+#         if defined _Windows || defined _WIN32 || defined WIN32 || defined __WIN32__
+            char *ptr;
+            while ((ptr = strchr(fullpath, '/')) != NULL)
+              *ptr = '\\';
+#         endif
+          fp = fopen(fullpath, "rt");
+          free(fullpath);
+        }
+      }
       if (fp != NULL) {
         includestack[top].file = inputfile;
         includestack[top].linenr = 0;
@@ -1946,6 +1987,10 @@ static void do_include(void)
       } else {
         ctf_error(CTFERR_FILEOPEN, name);
       }
+      #if defined _Windows || defined _WIN32 || defined WIN32 || defined __WIN32__
+        if (path)
+          free(path);
+      #endif
     }
   }
 }
@@ -1956,6 +2001,23 @@ static void do_include(void)
  */
 int ctf_parse_init(const char *filename)
 {
+  rootpath[0] = '\0';
+  if (filename[0] == '/' || filename[0] == '\\'
+      || (filename[0] == '.' || filename[1] == '.' && (filename[2] == '/' || filename[2] == '\\'))
+      || (strlen(filename) >= 3 && filename[1] == ':' && filename[2] == '\\'))
+  {
+    /* save the path prefix, to be able to complete partial paths in the "include"
+       directive */
+    strlcpy(rootpath, filename, sizearray(rootpath));
+    char *ptr;
+    if (filename[0] == '/' || (filename[0] == '.' && filename[2] == '/'))
+      ptr = strrchr(rootpath, '/');
+    else
+      ptr = strrchr(rootpath, '\\');
+    assert(ptr != NULL);
+    *(ptr + 1) = '\0';
+  }
+
   if (!readline_init(filename))
     return 0; /* error message already set via ctf_error() */
   if (!token_init())
@@ -1972,6 +2034,7 @@ int ctf_parse_init(const char *filename)
   type_init(&type_root, "uint32_t", CLASS_INTEGER, 32, TYPEFLAG_WEAK);
   type_init(&type_root, "int64_t", CLASS_INTEGER, 64, TYPEFLAG_WEAK | TYPEFLAG_SIGNED);
   type_init(&type_root, "uint64_t", CLASS_INTEGER, 64, TYPEFLAG_WEAK);
+  type_init(&type_root, "bool", CLASS_BOOL, 8, TYPEFLAG_WEAK);
 
   error_count = 0;
 

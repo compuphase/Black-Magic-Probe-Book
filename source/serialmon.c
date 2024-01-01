@@ -70,6 +70,8 @@ typedef struct tagSERIALSTRING {
   unsigned short flags; /* used to keep state while decoding plain trace messages */
 } SERIALSTRING;
 
+#define FLG_EOL     0x01
+#define FLG_ERROR   0x02
 
 #define SERIALSTRING_MAXLENGTH 256
 static SERIALSTRING sermon_root = { NULL, NULL };
@@ -125,14 +127,14 @@ static void sermon_addstring(const unsigned char *buffer, size_t length)
       /* see whether to append to the recent string, or to add a new string */
       if (sermon_tail != NULL) {
         if (ch == '\r' || ch == '\n') {
-          sermon_tail->flags |= 0x01;  /* on newline, create a new string */
+          sermon_tail->flags |= FLG_EOL;  /* on newline, create a new string */
           continue;
         } else if (sermon_tail->length >= (SERIALSTRING_MAXLENGTH-1)) {
-          sermon_tail->flags |= 0x01;  /* line length limit */
+          sermon_tail->flags |= FLG_EOL;  /* line length limit */
         }
       }
 
-      if (sermon_tail != NULL && (sermon_tail->flags & 0x01) == 0) {
+      if (sermon_tail != NULL && (sermon_tail->flags & FLG_EOL) == 0) {
         /* append text to the current string */
         assert(sermon_tail->length < SERIALSTRING_MAXLENGTH);
         sermon_tail->text[sermon_tail->length++] = ch;
@@ -217,19 +219,13 @@ bool sermon_open(const char *port, int baud)
   hCom = rs232_open(port, baud, 8, 1, PAR_NONE, FLOWCTRL_NONE);
   if (hCom == NULL)
     return false;
+  rs232_flush(hCom);
 
   if (thrd_create(&serial_thread, sermon_process, NULL) != thrd_success) {
     hCom = rs232_close(hCom);
     return false;
   }
   serial_thread_valid = true;
-
-  rs232_flush(hCom);
-# if defined WIN32 || defined _WIN32
-    Sleep(50);
-# else
-    usleep(50*1000);
-# endif
   sermon_clear();
 
   strcpy(comport, port);
@@ -283,11 +279,18 @@ void sermon_rewind(void)
   sermon_head = &sermon_root;
 }
 
-const char *sermon_next(void)
+const char *sermon_next(bool *is_error)
 {
   if (sermon_head != NULL)
     sermon_head = sermon_head->next;
-  return (sermon_head == NULL) ? NULL : sermon_head->text;
+  if (sermon_head == NULL) {
+    if (is_error)
+      *is_error = false;
+    return NULL;
+  }
+  if (is_error)
+    *is_error = ((sermon_head->flags & FLG_ERROR) != 0);
+  return sermon_head->text;
 }
 
 const char *sermon_getport(int translated)
@@ -310,6 +313,28 @@ void sermon_setmetadata(const char *tsdlfile)
 const char *sermon_getmetadata(void)
 {
   return tsdl_metadata;
+}
+
+void sermon_statusmsg(const char *message, bool is_error)
+{
+  SERIALSTRING *item = malloc(sizeof(SERIALSTRING));
+  if (item != NULL) {
+    memset(item, 0, sizeof(SERIALSTRING));
+    item->text = strdup(message);
+    if (item->text != NULL) {
+      item->flags = FLG_EOL;
+      if (is_error)
+        item->flags |= FLG_ERROR;
+      /* append to tail */
+      SERIALSTRING *tail = &sermon_root;
+      while (tail->next != NULL)
+        tail = tail->next;
+      tail->next = item;
+      sermon_tail = item;
+    } else {
+      free(item); /* adding a new string failed */
+    }
+  }
 }
 
 int sermon_save(const char *filename)

@@ -892,7 +892,7 @@ static int console_autocomplete(char *text, size_t textsize, const DWARF_SYMBOLL
     { "quit", NULL, NULL },
     { "reset", NULL, "hard load" },
     { "run", NULL, NULL },
-    { "semihosting", NULL, "clear" },
+    { "semihosting", NULL, "clear save" },
     { "serial", NULL, "clear disable enable info plain save %path" },
     { "set", NULL, "%var" },
     { "start", NULL, NULL },
@@ -2944,6 +2944,9 @@ int ctf_error_notify(int code, int linenr, const char *message)
       strlcpy(msg, "TSDL file error: ", sizearray(msg));
     strlcat(msg, message, sizearray(msg));
     tracelog_statusmsg(TRACESTATMSG_CTF, msg, 0);
+    if (sermon_isopen)
+      sermon_statusmsg(msg, true);
+    console_add(msg, STRFLG_ERROR);
   }
   return 0;
 }
@@ -4312,6 +4315,7 @@ static bool handle_help_cmd(char *command, STRINGLIST *textroot, int *active,
       stringlist_append(textroot, "Semihosting options.", 0);
       stringlist_append(textroot, "", 0);
       stringlist_append(textroot, "semimosting clear -- clear the semihosting monitor view (delete contents).", 0);
+      stringlist_append(textroot, "semihosting save [filename] -- save the contents in the semihosting monitor to a file.", 0);
     } else if (TERM_EQU(cmdptr, "serial", 6)) {
       stringlist_append(textroot, "Configure the serial monitor.", 0);
       stringlist_append(textroot, "", 0);
@@ -5003,7 +5007,6 @@ static void trace_info_mode(const SWOSETTINGS *swo, int showchannels, STRINGLIST
  */
 static int handle_trace_cmd(const char *command, SWOSETTINGS *swo)
 {
-  char *ptr, *cmdcopy;
   unsigned newmode = SWOMODE_NONE;
   int tsdl_set = 0;
 
@@ -5013,12 +5016,28 @@ static int handle_trace_cmd(const char *command, SWOSETTINGS *swo)
     return 0;
 
   /* make a copy of the command string, to be able to clear parts of it */
-  cmdcopy = alloca(strlen(command) + 1);
+  char *cmdcopy = alloca(strlen(command) + 1);
   strcpy(cmdcopy, command);
-  ptr = (char*)skipwhite(cmdcopy + 5);
+  char *ptr = (char*)skipwhite(cmdcopy + 5);
 
   if (*ptr == '\0' || TERM_EQU(ptr, "info", 4))
     return 3; /* if only "trace" is typed, interpret it as "trace info" */
+
+  char *opt_save;
+  if ((opt_save = strstr(cmdcopy, "save")) != NULL && TERM_END(opt_save, 4)) {
+    /* get the filename */
+    const char *ptr_name = skipwhite(opt_save + 4);
+    const char *tail = ptr_name;
+    while (*tail > ' ')
+      tail++;
+    if (tail != ptr_name) {
+      char *name = alloca((tail - ptr_name + 1) * sizeof(char));
+      strncpy(name, ptr_name, tail - ptr_name);
+      name[tail - ptr_name] = '\0';
+      tracestring_save(name);
+    }
+    memset(opt_save, ' ', tail - opt_save);  /* erase the "save" parameter from the string (plus the filename) */
+  }
 
   char *opt_clear;
   if ((opt_clear = strstr(cmdcopy, "clear")) != NULL && TERM_END(opt_clear, 5)) {
@@ -5235,6 +5254,30 @@ static bool handle_semihosting_cmd(const char *command)
   const char *ptr = (char*)skipwhite(command + 11);
   if (TERM_EQU(ptr, "clear", 5)) {
     stringlist_clear(&semihosting_root);
+  } else if (TERM_EQU(ptr, "save", 4)) {
+    ptr = skipwhite(ptr + 4);
+    if (*ptr != '\0') {
+      FILE *fp = fopen(ptr, "wt");
+      if (fp != NULL) {
+        int count = 0;
+        STRINGLIST *item = semihosting_root.next;
+        while (item != NULL) {
+          assert(item->text != NULL);
+          fprintf(fp, "%s\n", item->text);
+          item = item->next;
+          count++;
+        }
+        fclose(fp);
+        char message[100];
+        sprintf(message,"%d lines saved\n", count);
+        console_add(message, STRFLG_STATUS);
+      } else {
+        console_add("Failed to save to file\n", STRFLG_ERROR);
+      }
+    } else {
+      console_add("Missing filename\n", STRFLG_ERROR);
+    }
+    return 4;
   }
 
   return true;
@@ -6968,8 +7011,9 @@ static void panel_serialmonitor(struct nk_context *ctx, APPSTATE *state,
       int linecount = 0;
       float lineheight = 0;
       const char *text;
+      bool is_error;
       sermon_rewind();
-      while ((text = sermon_next()) != NULL) {
+      while ((text = sermon_next(&is_error)) != NULL) {
         nk_layout_row_begin(ctx, NK_STATIC, opt_fontsize, 1);
         if (lineheight < 0.01) {
           struct nk_rect rcline = nk_layout_widget_bounds(ctx);
@@ -6979,14 +7023,16 @@ static void panel_serialmonitor(struct nk_context *ctx, APPSTATE *state,
         assert(font != NULL && font->width != NULL);
         float textwidth = font->width(font->userdata, font->height, text, textlength) + 10;
         nk_layout_row_push(ctx, textwidth);
-        nk_text(ctx, text, textlength, NK_TEXT_LEFT);
+        if (is_error)
+          nk_text_colored(ctx,text,textlength,NK_TEXT_LEFT, COLOUR_FG_RED);
+        else
+          nk_text(ctx,text,textlength,NK_TEXT_LEFT);
         nk_layout_row_end(ctx);
         linecount += 1;
       }
       if (!sermon_isopen()) {
-        struct nk_color clr = COLOUR_FG_RED;
         nk_layout_row_dynamic(ctx, opt_fontsize, 1);
-        nk_label_colored(ctx, "No port opened", NK_TEXT_LEFT, clr);
+        nk_label_colored(ctx, "No port opened", NK_TEXT_LEFT, COLOUR_FG_RED);
         linecount += 1;
       }
       nk_group_end(ctx);
@@ -7739,6 +7785,7 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
           item->flags |= STRFLG_HANDLED;
         }
         if (item != NULL && strncmp(item->text, "warning:", 8) == 0) {
+          item->flags |= STRFLG_HANDLED;
           MOVESTATE(state, STATE_DOWNLOAD);
           if (!state->autodownload) {
             /* make the mismatch stand out */
@@ -8574,6 +8621,7 @@ int main(int argc, char *argv[])
   source_execfile = -1;
   source_execline = 0;
   disasm_init(&appstate.armstate, DISASM_ADDRESS | DISASM_INSTR | DISASM_COMMENT);
+  ctf_decode_reset();
 
   ctx = guidriver_init("BlackMagic Debugger", canvas_width, canvas_height,
                        GUIDRV_RESIZEABLE | GUIDRV_TIMER, opt_fontstd, opt_fontmono, opt_fontsize);
