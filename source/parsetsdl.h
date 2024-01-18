@@ -3,7 +3,7 @@
  * parser is the base for the tracegen code generation utility and the CTF
  * binary stream parser.
  *
- * Copyright 2019-2023 CompuPhase
+ * Copyright 2019-2024 CompuPhase
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -32,35 +32,36 @@ enum {
 };
 #define TYPEFLAG_SIGNED 0x01
 #define TYPEFLAG_UTF8   0x02
-#define TYPEFLAG_STRONG 0x04    /* strong type, from typedef or typealias */
-#define TYPEFLAG_WEAK   0x08    /* weak type, predefined, but may be overruled */
+#define TYPEFLAG_STRONG 0x04  /* strong type, from typedef or typealias */
+#define TYPEFLAG_WEAK   0x08  /* weak type, predefined, but may be overruled */
 
 enum {
   CTFERR_NONE,
-  CTFERR_FILEOPEN,      /* file open error (file ... not found?) */
-  CTFERR_MEMORY,        /* memory allocation error */
-  CTFERR_LONGLINE,      /* line too long */
-  CTFERR_BLOCKCOMMENT,  /* comment not closed */
-  CTFERR_STRING,        /* literal string is not terminated */
-  CTFERR_INVALIDTOKEN,  /* invalid token */
-  CTFERR_NUMBER,        /* invalid number */
-  CTFERR_SYNTAX_MAIN,   /* syntax error at main level */
-  CTFERR_NEEDTOKEN,     /* expected token ... */
-  CTFERR_INVALIDFIELD,  /* unknown field name ... */
-  CTFERR_UNKNOWNTYPE,   /* type ... not found */
-  CTFERR_WRONGTYPE,     /* incorrect type for the field or type */
-  CTFERR_TYPE_SIZE,     /* type declaration lacks a size */
+  CTFERR_FILEOPEN,            /* file open error (file ... not found?) */
+  CTFERR_MEMORY,              /* memory allocation error */
+  CTFERR_LONGLINE,            /* line too long */
+  CTFERR_BLOCKCOMMENT,        /* comment not closed */
+  CTFERR_STRING,              /* literal string is not terminated */
+  CTFERR_INVALIDTOKEN,        /* invalid token */
+  CTFERR_NUMBER,              /* invalid number */
+  CTFERR_SYNTAX_MAIN,         /* syntax error at main level */
+  CTFERR_NEEDTOKEN,           /* expected token ... */
+  CTFERR_INVALIDFIELD,        /* unknown field name ... */
+  CTFERR_UNKNOWNTYPE,         /* type ... not found */
+  CTFERR_WRONGTYPE,           /* incorrect type for the field or type */
+  CTFERR_TYPE_SIZE,           /* type declaration lacks a size */
   CTFERR_DUPLICATE_ID,
-  CTFERR_UNKNOWNSTREAM, /* stream with name ... is not defined */
-  CTFERR_UNKNOWNCLOCK,  /* clock with name ... is not defined */
-  CTFERR_STREAM_NO_DEF, /* no definition for stream id ... (required for event header) */
-  CTFERR_STREAM_NOTSET, /* event ... is not assigned to a stream */
-  CTFERR_TYPE_REDEFINE, /* type ... was already defined */
-  CTFERR_NAMEREQUIRED,  /* a name for ... is required */
-  CTFERR_DUPLICATE_NAME,/* duplicate name ... */
-  CTFERR_CLOCK_IS_INT,  /* clock must be mapped to integer type */
+  CTFERR_UNKNOWNSTREAM,       /* stream with name ... is not defined */
+  CTFERR_UNKNOWNCLOCK,        /* clock with name ... is not defined */
+  CTFERR_UNKNOWNVALUE,        /* unknown field value */
+  CTFERR_STREAM_NO_DEF,       /* no definition for stream id ... (required for event header) */
+  CTFERR_STREAM_NOTSET,       /* event ... is not assigned to a stream */
+  CTFERR_TYPE_REDEFINE,       /* type ... was already defined */
+  CTFERR_NAMEREQUIRED,        /* a name for ... is required */
+  CTFERR_DUPLICATE_NAME,      /* duplicate name ... */
+  CTFERR_CLOCK_IS_INT,        /* clock must be mapped to integer type */
   CTFERR_DUPLICATE_SETTING,
-  CTFERR_EXCEED_INCLUDES,/* #include nesting too deep */
+  CTFERR_EXCEED_INCLUDES,     /* #include nesting too deep */
 };
 
 enum {
@@ -68,9 +69,18 @@ enum {
   BYTEORDER_BE,
 };
 
-#define CTF_NAME_LENGTH   64
-#define CTF_UUID_LENGTH   16
-#define CTF_BASE_ADDR     255
+#define CTF_NAME_LENGTH       64
+#define CTF_UUID_LENGTH       16
+#define CTF_BASE_ADDR         255
+
+enum {
+  CTF_SEVERITY_DEBUG,
+  CTF_SEVERITY_INFO,
+  CTF_SEVERITY_NOTICE,
+  CTF_SEVERITY_WARNING,
+  CTF_SEVERITY_ERROR,
+  CTF_SEVERITY_CRITICAL,
+};
 
 typedef struct tagCTF_KEYVALUE {
   struct tagCTF_KEYVALUE *next;
@@ -146,13 +156,14 @@ typedef struct tagCTF_EVENT {
   struct tagCTF_EVENT *next;
   int id;
   int stream_id;
+  int severity;
   char name[CTF_NAME_LENGTH];
   char *attribute;
   CTF_EVENT_FIELD field_root;
 } CTF_EVENT;
 
 
-int ctf_error_notify(int code, int linenr, const char *message); /* must be implemented in the calling application */
+int ctf_error_notify(int code, const char *filename, int linenr, const char *message); /* must be implemented in the calling application */
 
 const CTF_PACKET_HEADER *packet_header(void);
 
@@ -169,9 +180,12 @@ int event_count(int stream_id);
 const CTF_EVENT *event_next(const CTF_EVENT *event);
 const CTF_EVENT *event_by_id(int event_id);
 
-int ctf_parse_init(const char *filename);
+const char *ctf_severity_name(int level);
+int ctf_severity_level(const char *name);
+
+bool ctf_parse_init(const char *filename);
 void ctf_parse_cleanup(void);
-int ctf_parse_run(void);
+bool ctf_parse_run(void);
 
 #endif /* _PARSETSDL_H */
 

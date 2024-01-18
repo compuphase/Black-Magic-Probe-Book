@@ -1,7 +1,7 @@
 /*
  * Shared code for SWO Trace for the bmtrace and bmdebug utilities.
  *
- * Copyright 2019-2023 CompuPhase
+ * Copyright 2019-2024 CompuPhase
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -60,6 +60,7 @@ void channel_setcolor(int index, struct nk_color color);
 
 int  trace_init(unsigned short endpoint, const char *ipaddress);
 void trace_close(void);
+bool trace_isopen(void);
 unsigned long trace_errno(int *loc);
 int  trace_overflowerrors(bool reset);
 
@@ -68,12 +69,21 @@ short trace_getdatasize();
 int  trace_getpacketerrors(bool reset);
 
 void tracestring_clear(void);
-int  tracestring_isempty(void);
+bool tracestring_isempty(void);
 unsigned tracestring_count(void);
 int  tracestring_process(bool enabled);
+int  tracestring_load(const char *filename, int *format);
 int  tracestring_save(const char *filename);
+const char *trace_channelname(int id);
 int  tracestring_find(const char *text, int curline);
 int  tracestring_findtimestamp(double timestamp);
+
+int  tracestring_findbookmark(int action);
+enum {
+  BK_NEXT,
+  BK_PREV,
+  BK_CLEAR,
+};
 
 int  traceprofile_process(bool enabled, unsigned *sample_map, uint32_t code_base, uint32_t code_top, unsigned *overflow);
 
@@ -82,10 +92,11 @@ void tracelog_statusclear(void);
 const char *tracelog_getstatusmsg(int idx);
 float tracelog_labelwidth(float rowheight);
 void tracelog_widget(struct nk_context *ctx, const char *id, float rowheight, int limitlines,
-                     int markline, const TRACEFILTER *filters, nk_flags widget_flags);
+                     int markline, const TRACEFILTER *filters, int severity, nk_flags widget_flags);
 
 void timeline_getconfig(double *spacing, unsigned long *scale, unsigned long *delta);
 void timeline_setconfig(double spacing, unsigned long scale, unsigned long delta);
+void timeline_rebuild(int limitlines, bool zoomfit);
 double timeline_widget(struct nk_context *ctx, const char *id, float rowheight,
                        int limitlines, nk_flags widget_flags);
 

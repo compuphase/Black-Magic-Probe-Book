@@ -204,6 +204,6 @@ Black Magic Probe. It is a self-contained utility; it does not require GDB.
 
 ---
 Version {{SVNREV_STR}} \
-Copyright 2022-2023 CompuPhase \
+Copyright 2022-2024 CompuPhase \
 Licensed under the Apache License version 2.0
 

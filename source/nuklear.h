@@ -2557,6 +2557,11 @@ NK_API void nk_layout_row_template_push_static(struct nk_context*, float width);
 /// __ctx__     | Must point to an previously initialized `nk_context` struct after call `nk_begin_xxx`
 */
 NK_API void nk_layout_row_template_end(struct nk_context*);
+/* nk_layout_row_background
+   Fills the entire active row with the given color. This function must be called
+   *after* creating a row (if a non-standard background color is desired).
+*/
+NK_API void nk_layout_row_background(struct nk_context *ctx, struct nk_color bkgnd);
 /*/// #### nk_layout_space_begin
 /// Begins a new layouting space that allows to specify each widgets position and size.
 /// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~c

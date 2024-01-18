@@ -16793,6 +16793,13 @@ nk_layout_row_template_end(struct nk_context *ctx)
     }
 }
 NK_API void
+nk_layout_row_background(struct nk_context *ctx, struct nk_color bkgnd)
+{
+    struct nk_window *win = ctx->current;
+    struct nk_rect bounds = nk_layout_widget_bounds(ctx);
+    nk_fill_rect(&win->buffer, bounds, 0, bkgnd);
+}
+NK_API void
 nk_layout_space_begin(struct nk_context *ctx, enum nk_layout_format fmt,
     float height, int widget_count)
 {
@@ -18238,7 +18245,7 @@ nk_widget_text_wrap(struct nk_command_buffer *o, struct nk_rect b,
     int done = 0;
     struct nk_rect line;
     struct nk_text text;
-    NK_INTERN nk_rune seperator[] = {' '};
+    NK_INTERN nk_rune separator[] = {' '};
 
     NK_ASSERT(o);
     NK_ASSERT(t);
@@ -18257,13 +18264,13 @@ nk_widget_text_wrap(struct nk_command_buffer *o, struct nk_rect b,
     line.w = b.w - 2 * t->padding.x;
     line.h = 2 * t->padding.y + f->height;
 
-    fitting = nk_text_clamp(f, string, len, line.w, &glyphs, &width, seperator,NK_LEN(seperator));
+    fitting = nk_text_clamp(f, string, len, line.w, &glyphs, &width, separator,NK_LEN(separator));
     while (done < len) {
         if (!fitting || line.y + line.h >= (b.y + b.h)) break;
         nk_widget_text(o, line, &string[done], fitting, &text, NK_TEXT_LEFT, f);
         done += fitting;
         line.y += f->height + 2 * t->padding.y;
-        fitting = nk_text_clamp(f, &string[done], len - done, line.w, &glyphs, &width, seperator,NK_LEN(seperator));
+        fitting = nk_text_clamp(f, &string[done], len - done, line.w, &glyphs, &width, separator,NK_LEN(separator));
     }
 }
 NK_API void
@@ -24573,7 +24580,7 @@ nk_tooltip(struct nk_context *ctx, const char *text)
     text_width = 0;
     num_lines = 0;
     for (head = text; *head != '\0'; head = tail) {
-        int width;
+        float width;
         tail = strchr(head, '\n');
         if (!tail)
             tail = strchr(head, '\0');
@@ -24809,7 +24816,7 @@ nk_is_popup_open(struct nk_context *ctx)
 ///                        dynamic and static widgets.
 /// - 2016/12/31 (1.30.0) - Extended scrollbar offset from 16-bit to 32-bit.
 /// - 2016/12/31 (1.29.2) - Fixed closing window bug of minimized windows.
-/// - 2016/12/03 (1.29.1) - Fixed wrapped text with no seperator and C89 error.
+/// - 2016/12/03 (1.29.1) - Fixed wrapped text with no separator and C89 error.
 /// - 2016/12/03 (1.29.0) - Changed text wrapping to process words not characters.
 /// - 2016/11/22 (1.28.6) - Fixed window minimized closing bug.
 /// - 2016/11/19 (1.28.5) - Fixed abstract combo box closing behavior.

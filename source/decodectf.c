@@ -2,7 +2,7 @@
  * Functions to decode a byte stream matching a trace stream description (TSDL
  * file). It uses data structures created by parsectf.
  *
- * Copyright 2019-2023 CompuPhase
+ * Copyright 2019-2024 CompuPhase
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -51,6 +51,8 @@
 
 typedef struct tagTRACEMSG {
   uint16_t streamid;
+  uint16_t eventid;
+  uint8_t severity;
   double timestamp;
   const char *message;
 } TRACEMSG;
@@ -87,6 +89,8 @@ static size_t msgstack_head = 0;
 static size_t msgstack_tail = 0;
 
 static const DWARF_SYMBOLLIST *symboltable = NULL;
+static unsigned char ctf_severity = 1;
+static unsigned long ctf_streammask = ~0Lu;
 
 
 static void cache_grow(size_t extra)
@@ -229,11 +233,12 @@ static void msgstack_clear(void)
   msgstack_tail = 0;
 }
 
-static void msgstack_push(uint16_t streamid, double timestamp, const char *message)
+static void msgstack_push(uint16_t streamid, uint16_t eventid, uint8_t severity, double timestamp, const char *message)
 {
   msgstack_grow();
   assert(msgstack_tail < msgstack_size);
   msgstack[msgstack_tail].streamid = streamid;
+  msgstack[msgstack_tail].severity = severity;
   msgstack[msgstack_tail].timestamp = timestamp;
   msgstack[msgstack_tail].message = strdup(message);
   if (++msgstack_tail >= msgstack_size)
@@ -267,12 +272,16 @@ int msgstack_pop(uint16_t *streamid, double *timestamp, char *message, size_t si
  *  pointer into the list.
  *  \return 1 on success, 0 on failure.
  */
-int msgstack_peek(uint16_t *streamid, double *timestamp, const char **message)
+int msgstack_peek(uint16_t *streamid, uint16_t *eventid, uint8_t *severity, double *timestamp, const char **message)
 {
   if (msgstack_head == msgstack_tail)
     return 0;
   if (streamid != NULL)
     *streamid = msgstack[msgstack_head].streamid;
+  if (eventid != NULL)
+    *eventid = msgstack[msgstack_head].eventid;
+  if (severity != NULL)
+    *severity = msgstack[msgstack_head].severity;
   if (timestamp != NULL)
     *timestamp = msgstack[msgstack_head].timestamp;
   if (message != NULL)
@@ -283,6 +292,12 @@ int msgstack_peek(uint16_t *streamid, double *timestamp, const char **message)
 void ctf_set_symtable(const DWARF_SYMBOLLIST *symtable)
 {
   symboltable = symtable;
+}
+
+void ctf_set_filter(unsigned long streammask, unsigned char severity)
+{
+  ctf_streammask = streammask;
+  ctf_severity = severity;
 }
 
 static int lookup_symbol(uint32_t address, char *symname, size_t maxlength)
@@ -487,6 +502,8 @@ static void format_field(const char *fieldname, const CTF_TYPE *type, const unsi
 
 int ctf_decode(const unsigned char *stream, size_t size, long channel)
 {
+  #define check_stream(streamid)  ((streamid) < 32 && (ctf_streammask & (1Lu << (streamid))) != 0)
+
   size_t idx, len, result;
 
   if (event_count(-1) == 0)     /* no events defined, nothing to do */
@@ -628,10 +645,13 @@ restart:
         field = event->field_root.next;
         if (field == NULL) {
           /* this event has no fields */
-          msgbuffer_append("", 1);  /* force zero-terminate msgbuffer */
-          msgstack_push((uint16_t)event->stream_id, timestamp, msgbuffer);
-          msgbuffer_reset();
-          result += 1;  /* flag: one more trace message completed */
+          if (event->severity >= ctf_severity) {  /* no need to check stream mask, because there is no stream */
+            msgbuffer_append("", 1);  /* force zero-terminate msgbuffer */
+            msgstack_push((uint16_t)event->stream_id, (uint16_t)event->id,
+                          (uint8_t)event->severity, timestamp, msgbuffer);
+            msgbuffer_reset();
+            result += 1;  /* flag: one more trace message completed */
+          }
           state = STATE_SCAN_MAGIC;
         } else {
           state = STATE_GET_FIELDS;
@@ -671,11 +691,14 @@ restart:
         field = event->field_root.next;
         if (field == NULL) {
           /* this event has no fields */
-          msgbuffer_append("", 1);  /* force zero-terminate msgbuffer */
-          msgstack_push((uint16_t)event->stream_id, timestamp, msgbuffer);
-          msgbuffer_reset();
-          result += 1;  /* flag: one more trace message completed */
-          state = STATE_SCAN_MAGIC;
+          if (event->severity >= ctf_severity && check_stream((uint16_t)event->stream_id)) {
+            msgbuffer_append("", 1);  /* force zero-terminate msgbuffer */
+            msgstack_push((uint16_t)event->stream_id, (uint16_t)event->id, (uint8_t)event->severity, timestamp, msgbuffer);
+            msgbuffer_reset();
+            result += 1;  /* flag: one more trace message completed */
+            state = STATE_SCAN_MAGIC;
+            //??? an event that lacks fields, but does have a timestamp, should still retrieve the timestamp (STATE_GET_TIMESTAMP)
+          }
         }
       } else {
         /* event not found, drop the decoding */
@@ -770,10 +793,12 @@ restart:
        last parameter) */
     field = field->next;
     if (field == NULL) {
-      msgbuffer_append("", 1);  /* force zero-terminate msgbuffer */
-      msgstack_push((uint16_t)event->stream_id, timestamp, msgbuffer);
-      msgbuffer_reset();
-      result += 1;  /* flag: one more trace message completed */
+      if (event->severity >= ctf_severity && check_stream((uint16_t)event->stream_id)) {
+        msgbuffer_append("", 1);  /* force zero-terminate msgbuffer */
+        msgstack_push((uint16_t)event->stream_id, (uint16_t)event->id, (uint8_t)event->severity, timestamp, msgbuffer);
+        msgbuffer_reset();
+        result += 1;  /* flag: one more trace message completed */
+      }
       state = STATE_SCAN_MAGIC;
     }
     goto restart;
@@ -795,3 +820,4 @@ void ctf_decode_reset(void)
   msgbuffer_reset();
   state = STATE_SCAN_MAGIC;
 }
+

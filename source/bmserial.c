@@ -4,7 +4,7 @@
  * was lacking).
  * This utility is built with Nuklear for a cross-platform GUI.
  *
- * Copyright 2022-2023 CompuPhase
+ * Copyright 2022-2024 CompuPhase
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -135,7 +135,7 @@ static void version(void)
 # endif
 
   printf("BMSerial version %s.\n", SVNREV_STR);
-  printf("Copyright 2022-2023 CompuPhase\nLicensed under the Apache License version 2.0\n");
+  printf("Copyright 2022-2024 CompuPhase\nLicensed under the Apache License version 2.0\n");
 }
 
 #if defined FORTIFY

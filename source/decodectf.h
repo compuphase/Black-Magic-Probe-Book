@@ -2,7 +2,7 @@
  * Functions to decode a byte stream matching a trace stream description (TSDL
  * file). It uses data structures created by parsectf.
  *
- * Copyright 2019-2023 CompuPhase
+ * Copyright 2019-2024 CompuPhase
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -25,8 +25,9 @@ int ctf_decode(const unsigned char *stream, size_t size, long channel);
 void ctf_decode_reset(void);
 void ctf_decode_cleanup(void);
 void ctf_set_symtable(const DWARF_SYMBOLLIST *symtable);
+void ctf_set_filter(unsigned long streammask, unsigned char severity);
 int msgstack_pop(uint16_t *streamid, double *timestamp, char *message, size_t size);
-int msgstack_peek(uint16_t *streamid, double *timestamp, const char **message);
+int msgstack_peek(uint16_t *streamid, uint16_t *eventid, uint8_t *severity, double *timestamp, const char **message);
 
 #endif /* _DECODECTF_H */
 

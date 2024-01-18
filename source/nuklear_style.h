@@ -26,6 +26,8 @@ void nuklear_style(struct nk_context *ctx);
 float *nk_ratio(int count, ...);
 bool editctrl_cond_color(struct nk_context *ctx, bool condition, struct nk_color color);
 void editctrl_reset_color(struct nk_context *ctx, bool condition);
+struct nk_color default_channel_colour(int channel);
+struct nk_color severity_bkgnd(int severity);
 
 #define COLOUR_BG0_S      nk_rgb_hex("#32302f") /* window background colour */
 #define COLOUR_BG0        nk_rgb_hex("#1d2021") /* background colour for controls near black) */
@@ -37,6 +39,8 @@ void editctrl_reset_color(struct nk_context *ctx, bool condition);
 #define COLOUR_BG_PURPLE  nk_rgb_hex("#b16286")
 #define COLOUR_BG_AQUA    nk_rgb_hex("#689d6a")
 #define COLOUR_BG_GRAY    nk_rgb_hex("#a89984")
+#define COLOUR_BG_ORANGE  nk_rgb_hex("#d65d0e")
+#define COLOUR_BG_BUTTON  nk_rgb_hex("#104b5b")
 #define COLOUR_TEXT       nk_rgb_hex("#ebdbb2")
 #define COLOUR_HIGHLIGHT  nk_rgb_hex("#abcfff") /* highlighted text */
 #define COLOUR_FG_GRAY    nk_rgb_hex("#928374") /* disabled text */
@@ -47,8 +51,6 @@ void editctrl_reset_color(struct nk_context *ctx, bool condition);
 #define COLOUR_FG_PURPLE  nk_rgb_hex("#d3869b")
 #define COLOUR_FG_AQUA    nk_rgb_hex("#8ec07c")
 
-#define CONTRAST_COLOUR(c)  (((c.r + 2*c.g + c.b) >= 512) ? COLOUR_BG0 : COLOUR_HIGHLIGHT)
-
-#define SWO_TRACE_DEFAULT_COLOR   COLOUR_TEXT
+#define CONTRAST_COLOUR(c)  (((3*(c).r + 5*(c).g + 2*(c).b) >= 1100) ? COLOUR_BG0 : COLOUR_HIGHLIGHT)
 
 #endif /* _NUKLEAR_STYLE_H */

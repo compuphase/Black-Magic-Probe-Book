@@ -86,12 +86,16 @@ typedef enum {
 } osdialog_file_action;
 
 /** Launches a file dialog and returns the selected path or NULL if nothing was selected.
-
-`path` is the default folder the file dialog will attempt to open in, or NULL for the OS's default.
-`filename` is the default text that will appear in the filename input, or NULL for the OS's default. Relevant to save dialog only.
-`filters` is a list of patterns to filter the file selection, or NULL.
-
-Returns the selected file, or NULL if the dialog was cancelled.
+ *
+ *  \param action 	`OSDIALOG_OPEN_DIR`, `OSDIALOG_OPEN_DIR` or `OSDIALOG_SAVE`.
+ *  \param title	The caption of the dialog, or NULL for the default.
+ *  \param path 	The *default* folder the file dialog will attempt to open
+ *  	   			in, or NULL for the OS's default.
+ *  \param filename The default text that will appear in the filename. input,or
+ *  	   			NULL for the OS's default. Relevant to save dialog only.
+ *  \param filters 	A list of patterns to filter the file selection, or NULL.
+ *
+ *  \return The selected file, or NULL if the dialog was cancelled.
 If the return result is not NULL, caller must free() it.
 */
 char* osdialog_file(osdialog_file_action action, const char* title, const char* path, const char* filename, osdialog_filters* filters);

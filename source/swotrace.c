@@ -2,7 +2,7 @@
  * Shared code for SWO Trace for the bmtrace and bmdebug utilities. It uses
  * WinUSB or libusbK on Microsoft Windows, and libusb 1.0 on Linux.
  *
- * Copyright 2019-2023 CompuPhase
+ * Copyright 2019-2024 CompuPhase
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -59,6 +59,7 @@
 #include "nuklear_style.h"
 #include "parsetsdl.h"
 #include "decodectf.h"
+#include "strmatch.h"
 #include "swotrace.h"
 
 #if defined FORTIFY
@@ -164,13 +165,19 @@ static int tracequeue_overflow = 0;
 typedef struct tagTRACESTRING {
   struct tagTRACESTRING *next;
   char *text;
-  double timestamp;       /* in seconds */
-  char timefmt[15];       /* formatted string with time stamp */
-  unsigned short timefmt_len;
   unsigned short length, size;  /* text length & text buffer size (length <= size) */
-  unsigned char channel;
-  short flags;            /* used to keep state while decoding plain trace messages */
+  double timestamp;             /* in seconds */
+  char timefmt[16];             /* formatted string with time stamp */
+  unsigned short timefmt_len;   /* length of the formatted time stamp */
+  char *channelname;            /* name of the stream/channel (may be NULL) */
+  unsigned char channel_id;     /* number of the name/channel */
+  unsigned char severity;
+  short flags;                  /* used to keep state while decoding plain trace messages */
 } TRACESTRING;
+
+#define TSFLAG_EOL        0x0001  /* line is finished (do not concatenate more data) */
+#define TSFLAG_BOOKMARK   0x0002  /* line is bookmarked */
+#define TSFLAG_ACTIVEMARK 0x0004  /* this is the active/current bookmark */
 
 static SOCKET TraceSocket = INVALID_SOCKET;
 
@@ -207,10 +214,11 @@ static void tracestring_add(unsigned channel, const unsigned char *buffer, size_
     /* CTF mode */
     int count = ctf_decode(buffer, length, channel);
     if (count > 0) {
-      uint16_t streamid;
+      uint16_t streamid, eventid;
+      uint8_t severity;
       double tstamp, tstamp_relative;
       const char *message;
-      while (msgstack_peek(&streamid, &tstamp, &message)) {
+      while (msgstack_peek(&streamid, &eventid, &severity, &tstamp, &message)) {
         TRACESTRING *item = malloc(sizeof(TRACESTRING));
         if (item != NULL) {
           memset(item, 0, sizeof(TRACESTRING));
@@ -220,7 +228,8 @@ static void tracestring_add(unsigned channel, const unsigned char *buffer, size_
           if (item->text != NULL) {
             strcpy(item->text, message);
             item->length = item->size - 1;
-            item->channel = (unsigned char)streamid;
+            item->channel_id = (unsigned char)streamid;
+            item->severity = severity;
             if (tstamp > 0.001)
               timestamp = tstamp; /* use precision timestamp from remote host */
             item->timestamp = timestamp;
@@ -258,20 +267,20 @@ static void tracestring_add(unsigned channel, const unsigned char *buffer, size_
       /* see whether to append to the recent string, or to add a new string */
       if (tracestring_tail != NULL) {
         if (buffer[idx] == '\r' || buffer[idx] == '\n') {
-          tracestring_tail->flags |= 0x01;  /* on newline, create a new string */
+          tracestring_tail->flags |= TSFLAG_EOL;  /* on newline, create a new string */
           continue;
-        } else if (tracestring_tail->channel != channel) {
-          tracestring_tail->flags |= 0x01;  /* different channel, terminate previous string */
+        } else if (tracestring_tail->channel_id != channel) {
+          tracestring_tail->flags |= TSFLAG_EOL;  /* different channel, terminate previous string */
         } else if (tracestring_tail->length >= TRACESTRING_MAXLENGTH) {
-          tracestring_tail->flags |= 0x01;  /* line length limit */
+          tracestring_tail->flags |= TSFLAG_EOL;  /* line length limit */
         }
         /* time criterion: there should not be more that 0.1 seconds between
            parts of a continued string */
         if (tracestring_tail != NULL && timestamp - tracestring_tail->timestamp > 0.1)
-          tracestring_tail->flags |= 0x01;  /* interval limit */
+          tracestring_tail->flags |= TSFLAG_EOL;  /* interval limit */
       }
 
-      if (tracestring_tail != NULL && (tracestring_tail->flags & 0x01) == 0) {
+      if (tracestring_tail != NULL && (tracestring_tail->flags & TSFLAG_EOL) == 0) {
         /* append text to the current string */
         if (tracestring_tail->length >= tracestring_tail->size) {
           int newsize = tracestring_tail->size * 2;
@@ -296,7 +305,7 @@ static void tracestring_add(unsigned channel, const unsigned char *buffer, size_
           item->size = TRACESTRING_INITSIZE;
           item->text = malloc(item->size * sizeof(unsigned char));
           if (item->text != NULL) {
-            item->channel = (unsigned char)channel;
+            item->channel_id = (unsigned char)channel;
             item->timestamp = timestamp;
             /* create formatted timestamp */
             if (tracestring_root.next != NULL)
@@ -329,13 +338,15 @@ void tracestring_clear(void)
     item = tracestring_root.next;
     tracestring_root.next = item->next;
     assert(item->text!=NULL);
-    free((void*)item->text);
-    free((void*)item);
+    free(item->text);
+    if (item->channelname != NULL)
+      free(item->channelname);
+    free(item);
   }
   tracestring_tail = NULL;
 }
 
-int tracestring_isempty(void)
+bool tracestring_isempty(void)
 {
   return (tracestring_root.next == NULL);
 }
@@ -462,18 +473,24 @@ int tracestring_process(bool enabled)
   return count;
 }
 
-int tracestring_find(const char *text, int curline)
+/** tracestring_find() jumps to the previous or next match.
+ *
+ *  \param pattern  The text to search, which may contain wildcards.
+ *  \param curline  The starting point for the search (a line number), or -1 to
+ *                  search from the top to the first match.
+ *
+ *  \return A line number for the next match, or -1 if the text is not found.
+ *
+ *  \note The search wraps around from the end to the beginning.
+ */
+int tracestring_find(const char *pattern, int curline)
 {
-  TRACESTRING *item;
-  int line, cur_mark, len;
-
   assert(curline >= 0 || curline == -1);
-  assert(text != NULL);
-  len = strlen(text);
+  assert(pattern != NULL);
 
-  cur_mark = curline + 1;
-  item = tracestring_root.next;
-  line = 0;
+  int cur_mark = curline + 1;
+  TRACESTRING *item = tracestring_root.next;
+  int line = 0;
   while (item != NULL && line < cur_mark) {
     line++;
     item = item->next;
@@ -485,29 +502,38 @@ int tracestring_find(const char *text, int curline)
     item = item->next;
     line++;
   }
+
+  size_t bufsize = 0;
+  char *buffer = NULL;
   while ((line != cur_mark || curline < 0) && item != NULL) {
-    int idx;
     curline = cur_mark;
-    idx = 0;
-    while (idx < item->length) {
-      while (idx < item->length && toupper(item->text[idx]) != toupper(text[0]))
-        idx++;
-      if (idx + len > item->length)
-        break;      /* not found on this line */
-      if (memicmp((const unsigned char*)item->text + idx, (const unsigned char*)text, len) == 0)
-        break;      /* found on this line */
-      idx++;
+    /* allocate a buffer for item->text, and copy it into this buffer, because
+       it item->text not necessarilty zero-terminated */
+    while (item->length >= bufsize) {
+      if (buffer != NULL)
+        free(buffer);
+      bufsize = (bufsize < 128) ? 128 : 2 * bufsize;
+      char *buffer = malloc(bufsize * sizeof(char));
+      if (buffer == NULL)
+        return -1;
     }
-    if (idx + len <= item->length)
+    memcpy(buffer, item->text, item->length);
+    buffer[item->length] = '\0';
+    const char *ptr = strmatch(pattern, buffer, NULL);
+    if (ptr != NULL) {
+      free(buffer);
       return line;  /* found, stop search */
+    }
     item = item->next;
     line++;
     if (item == NULL) {
-      item = tracestring_root.next;
+      item = tracestring_root.next; /* wrap-around */
       line = 0;
     }
   } /* while (line != cur_mark) */
 
+  if (buffer != NULL)
+    free(buffer);
   return -1;  /* not found */
 }
 
@@ -517,48 +543,277 @@ int tracestring_find(const char *text, int curline)
  */
 int tracestring_findtimestamp(double timestamp)
 {
-  TRACESTRING *item;
   int line = 0;
-  for (item = tracestring_root.next; item != NULL && item->timestamp < timestamp; item = item->next)
+  for (TRACESTRING *item = tracestring_root.next; item != NULL && item->timestamp < timestamp; item = item->next)
     line += 1;
   return line - 1;
 }
 
-int tracestring_save(const char *filename)
+/** tracestring_findbookmark() finds the next or previous bookmark.
+ *
+ *  \param action   BK_NEXT to move to the next bookmark; BK_PREV to move to
+ *                  the previous bookmark; BK_CLEAR to remove the active
+ *                  bookmark.
+ *
+ *  \return A line number for the next/prevous bookmark (which is now set
+ *          active), or 1 if no bookmark could be set active.
+ *
+ *  \note The next/previous bookmark step wraps around from the end to the
+ *        beginning (and vice versa).
+ */
+int tracestring_findbookmark(int action)
 {
-  FILE *fp;
-  TRACESTRING *item;
-  char *buffer;
-  size_t bufsize;
+  int prevmark = -1, nextmark = -1, firstmark = -1, lastmark = -1;
+  bool pastactive = false;
+  int line = 0;
+  for (TRACESTRING *item = tracestring_root.next; item != NULL; item = item->next) {
+    if ((item->flags & TSFLAG_BOOKMARK) != 0) {
+      if (pastactive && nextmark < 0)
+        nextmark = line;  /* update next mark when past the active mark and next mark not yet set */
+      if ((item->flags & TSFLAG_ACTIVEMARK) != 0) {
+        pastactive = true;
+        item->flags &= ~TSFLAG_ACTIVEMARK;  /* clear active mark */
+      }
+      if (!pastactive)
+        prevmark = line;  /* update prev. mark up to (but not including) the active mark */
+      if (firstmark < 0)
+        firstmark = line; /* update firstmark only the first time */
+      lastmark = line;    /* always update last mark */
+    }
+    line += 1;
+  }
 
-  fp = fopen(filename, "wt");
+  int result = -1;
+  if (action == BK_NEXT)
+    result = (nextmark >= 0) ? nextmark : firstmark;  /* if next mark not set, wrap around to first mark */
+  else if (action == BK_PREV)
+    result = (prevmark >= 0) ? prevmark : lastmark;   /* if prev. mark not set, wrap around to last mark */
+
+  if (result >= 0) {
+    line = 0;
+    for (TRACESTRING *item = tracestring_root.next; item != NULL; item = item->next) {
+      if (line == result) {
+        item->flags |= TSFLAG_ACTIVEMARK;   /* set active mark */
+        break;  /* done, no use in moving further */
+      }
+      line += 1;
+    }
+  }
+
+  return result;
+}
+
+static char *getfield(char **base)
+{
+  assert(base != NULL && *base != NULL);
+  char *start = *base;
+  while (*start != '\0' && *start <= ' ')
+    start++;            /* skip white space */
+  if (*start == '\0')
+    return NULL;
+
+  char *tail = start;
+  if (*tail == '"') {
+    /* skip string, and possibly reduce doubled quotes */
+    start++;            /* skip initial '"' */
+    tail++;
+    char *tgt = tail;
+    while (*tail != '\0' && (*tail != '"' || *(tail + 1) == '"')) {
+      if (*tail == '"')
+        tail++;
+      if (tgt != tail)
+        *tgt = *tail;   /* move up characters, if doubled double-quotes were found */
+      tail++;
+      tgt++;
+    }
+    *tgt = '\0';
+    if (tail == tgt || *tail == '"')  /* if tail == tgt -> '"' was just overwritten by '\0' */
+      tail++;
+    while (*tail != '\0' && *tail != ',')
+      tail++;           /* ignore any text beyond the string, until the field separator */
+    if (*tail == ',')
+      tail++;           /* skip the field separator too */
+  } else {
+    while (*tail != '\0' && *tail != ',')
+      tail++;
+    char *sentinel = tail;
+    if (*tail == ',')
+      tail++;           /* skip the field separator */
+    while (sentinel > start && *(sentinel - 1) <= ' ')
+      sentinel--;       /* back up to just behind the last last letter/digit (non-white space) */
+    *sentinel = '\0';   /* zero terminate behind the end of the word */
+  }
+
+  *base = tail;
+
+  return start;
+}
+
+/** tracestring_load() loads trace data from a file. It supports data saved
+ *  by BMTrace and BMDebug (SWO view), as well as from the BMDebug serial
+ *  monitor with CTF decoding.
+ *
+ *  \param filename   The full path to the file to load.
+ *  \param format     [out] Set to 0 for SWO trace format, or 1 for CTF decoded
+ *                    (from the serial monitor). This parameter may be NULL.
+ *
+ *  \return The number of lines loaded from the file, or zero on error.
+ */
+int tracestring_load(const char *filename, int *format)
+{
+  if (format != NULL)
+    *format = 0;
+
+  FILE *fp = fopen(filename, "rt");
   if (fp == NULL)
     return 0;
 
-  bufsize = 0;
-  for (item = tracestring_root.next; item != NULL; item = item->next)
-    if (item->length > bufsize)
-      bufsize = item->length;
-
-  buffer = malloc((bufsize + 1) * sizeof(char));
+  size_t bufsize = 65536; /* arbitrarily set max. line size to 64 KiB */
+  char *buffer = malloc((bufsize + 1) * sizeof(char));
   if (buffer == NULL) {
     fclose(fp);
     return 0;
   }
 
-  fprintf(fp, "Channel,Name,Timestamp,Text\n");
+  /* check header line */
+  if (fgets(buffer, bufsize, fp) == NULL) {
+    fclose(fp);
+    free(buffer);
+    return 0;
+  }
+  int fmt = 0;
+  bool ok = true;
+  char *base = buffer;
+  char *ptr = getfield(&base);
+  if (ptr == NULL || (strcmp(ptr, "Channel") != 0 && strcmp(ptr, "ID") != 0))
+    ok = false;
+  else if (strcmp(ptr, "ID") == 0)
+    fmt = 1;        /* this file is saved from the serial monitor */
+  if ((ptr = getfield(&base)) == NULL || (fmt == 0 && strcmp(ptr, "Name") != 0) || (fmt == 1 && strcmp(ptr, "Stream") != 0))
+    ok = false;
+  if ((ptr = getfield(&base)) == NULL || strcmp(ptr, "Severity") != 0)
+    ok = false;
+  if ((ptr = getfield(&base)) == NULL || strcmp(ptr, "Timestamp") != 0)
+    ok = false;
+  if ((ptr = getfield(&base)) == NULL || strcmp(ptr, "Text") != 0)
+    ok = false;
+  if (!ok || *base != '\0') {
+    fclose(fp);
+    free(buffer);
+    return 0;
+  }
+  if (format != NULL)
+    *format = fmt;
+
+  /* read the rest of the data */
+  TRACESTRING *tracestring_tail = NULL;
+  int count = 0;
+  while (fgets(buffer, bufsize, fp) != NULL) {
+    TRACESTRING *item = malloc(sizeof(TRACESTRING));
+    if (item != NULL) {
+      memset(item, 0, sizeof(TRACESTRING));
+      base = buffer;
+      if ((ptr = getfield(&base)) != NULL)
+        item->channel_id = (unsigned char)strtol(ptr, NULL, 10);
+      if ((ptr = getfield(&base)) != NULL)
+        item->channelname = strdup(ptr);
+      if ((ptr = getfield(&base)) != NULL) {
+        int level = ctf_severity_level(ptr);
+        item->severity = (level >= 0) ? (unsigned char)level : 1;
+      }
+      if ((ptr = getfield(&base)) != NULL)
+        item->timestamp = strtod(ptr, NULL);
+      if ((ptr = getfield(&base)) != NULL)
+        item->text = strdup(ptr);
+      if (item->text != NULL) {
+        item->length = (unsigned short)strlen(item->text);
+        item->size = item->length + 1;
+        item->flags = TSFLAG_EOL;
+        /* create formatted timestamp */
+        snprintf(item->timefmt, sizearray(item->timefmt), "%.3f", item->timestamp);
+        item->timefmt_len = (unsigned short)strlen(item->timefmt);
+        /* read optional bookmark */
+        if ((ptr = getfield(&base)) != NULL && *ptr == '#')
+          item->flags |= TSFLAG_BOOKMARK;
+        /* append to tail */
+        if (tracestring_tail != NULL) {
+          tracestring_tail->next = item;
+        } else {
+          assert(tracestring_root.next == NULL);  /* this must then be the first string */
+          tracestring_root.next = item;
+        }
+        tracestring_tail = item;
+        count++;
+      } else {
+        free((void*)item);
+      }
+    }
+  }
+
+  fclose(fp);
+  free(buffer);
+  return count;
+}
+
+/** tracestring_save() saves the data in a file, in CSV format.
+ *
+ *  \param filename   The full path to the file to create.
+ *
+ *  \return The number of lines written to the file, or zero on error.
+ */
+int tracestring_save(const char *filename)
+{
+  FILE *fp = fopen(filename, "wt");
+  if (fp == NULL)
+    return 0;
+
+  size_t bufsize = 0;
+  TRACESTRING *item = tracestring_root.next;
+  double starttime = (item != NULL) ? item->timestamp : 0.0;
+  for (item = tracestring_root.next; item != NULL; item = item->next)
+    if (item->length > bufsize)
+      bufsize = item->length;
+
+  char *buffer = malloc((bufsize + 1) * sizeof(char));
+  if (buffer == NULL) {
+    fclose(fp);
+    return 0;
+  }
+
+  int bookmarkcount = 0;
+  int count = 0;
+  fprintf(fp, "Channel,Name,Severity,Timestamp,Text\n");
   for (item = tracestring_root.next; item != NULL; item = item->next) {
     memcpy(buffer, item->text, item->length);
     buffer[item->length] = '\0';
-    fprintf(fp, "%d,\"%s\",%.6f,\"%s\"\n", item->channel, channels[item->channel].name,
-            item->timestamp, buffer);
+    const char *severity = ctf_severity_name(item->severity);
+    if (severity == NULL)
+      severity = "(invalid)";
+    fprintf(fp, "%d,\"%s\",%s,%.6f,", item->channel_id, channels[item->channel_id].name,
+            severity, item->timestamp - starttime);
+    for (const char *ptr = buffer; *ptr != '\0'; ptr++) {
+      if (*ptr == '"')
+        fputc('"', fp);
+      fputc(*ptr, fp);
+    }
+    if ((item->flags & TSFLAG_BOOKMARK) != 0)
+      fprintf(fp, ",#%d", ++bookmarkcount);
+    fputc('\n', fp);
+    count += 1;
   }
 
   free((void*)buffer);
   fclose(fp);
-  return 1;
+  return count;
 }
 
+const char *trace_channelname(int id)
+{
+  for (TRACESTRING *item = tracestring_root.next; item != NULL; item = item->next)
+    if (item->channel_id == id)
+      return item->channelname;
+  return NULL;
+}
 
 /** trace_setdatasize() sets the data size in an ITM packet, in bytes. Valid
  *  values are 1, 2 and 4. For automatic detection, set "size" to 0.
@@ -1081,6 +1336,11 @@ void trace_close(void)
   }
 }
 
+bool trace_isopen(void)
+{
+  return (hThread != NULL && hUSBiface != INVALID_HANDLE_VALUE);
+}
+
 unsigned long trace_errno(int *loc)
 {
   if (loc != NULL)
@@ -1275,7 +1535,7 @@ void tracelog_statusmsg(int type, const char *msg, int code)
     item->text = malloc(item->size * sizeof(unsigned char));
     if (item->text != NULL) {
       strcpy(item->text, msg);
-      item->channel = (unsigned char)type;
+      item->channel_id = (unsigned char)type;
       item->flags = (short)code;
       /* append to tail */
       for (tail = &statusmessage_root; tail->next != NULL; tail = tail->next)
@@ -1293,18 +1553,18 @@ void tracelog_statusclear(void)
   while (statusmessage_root.next != NULL) {
     item = statusmessage_root.next;
     statusmessage_root.next = item->next;
-    assert(item->text!=NULL);
-    free((void*)item->text);
-    free((void*)item);
+    assert(item->text != NULL);
+    free(item->text);
+    assert(item->channelname == NULL);
+    free(item);
   }
 }
 
 const char *tracelog_getstatusmsg(int idx)
 {
-  for (TRACESTRING *item = statusmessage_root.next; item != NULL; item = item->next) {
+  for (TRACESTRING *item = statusmessage_root.next; item != NULL; item = item->next)
     if (idx-- == 0)
       return item->text;
-  }
   return NULL;
 }
 
@@ -1319,12 +1579,26 @@ float tracelog_labelwidth(float rowheight)
   return (float)labelwidth * (rowheight / 2);
 }
 
-/* tracelog_widget() draws the text in the log window and scrolls to the last line
-   if new text was added */
+/** tracelog_widget() draws the text in the log window and scrolls to the last
+ *  line if new text was added.
+ *
+ *  \param ctx          The Nuklear context
+ *  \param id           The ID (name) of the widget.
+ *  \param rowheight    The height of a row (depends on the font height).
+ *  \param limitlines   The maximum number of lines to display. All messages are
+ *                      saved, but only the last `limitlines` are shown. When
+ *                      this parameter is -1, there is no limit.
+ *  \param markline     The line to mark and highlight, or -1 to highlight none.
+ *  \param filters      An array of filters that limit the number of lines that
+ *                      are displayed. The final entry of this array holds an
+ *                      empty expression.
+ *  \param severity     The severity level to filter at; only messages with
+ *                      equal of higher severity pass through.
+ *  \param widget_flags Additional flags, such as NK_WINDOW_BORDER.
+ */
 void tracelog_widget(struct nk_context *ctx, const char *id, float rowheight, int limitlines,
-                     int markline, const TRACEFILTER *filters, nk_flags widget_flags)
+                     int markline, const TRACEFILTER *filters, int severity, nk_flags widget_flags)
 {
-  TRACESTRING *item;
   struct nk_rect rcwidget = nk_layout_widget_bounds(ctx);
   struct nk_style_window *stwin = &ctx->style.window;
   struct nk_user_font const *font = ctx->style.font;
@@ -1338,6 +1612,7 @@ void tracelog_widget(struct nk_context *ctx, const char *id, float rowheight, in
   /* check the length of the longest channel name, and the longest timestamp */
   int labelwidth = (int)tracelog_labelwidth(rowheight) + 10;
   int tstampwidth = 0;
+  TRACESTRING *item;
   for (item = tracestring_root.next; item != NULL; item = item->next)
     if (tstampwidth < item->timefmt_len)
       tstampwidth = item->timefmt_len;
@@ -1353,6 +1628,7 @@ void tracelog_widget(struct nk_context *ctx, const char *id, float rowheight, in
     if (limitlines < 0)
       skiplines = 0;
     int skip = skiplines;
+    int bkmarkline = -1;
     int lines = 0;
     float lineheight = 0;
     for (item = tracestring_root.next; item != NULL; item = item->next) {
@@ -1361,29 +1637,31 @@ void tracelog_widget(struct nk_context *ctx, const char *id, float rowheight, in
         skip -= 1;
         continue;
       }
+      if (item->severity < severity)
+        continue;
       if (filters != NULL && filters[0].expr != NULL && filters[0].enabled) {
         /* check filters (first count how many there are) */
-        int idx, match, count_enabled;
-        match = 1;  /* preset to "match all except inverted filters" */
+        int idx, count_enabled;
+        bool match = true;  /* preset to "match all except inverted filters" */
         for (idx = count_enabled = 0; filters[idx].expr != NULL; idx++) {
           if (filters[idx].enabled) {
             count_enabled += 1;
-            if (filters[idx].expr[0] != '~')
-              match = 0;  /* valid non-inverted filter, switch to "match only filters" */
+            if (!(filters[idx].expr[0] == '~' || utf8_char(filters[idx].expr, NULL, NULL) == '\xac')) // U+00AC = "not sign"
+              match = false;  /* valid non-inverted filter, switch to "match only filters" */
           }
         }
         /* check normal filters */
         if (!match) {
-          for (idx = 0; filters[idx].expr != NULL && !match; idx++) {
-            if (filters[idx].enabled && filters[idx].expr[0] != '~')
-              match = (strstr(item->text, filters[idx].expr) != NULL);
-          }
+          for (idx = 0; filters[idx].expr != NULL && !match; idx++)
+            if (filters[idx].enabled && !(filters[idx].expr[0] == '~' || utf8_char(filters[idx].expr, NULL, NULL) == '\xac'))
+              match = (strmatch(filters[idx].expr, item->text, NULL) != NULL);
         }
         /* check inverted filters */
         if (match) {
           for (idx = 0; filters[idx].expr != NULL && match; idx++) {
-            if (filters[idx].enabled && filters[idx].expr[0] == '~')
-              match = (strstr(item->text, filters[idx].expr + 1) == NULL);
+            int csize = 1;
+            if (filters[idx].enabled && (filters[idx].expr[0] == '~' || utf8_char(filters[idx].expr, &csize, NULL) == '\xac'))
+              match = (strmatch(filters[idx].expr + csize, item->text, NULL) == NULL);
           }
         }
         if (!match)
@@ -1394,7 +1672,13 @@ void tracelog_widget(struct nk_context *ctx, const char *id, float rowheight, in
         struct nk_rect rcline = nk_layout_widget_bounds(ctx);
         lineheight = rcline.h;
       }
-      /* marker symbol */
+      struct nk_color clrtxt = COLOUR_TEXT;
+      if (item->severity != 1) {
+        struct nk_color bkgnd = severity_bkgnd(item->severity);
+        clrtxt = CONTRAST_COLOUR(bkgnd);
+        nk_layout_row_background(ctx, bkgnd);
+      }
+      /* marker & bookmark symbols */
       nk_layout_row_push(ctx, rowheight); /* width is same as height*/
       if (lines == markline) {
         stbtn.normal.data.color = stbtn.hover.data.color
@@ -1402,33 +1686,51 @@ void tracelog_widget(struct nk_context *ctx, const char *id, float rowheight, in
           = COLOUR_BG0;
         stbtn.text_normal = stbtn.text_active = stbtn.text_hover = COLOUR_FG_YELLOW;
         nk_button_symbol_styled(ctx, &stbtn, NK_SYMBOL_TRIANGLE_RIGHT);
+        if (item->severity == 1)
+          clrtxt = COLOUR_FG_YELLOW;
       } else {
-        nk_spacing(ctx, 1);
+        enum nk_symbol_type sym;
+        struct nk_color fgnd;
+        if ((item->flags & TSFLAG_BOOKMARK) != 0) {
+          sym = NK_SYMBOL_LINK;
+          if ((item->flags & TSFLAG_ACTIVEMARK) != 0) {
+            bkmarkline = lines;
+            fgnd = COLOUR_FG_YELLOW;
+            if (item->severity == 1)
+              clrtxt = COLOUR_FG_YELLOW;
+          } else {
+            fgnd = COLOUR_FG_PURPLE;
+          }
+        } else {
+          sym = NK_SYMBOL_NONE;
+          fgnd = clrtxt;
+        }
+        stbtn.normal.data.color = stbtn.hover.data.color
+          = stbtn.active.data.color = stbtn.text_background
+          = COLOUR_BG0;
+        stbtn.text_normal = stbtn.text_active = stbtn.text_hover = fgnd;
+        if (nk_button_symbol_styled(ctx, &stbtn, sym))
+          item->flags ^= TSFLAG_BOOKMARK;
       }
       /* channel label */
-      assert(item->channel < NUM_CHANNELS);
+      assert(item->channel_id < NUM_CHANNELS);
       stbtn.normal.data.color = stbtn.hover.data.color
         = stbtn.active.data.color = stbtn.text_background
-        = channels[item->channel].color;
-      struct nk_color clrtxt;
-      if (channels[item->channel].color.r + 2 * channels[item->channel].color.g + channels[item->channel].color.b < 700)
-        clrtxt = COLOUR_HIGHLIGHT;
-      else
-        clrtxt = COLOUR_BG0;
-      stbtn.text_normal = stbtn.text_active = stbtn.text_hover = clrtxt;
+        = channels[item->channel_id].color;
+      stbtn.text_normal = stbtn.text_active = stbtn.text_hover
+        = CONTRAST_COLOUR(channels[item->channel_id].color);
       nk_layout_row_push(ctx, (float)labelwidth);
-      nk_button_label_styled(ctx, &stbtn, channels[item->channel].name);
+      nk_button_label_styled(ctx, &stbtn, channels[item->channel_id].name);
       /* timestamp (relative time since previous trace) */
       nk_layout_row_push(ctx, (float)tstampwidth);
-      nk_label_colored(ctx, item->timefmt, NK_TEXT_RIGHT, COLOUR_FG_YELLOW);
+      struct nk_rect tstamp_bounds = nk_widget_bounds(ctx);
+      nk_fill_rect(&ctx->current->buffer, tstamp_bounds, 0, COLOUR_BG0);
+      nk_label_colored(ctx, item->timefmt, NK_TEXT_RIGHT, COLOUR_FG_AQUA);
       /* calculate size of the text */
       assert(font != NULL && font->width != NULL);
       int textwidth = (int)font->width(font->userdata, font->height, item->text, item->length) + 10;
       nk_layout_row_push(ctx, (float)textwidth);
-      if (lines == markline)
-        nk_text_colored(ctx, item->text, item->length, NK_TEXT_LEFT, COLOUR_FG_YELLOW);
-      else
-        nk_text(ctx, item->text, item->length, NK_TEXT_LEFT);
+      nk_text_colored(ctx, item->text, item->length, NK_TEXT_LEFT, clrtxt);
       nk_layout_row_end(ctx);
       lines++;
     }
@@ -1439,7 +1741,7 @@ void tracelog_widget(struct nk_context *ctx, const char *id, float rowheight, in
         struct nk_color clr;
         if (item->flags < 0)
           clr = COLOUR_FG_RED;
-        else if (item->channel == TRACESTATMSG_CTF)
+        else if (item->channel_id == TRACESTATMSG_CTF)
           clr = COLOUR_FG_AQUA;
         else
           clr = COLOUR_FG_YELLOW;
@@ -1463,14 +1765,18 @@ void tracelog_widget(struct nk_context *ctx, const char *id, float rowheight, in
     if (lines != linecount) {
       linecount = lines;
       ypos = (int)((lines - widgetlines + 1) * lineheight);
-    } else if (markline != recent_markline) {
+    } else if (markline > 0 && markline != recent_markline) {
       recent_markline = markline;
-      if (markline >= 0) {
-        ypos = markline - widgetlines / 2;
-        if (ypos > lines - widgetlines + 1)
-          ypos = lines - widgetlines + 1;
-        ypos = (int)(ypos * lineheight);
-      }
+      ypos = markline - widgetlines / 2;
+      if (ypos > lines - widgetlines + 1)
+        ypos = lines - widgetlines + 1;
+      ypos = (int)(ypos * lineheight);
+    } else if (bkmarkline >= 0 && bkmarkline != recent_markline) {
+      recent_markline = bkmarkline;
+      ypos = bkmarkline - widgetlines / 2;
+      if (ypos > lines - widgetlines + 1)
+        ypos = lines - widgetlines + 1;
+      ypos = (int)(ypos * lineheight);
     }
     if (ypos < 0)
       ypos = 0;
@@ -1478,6 +1784,8 @@ void tracelog_widget(struct nk_context *ctx, const char *id, float rowheight, in
       nk_group_set_scroll(ctx, id, 0, ypos);
       scrollpos = ypos;
     }
+    if (bkmarkline < 0 && markline < 0)
+      recent_markline = -1;
   }
   nk_style_pop_color(ctx);
 }
@@ -1494,15 +1802,17 @@ typedef struct tagTIMELINE {
 
 #define EPSILON     0.001
 #define FLTEQ(a,b)  ((a)-EPSILON<(b) && (a)+EPSILON>(b))  /* test whether floating-point values are equal within a small margin */
-#define MARK_SECOND   1000000
+#define MARK_SECOND         1000000
+#define TIMELINE_CANVAS_MAX 65535
 static float mark_spacing = 100.0;              /* spacing between two mark_deltatime positions */
 static unsigned long mark_scale = MARK_SECOND;  /* 1 -> us, 1000 -> ms, 1000000 -> s, 60000000 -> min, etc. */
 static unsigned long mark_deltatime = 1;        /* in seconds / mark_scale */
 static TRACESTRING *tracestring_tail_prev = NULL;
 static TIMELINE timeline[NUM_CHANNELS];
 static float timeline_maxpos = 0.0;             /* width of the timeline canvas */
-static double timeoffset = 0.0;
+static double timeoffset = 0.0;                 /* timestamp of the first message */
 static int timeline_maxcount = 1;               /* count of traces that collapse on the same marker line on the timeline */
+static bool timeline_zoomfit = false;
 
 void timeline_getconfig(double *spacing, unsigned long *scale, unsigned long *delta)
 {
@@ -1523,7 +1833,16 @@ void timeline_setconfig(double spacing, unsigned long scale, unsigned long delta
   }
 }
 
-void timeline_rebuild(int limitlines)
+/** timeline_rebuild() builds the data structure for the timeline from the
+ *  trace messages.
+ *
+ *  \param limitlines   When set, consider only the final `limitlines` trace
+ *                      messages. When -1, there is no limit.
+ *
+ *  \note Updates variables `timeline_maxpos`, `timeoffset` and
+ *        `timeline_maxcount`.
+ */
+void timeline_rebuild(int limitlines, bool zoomfit)
 {
   static int skiplines = 0;
   if (limitlines < 0)
@@ -1532,6 +1851,7 @@ void timeline_rebuild(int limitlines)
   timeline_maxpos = 0.0;  /* this variable is recalculated */
   timeoffset = 0.0;
   timeline_maxcount = 1;
+  timeline_zoomfit = zoomfit;
 
   /* marks only get added, until the list is cleared completely */
   if (tracestring_root.next == NULL) {
@@ -1553,7 +1873,7 @@ void timeline_rebuild(int limitlines)
     for (TRACESTRING *item = tracestring_root.next; item != NULL; item = item->next) {
       int idx;
       float pos;
-      chan = item->channel;
+      chan = item->channel_id;
       assert(chan >= 0 && chan < NUM_CHANNELS);
       if (!channels[chan].enabled)
         continue;
@@ -1611,6 +1931,34 @@ void timeline_rebuild(int limitlines)
   }
 }
 
+/** timeline_zoom() recalculates the timeline zoom variables.
+ */
+static void timeline_zoom(bool zoomin)
+{
+  if (zoomin) {
+    mark_spacing *= 1.5;
+    if (mark_spacing > 700.0 && (mark_deltatime > 1 || mark_scale > 1)) {
+      mark_deltatime /= 10;
+      mark_spacing /= 10.0;
+      if (mark_deltatime == 0 && mark_scale >= 1000) {
+        mark_scale /= 1000;
+        mark_deltatime = 100;
+      }
+    }
+  } else {
+    if (mark_spacing > 45.0 || mark_scale < 60000000 || mark_deltatime == 1)
+      mark_spacing /= 1.5;
+    if (mark_spacing < 70.0) {
+      mark_deltatime *= 10;
+      mark_spacing *= 10.0;
+      if (mark_scale < MARK_SECOND && mark_deltatime >= 1000) {
+        mark_scale *= 1000;
+        mark_deltatime /= 1000;
+      }
+    }
+  }
+}
+
 double timeline_widget(struct nk_context *ctx, const char *id, float rowheight,
                        int limitlines, nk_flags widget_flags)
 {
@@ -1623,7 +1971,7 @@ double timeline_widget(struct nk_context *ctx, const char *id, float rowheight,
     return click_time;
 
   if (tracestring_tail != tracestring_tail_prev) {
-    timeline_rebuild(limitlines); /* rebuild the "trace marks" data */
+    timeline_rebuild(limitlines, false); /* new data arrived, rebuild the "trace marks" data */
     tracestring_tail_prev = tracestring_tail;
   }
 
@@ -1662,9 +2010,9 @@ double timeline_widget(struct nk_context *ctx, const char *id, float rowheight,
 
     /* first row: timer ticks, may not scroll vertically */
     switch (mark_scale) {
-      case 1: unit = "\xC2\xB5s"; break; /* us */
-      case 1000: unit = "ms";     break;
-      case 1000000: unit = "s";  break;
+      case 1: unit = "\xC2\xB5s";  break; /* us */
+      case 1000: unit = "ms";      break;
+      case 1000000: unit = "s";    break;
       case 60000000: unit = "min"; break;
       default: assert(0);
     }
@@ -1676,14 +2024,17 @@ double timeline_widget(struct nk_context *ctx, const char *id, float rowheight,
     int submark_iter = 0;
     long mark_stamp = 0;
     long mark_inv_scale = MARK_SECOND / mark_scale;
+    long mark_stamp_floor = 0;
     for (x1 = rc.x + labelwidth + HORPADDING - xscroll; x1 < x2; x1 += mark_spacing / submark_count) {
       if (submark_iter == 0) {
         struct nk_color clr;
         if (mark_stamp % mark_inv_scale == 0) {
-          sprintf(valstr, "%ld s", mark_stamp / mark_inv_scale);
+          long sec = mark_stamp / mark_inv_scale;
+          mark_stamp_floor = sec * mark_inv_scale;
+          sprintf(valstr, "%ld s", sec);
           clr = COLOUR_FG_YELLOW;
         } else {
-          sprintf(valstr, "+%ld %s", mark_stamp, unit);
+          sprintf(valstr, "+%ld %s", mark_stamp - mark_stamp_floor, unit);
           clr = COLOUR_TEXT;
         }
         nk_stroke_line(&win->buffer, x1, rc.y, x1, rc.y + rowheight - 2, 1, clr);
@@ -1705,30 +2056,15 @@ double timeline_widget(struct nk_context *ctx, const char *id, float rowheight,
     nk_spacing(ctx, 1);
     nk_layout_row_push(ctx, 1.5f * rowheight);
     if (nk_button_symbol_styled(ctx, &stbtn, NK_SYMBOL_PLUS)) {
-      mark_spacing *= 1.5;
-      if (mark_spacing > 700.0 && (mark_deltatime > 1 || mark_scale > 1)) {
-        mark_deltatime /= 10;
-        mark_spacing /= 10.0;
-        if (mark_deltatime == 0 && mark_scale >= 1000) {
-          mark_scale /= 1000;
-          mark_deltatime = 100;
-        }
-      }
-      timeline_rebuild(limitlines);
+      timeline_zoom(true);
+      timeline_rebuild(limitlines, false);
     }
     nk_layout_row_push(ctx, 1.5f * rowheight);
-    if (nk_button_symbol_styled(ctx, &stbtn, NK_SYMBOL_MINUS)) {
-      if (mark_spacing > 45.0 || mark_scale < 60000000 || mark_deltatime == 1)
-        mark_spacing /= 1.5;
-      if (mark_spacing < 70.0) {
-        mark_deltatime *= 10;
-        mark_spacing *= 10.0;
-        if (mark_scale < MARK_SECOND && mark_deltatime >= 1000) {
-          mark_scale *= 1000;
-          mark_deltatime /= 1000;
-        }
-      }
-      timeline_rebuild(limitlines);
+    if (nk_button_symbol_styled(ctx, &stbtn, NK_SYMBOL_MINUS)
+        || timeline_maxpos >= TIMELINE_CANVAS_MAX) //??? timeline is limited to 64 KiB pixels in width, due to Nuklear implementation
+    {
+      timeline_zoom(false);
+      timeline_rebuild(limitlines, false);
     }
     nk_layout_row_end(ctx);
 
@@ -1755,10 +2091,7 @@ double timeline_widget(struct nk_context *ctx, const char *id, float rowheight,
         rc.w -= HORPADDING;
         rc.h -= 1;
         nk_fill_rect(&win->buffer, rc, 0.0f, channels[chan].color);
-        if (channels[chan].color.r + 2 * channels[chan].color.g + channels[chan].color.b < 700)
-          clrtxt = COLOUR_HIGHLIGHT;
-        else
-          clrtxt = COLOUR_BG0;
+        clrtxt = CONTRAST_COLOUR(channels[chan].color);
         /* center the text in the rect */
         len = strlen(channels[chan].name);
         textwidth = font->width(font->userdata, font->height, channels[chan].name, len);
@@ -1818,6 +2151,18 @@ double timeline_widget(struct nk_context *ctx, const char *id, float rowheight,
   /* restore locally modified styles */
   nk_style_pop_color(ctx);
   nk_style_pop_vec2(ctx);
+
+  if (timeline_zoomfit) {
+    if (timeline_maxpos > rcwidget.w) {
+      timeline_zoom(false);
+      timeline_rebuild(limitlines, timeline_zoomfit);
+    } else if (timeline_maxpos < rcwidget.w / 1.5) {
+      timeline_zoom(true);
+      timeline_rebuild(limitlines, timeline_zoomfit);
+    } else {
+      timeline_zoomfit = false;
+    }
+  }
 
   return click_time;
 }

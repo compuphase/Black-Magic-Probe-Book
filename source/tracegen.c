@@ -4,7 +4,7 @@
  * The * input is a file in the Trace Stream Description Language (TDSL), the
  * primary specification language for CTF.
  *
- * Copyright 2019-2023 CompuPhase
+ * Copyright 2019-2024 CompuPhase
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -23,6 +23,7 @@
 #include <ctype.h>
 #include <errno.h>
 #include <stdarg.h>
+#include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -63,19 +64,21 @@ typedef struct tagPATHLIST {
 # define IS_OPTION(s)  ((s)[0] == '-')
 #endif
 
-#define FLAG_MACRO      0x0001
-#define FLAG_INDENT     0x0002
-#define FLAG_BASICTYPES 0x0004
-#define FLAG_STREAMID   0x0008
-#define FLAG_C99        0x0010
-#define FLAG_NO_INSTR   0x0020
+#define FLAG_MACRO        0x0001
+#define FLAG_INDENT       0x0002
+#define FLAG_BASICTYPES   0x0004
+#define FLAG_STREAMID     0x0008
+#define FLAG_C99          0x0010
+#define FLAG_NO_INSTR     0x0020
+#define FLAG_STREAM_MASK  0x0040
+#define FLAG_SEVERITY_LVL 0x0080
 
 
-int ctf_error_notify(int code, int linenr, const char *message)
+int ctf_error_notify(int code, const char *filename, int linenr, const char *message)
 {
   (void)code; /* unused */
   if (linenr > 0)
-    fprintf(stderr, "ERROR on line %d: ", linenr);
+    fprintf(stderr, "ERROR %s line %d: ", filename, linenr);
   else
     fprintf(stderr, "ERROR: ");
   assert(message != NULL);
@@ -83,7 +86,7 @@ int ctf_error_notify(int code, int linenr, const char *message)
   return 0;
 }
 
-static const char *type_to_string(const CTF_TYPE *type, char *typedesc, int size)
+static const char *type_to_string(const CTF_TYPE *type, char *typedesc, int size, unsigned flags)
 {
   assert(typedesc != NULL);
   *typedesc = '\0';
@@ -120,7 +123,10 @@ static const char *type_to_string(const CTF_TYPE *type, char *typedesc, int size
     }
     break;
   case CLASS_BOOL:
-    strlcat(typedesc, "_Bool", size);
+    if (flags & FLAG_C99)
+      strlcat(typedesc, "_Bool", size);
+    else
+      strlcat(typedesc, "int", size);
     break;
   case CLASS_STRING:
     strlcat(typedesc, "const char*", size);
@@ -208,9 +214,12 @@ static int generate_functionheader(FILE *fp, const CTF_EVENT *evt, unsigned flag
       fprintf(fp, ", ");
     if (!(flags & FLAG_MACRO)) {
       char typedesc[64] = "";
-      if ((flags & FLAG_BASICTYPES) || strlen(field->type.name) == 0)
-        type_to_string(&field->type, typedesc, sizearray(typedesc));
-      if (strlen(typedesc) > 0) {
+      if ((flags & FLAG_BASICTYPES)                                         /* translation to basic types is requested */
+          || field->type.typeclass == CLASS_ENUM                            /* always translate TSDL enums to C type */
+          || (field->type.typeclass == CLASS_BOOL && !(flags & FLAG_C99))   /* translate TSDL "bool" type to "int" for C90 */
+          || strlen(field->type.name) == 0)                                 /* make type if TSDL typename is anonymous */
+        type_to_string(&field->type, typedesc, sizearray(typedesc), flags);
+      if (strlen(typedesc)>0) {
         fprintf(fp, "%s ", typedesc);
       } else if (field->type.typeclass == CLASS_STRUCT) {
         /* check whether this is a typedef declaration, if not -> add "struct"
@@ -264,7 +273,7 @@ void generate_prototypes(FILE *fp, unsigned flags, const char *trace_func,
 
   assert(trace_func != NULL && strlen(trace_func) > 0);
   if (flags & FLAG_STREAMID)
-    fprintf(fp, "void %s(int stream_id, const unsigned char *data, unsigned size);\n", trace_func);
+    fprintf(fp, "void %s(unsigned stream_id, const unsigned char *data, unsigned size);\n", trace_func);
   else
     fprintf(fp, "void %s(const unsigned char *data, unsigned size);\n", trace_func);
   /* assume all all streams to have compatible clocks, so get only the first clock */
@@ -276,7 +285,7 @@ void generate_prototypes(FILE *fp, unsigned flags, const char *trace_func,
        TSDL type is not compatible with C */
     assert(stream->clock != NULL);
     assert(timestamp_func != NULL && strlen(timestamp_func) > 0);
-    fprintf(fp, "%s %s(void);\n", type_to_string(stream->clock, typedesc, sizearray(typedesc)), timestamp_func);
+    fprintf(fp, "%s %s(void);\n", type_to_string(stream->clock, typedesc, sizearray(typedesc), flags), timestamp_func);
   }
   fprintf(fp, "\n");
 
@@ -297,9 +306,6 @@ void generate_prototypes(FILE *fp, unsigned flags, const char *trace_func,
 void generate_funcstubs(FILE *fp, unsigned flags, const char *trace_func,
                         const char *timestamp_func, const char *headerfile)
 {
-  char xmit_call[40];
-  const CTF_EVENT *evt;
-
   /* file header */
   assert(fp != NULL);
   assert(headerfile != NULL);
@@ -309,22 +315,28 @@ void generate_funcstubs(FILE *fp, unsigned flags, const char *trace_func,
               "#ifndef NTRACE\n"
               "#include <string.h>\n");
 
-  if ((flags & FLAG_C99) == 0)
+  if (!(flags & FLAG_C99))
     fprintf(fp, "#include <alloca.h>\n");
   assert(headerfile != NULL && strlen(headerfile) > 0);
   fprintf(fp, "#include \"%s\"\n\n", headerfile);
 
+  if (flags & FLAG_STREAM_MASK)
+    fprintf(fp, "unsigned long trace_stream_mask = ~0Lu;\n");
+  if (flags & FLAG_SEVERITY_LVL)
+    fprintf(fp, "unsigned char trace_severity_level = 1;\n");
+  if (flags & (FLAG_STREAM_MASK | FLAG_SEVERITY_LVL))
+    fprintf(fp, "\n");
+
+  const CTF_EVENT *evt;
   for (evt = event_next(NULL); evt != NULL; evt = event_next(evt)) {
     const CTF_PACKET_HEADER *pkthdr = packet_header();
     const CTF_STREAM *stream = stream_by_id(evt->stream_id);
     const CTF_EVENT_HEADER *evthdr = (stream != NULL) ? &stream->event : NULL;
-    const CTF_EVENT_FIELD *field;
-    int pos, stringcount, headersz, fixedsz;
-    const char *var_totallength, *var_index;
 
     generate_functionheader(fp, evt, flags);
     fprintf(fp, "\n{\n");
 
+    char xmit_call[40];
     if (flags & FLAG_STREAMID)
       sprintf(xmit_call, "%s(%d, ", trace_func, (stream != NULL) ? stream->stream_id : 0);
     else
@@ -333,10 +345,10 @@ void generate_funcstubs(FILE *fp, unsigned flags, const char *trace_func,
     /* go through the options and arguments to determine the fixed size of the
        trace message (the size excluding arguments that are variable length
        strings) */
-    stringcount = 0;
-    fixedsz = 0;
+    int stringcount = 0;
+    int fixedsz = 0;
     assert(pkthdr != NULL);
-    headersz = pkthdr->header.magic_size / 8;
+    int headersz = pkthdr->header.magic_size / 8;
     if (pkthdr->header.streamid_size > 0)
       headersz += pkthdr->header.streamid_size / 8;
     if (evthdr != NULL && evthdr->header.id_size > 0)
@@ -345,6 +357,7 @@ void generate_funcstubs(FILE *fp, unsigned flags, const char *trace_func,
       fixedsz += evthdr->header.timestamp_size / 8;
     /* for strings, only add the zero terminator byte, the parameter lengths
        are added later (by generating a call to strlen) */
+    const CTF_EVENT_FIELD *field;
     for (field = evt->field_root.next; field != NULL; field = field->next) {
       if (field->type.typeclass == CLASS_STRING)
         stringcount += 1;  /* count the number of string parameters */
@@ -352,10 +365,29 @@ void generate_funcstubs(FILE *fp, unsigned flags, const char *trace_func,
         fixedsz += field->type.size / 8;
     }
 
+    /* check options for filtering */
+    const char *indent = "  ";
+    if (flags & (FLAG_STREAM_MASK | FLAG_SEVERITY_LVL)) {
+      if ((flags & FLAG_STREAM_MASK) && stream->stream_id >= (8*sizeof(unsigned long))) {
+        if (strlen(stream->name) > 0)
+          fprintf(stderr, "ERROR: stream '%s' has id %d, which is larger than the stream mask\n", stream->name, stream->stream_id);
+        else
+          fprintf(stderr, "ERROR: anonymous stream has id %d, which is larger than the stream mask\n", stream->stream_id);
+      }
+      if ((flags & (FLAG_STREAM_MASK | FLAG_SEVERITY_LVL)) == (FLAG_STREAM_MASK | FLAG_SEVERITY_LVL))
+        fprintf(fp, "%sif ((trace_stream_mask & 0x%08lxLu) && trace_severity_level <= %d) {\n",
+                indent, 1Lu << stream->stream_id, evt->severity);
+      else if (flags & FLAG_STREAM_MASK)
+        fprintf(fp, "%sif (trace_stream_mask & 0x%08lxLu) {\n", indent, 1Lu<<stream->stream_id);
+      else
+        fprintf(fp, "%sif (trace_severity_level <= %d) {\n", indent, evt->severity);
+      indent = "    ";
+    }
+
     /* handle the constant part of the headers */
-    pos = 0;
+    int pos = 0;
     if (headersz > 0) {
-      fprintf(fp, "  static const unsigned char header[%d] = {", headersz);
+      fprintf(fp, "%sstatic const unsigned char header[%d] = {", indent, headersz);
       /* check for a packet header (for stream-based protocols, there should be one) */
       assert(pkthdr != NULL);
       switch (pkthdr->header.magic_size) {
@@ -399,17 +431,19 @@ void generate_funcstubs(FILE *fp, unsigned flags, const char *trace_func,
       assert(timestamp_func != NULL && strlen(timestamp_func) > 0);
       /* the clock type must be converted to a standard C type, because the
          TSDL type is not compatible with C */
-      fprintf(fp, "  %s tstamp = %s();\n", type_to_string(clock, typedesc, sizearray(typedesc)), timestamp_func);
+      fprintf(fp, "%s%s tstamp = %s();\n", indent, type_to_string(clock, typedesc, sizearray(typedesc), flags), timestamp_func);
     }
     /* if there are string parameters, create variables for their lengths and
        their positions in the buffer */
+    const char *var_totallength = NULL;
+    const char *var_index = NULL;
     if (stringcount > 0) {
       int count = 0;
       if (stringcount > 1)
-        fprintf(fp, "  unsigned index = 0;\n");
+        fprintf(fp, "%sunsigned index = 0;\n", indent);
       for (field = evt->field_root.next; field != NULL; field = field->next)
         if (field->type.typeclass == CLASS_STRING)
-          fprintf(fp, "  unsigned length%d = strlen(%s);\n", count++, field->name);
+          fprintf(fp, "%sunsigned length%d = strlen(%s);\n", indent, count++, field->name);
       if (stringcount == 1) {
         var_totallength = "length0";
         var_index = "length0";
@@ -417,7 +451,7 @@ void generate_funcstubs(FILE *fp, unsigned flags, const char *trace_func,
         int idx;
         var_totallength = "totallength";
         var_index = "index";
-        fprintf(fp, "  unsigned %s = ", var_totallength);
+        fprintf(fp, "%sunsigned %s = ", indent, var_totallength);
         for (idx = 0; idx < count; idx++) {
           if (idx > 0)
             fprintf(fp, " + ");
@@ -430,15 +464,15 @@ void generate_funcstubs(FILE *fp, unsigned flags, const char *trace_func,
     if (stringcount == 0 && fixedsz == 0) {
       /* if there are no parameters and no timestamp, there is no variable part
          in the message, so the generated code can be very simple */
-      fprintf(fp, "  %sheader, %d);\n", xmit_call, headersz);
+      fprintf(fp, "%s%sheader, %d);\n", indent, xmit_call, headersz);
     } else {
       int seq;
       /* create a variable for the buffer (the stringcount count is added to the
          fixed size because the zero byte of each string must be allocated too */
       if ((flags & FLAG_C99) == 0 || stringcount == 0)
-        fprintf(fp, "  unsigned char buffer[%d", headersz + fixedsz + stringcount);
+        fprintf(fp, "%sunsigned char buffer[%d", indent, headersz + fixedsz + stringcount);
       else
-        fprintf(fp, "  unsigned char *buffer = alloca(%d", headersz + fixedsz + stringcount);
+        fprintf(fp, "%sunsigned char *buffer = alloca(%d", indent, headersz + fixedsz + stringcount);
       if (stringcount > 0)
         fprintf(fp, " + %s", var_totallength);
       if ((flags & FLAG_C99) == 0 || stringcount == 0)
@@ -447,19 +481,21 @@ void generate_funcstubs(FILE *fp, unsigned flags, const char *trace_func,
         fprintf(fp, ");\n");
       /* copy the fixed header to the buffer */
       if (headersz > 0)
-        fprintf(fp, "  memcpy(buffer, header, %d);\n", headersz);
+        fprintf(fp, "%smemcpy(buffer, header, %d);\n", indent, headersz);
       /* copy the timestamp */
       if (evthdr != NULL && evthdr->header.timestamp_size > 0) {
-        fprintf(fp, "  memcpy(buffer + %d, &tstamp, %d);\n", headersz, evthdr->header.timestamp_size / 8);
+        fprintf(fp, "%smemcpy(buffer + %d, &tstamp, %d);\n", indent, headersz, evthdr->header.timestamp_size / 8);
         pos += evthdr->header.timestamp_size / 8;
       }
       /* the parameters */
       seq = 0;
       for (field = evt->field_root.next; field != NULL; field = field->next) {
-        if (seq == 0)
-          fprintf(fp, "  memcpy(buffer + %d, ", pos);
-        else
-          fprintf(fp, "  memcpy(buffer + %d + %s, ", pos, var_index);
+        if (seq == 0) {
+          fprintf(fp, "%smemcpy(buffer + %d, ", indent, pos);
+        } else {
+          assert(var_index != NULL);
+          fprintf(fp, "%smemcpy(buffer + %d + %s, ", indent, pos, var_index);
+        }
         if (field->type.typeclass == CLASS_INTEGER || field->type.typeclass == CLASS_BOOL
             || field->type.typeclass == CLASS_FLOAT || field->type.typeclass == CLASS_ENUM
             || field->type.typeclass == CLASS_STRUCT)
@@ -470,7 +506,7 @@ void generate_funcstubs(FILE *fp, unsigned flags, const char *trace_func,
           if (stringcount == 1)
             pos += 1; /* for the zero byte */
           else
-            fprintf(fp, "  index += length%d + 1;\n", seq);
+            fprintf(fp, "%sindex += length%d + 1;\n", indent, seq);
           seq++;
         } else {
           fprintf(fp, "%u);\n", field->type.size / 8);
@@ -478,12 +514,17 @@ void generate_funcstubs(FILE *fp, unsigned flags, const char *trace_func,
         }
       }
 
-      fprintf(fp, "  %sbuffer, %d", xmit_call, headersz + fixedsz + stringcount);
-      if (stringcount > 0)
+      fprintf(fp, "%s%sbuffer, %d", indent, xmit_call, headersz + fixedsz + stringcount);
+      if (stringcount > 0) {
+        assert(var_totallength != NULL);
         fprintf(fp, " + %s", var_totallength);
+      }
       fprintf(fp, ");\n");
     }
-    fprintf(fp, "}\n\n");
+
+    if (flags & (FLAG_STREAM_MASK | FLAG_SEVERITY_LVL))
+      fprintf(fp, "  }\n"); /* end "if" block for filtering on stream id or severity level */
+    fprintf(fp, "}\n\n");   /* end function */
   }
 
   /* file trailer */
@@ -496,17 +537,20 @@ static void usage(int status)
          "           tracing in the Common Trace Format.\n\n"
          "Usage: tracegen [options] inputfile\n\n"
          "Options:\n"
-         "-c99      Generate C99-compatible code (default is C90).\n"
-         "-fs=name  Set the name for the time stamp function, default = trace_timestamp\n"
-         "-fx=name  Set the name for the trace transmit function, default = trace_xmit\n"
-         "-i=path   Generate an #include <...> directive with this path.\n"
-         "-I=path   Generate an #include \"...\" directive with this path.\n"
-         "          The -i and -I options may appear multiple times.\n"
-         "-no-instr Add a \"no_instrument_function\" attribute to all generated functions.\n"
-         "-o=name   Base output filename; a .c and .h suffix is added to this name.\n"
-         "-s        SWO tracing: use channels for stream ids.\n"
-         "-t        Force basic C types on arguments, if available.\n"
-         "-v        Show version information.\n");
+         "-c99       Generate C99-compatible code (default is C90).\n"
+         "-f=level   Generate code to enable/disable message severity levels.\n"
+         "-f=stream  Generate code to enable/disable streams.\n"
+         "-fs=name   Set the name for the time stamp function, default = trace_timestamp\n"
+         "-fx=name   Set the name for the trace transmit function, default = trace_xmit\n"
+         "-g=stream  Generate code to enable/disable streams.\n"
+         "-i=path    Add an #include <...> directive with this path.\n"
+         "-I=path    Add an #include \"...\" directive with this path.\n"
+         "           The -i and -I options may appear multiple times.\n"
+         "-no-instr  Add a \"no_instrument_function\" attribute to all generated functions.\n"
+         "-o=name    Base output filename; a .c and .h suffix is added to this name.\n"
+         "-s=swo     SWO tracing: use SWO channels for stream ids.\n"
+         "-t         Force basic C types on arguments, if available.\n"
+         "-v         Show version information.\n");
   exit(status);
 }
 
@@ -516,10 +560,16 @@ static void unknown_option(const char *option)
   exit(EXIT_FAILURE);
 }
 
+static void incomplete_option(const char *option)
+{
+  fprintf(stderr, "Missing parameter or value in option \"%s\"; use option -h for help.\n", option);
+  exit(EXIT_FAILURE);
+}
+
 static void version(int status)
 {
   printf("tracegen version %s.\n", SVNREV_STR);
-  printf("Copyright 2019-2023 CompuPhase\nLicensed under the Apache License version 2.0\n");
+  printf("Copyright 2019-2024 CompuPhase\nLicensed under the Apache License version 2.0\n");
   exit(status);
 }
 
@@ -554,21 +604,32 @@ int main(int argc, char *argv[])
           unknown_option(argv[idx]);
         break;
       case 'f':
-        switch (argv[idx][2]) {
-        case 's':
-          ptr = &argv[idx][3];
+        ptr = &argv[idx][2];
+        if (strcmp(ptr, "stream") == 0) {
+          opt_flags |= FLAG_STREAM_MASK;
+        } else if (*ptr == 's' || *ptr == 'x') {
+          const char *name = ptr + 1;
+          if (*name == '=' || *name == ':')
+            name++;
+          if (*name == '\0')
+            incomplete_option(argv[idx]);
+          switch (*ptr) {
+          case 's':
+            strlcpy(timestamp_func, name, sizearray(timestamp_func));
+            break;
+          case 'x':
+            strlcpy(trace_func, name, sizearray(trace_func));
+            break;
+          }
+        } else {
           if (*ptr == '=' || *ptr == ':')
             ptr++;
-          strlcpy(timestamp_func, ptr, sizearray(timestamp_func));
-          break;
-        case 'x':
-          ptr = &argv[idx][3];
-          if (*ptr == '=' || *ptr == ':')
-            ptr++;
-          strlcpy(trace_func, ptr, sizearray(trace_func));
-          break;
-        default:
-          unknown_option(argv[idx]);
+          if (strcmp(ptr, "stream") == 0)
+            opt_flags |= FLAG_STREAM_MASK;
+          else if (strcmp(ptr, "level") == 0)
+            opt_flags |= FLAG_SEVERITY_LVL;
+          else
+            unknown_option(argv[idx]);
         }
         break;
       case 'I':
@@ -604,7 +665,17 @@ int main(int argc, char *argv[])
         strlcpy(outfile, ptr, sizearray(outfile));
         break;
       case 's':
-        opt_flags |= FLAG_STREAMID;
+        ptr = &argv[idx][2];
+        if (*ptr == '\0') {
+          opt_flags |= FLAG_STREAMID; /* old option */
+        } else {
+          if (*ptr=='=' || *ptr==':')
+            ptr++;
+          if (strcmp(ptr, "swo") == 0)
+            opt_flags |= FLAG_STREAMID;
+          else
+            unknown_option(argv[idx]);
+        }
         break;
       case 't':
         opt_flags |= FLAG_BASICTYPES;
