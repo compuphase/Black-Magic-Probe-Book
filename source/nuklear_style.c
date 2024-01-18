@@ -107,3 +107,43 @@ void editctrl_reset_color(struct nk_context *ctx, bool condition)
   }
 }
 
+struct nk_color default_channel_colour(int channel)
+{
+  channel %= 8;
+  switch (channel) {
+  case 0:
+    return COLOUR_BG_GRAY;
+  case 1:
+    return COLOUR_BG_AQUA;
+  case 2:
+    return COLOUR_BG_PURPLE;
+  case 3:
+    return COLOUR_BG_BLUE;
+  case 4:
+    return COLOUR_BG_YELLOW;
+  case 5:
+    return COLOUR_BG_GREEN;
+  case 6:
+    return COLOUR_BG_RED;
+  case 7:
+    return COLOUR_BG_ORANGE;
+  }
+  return COLOUR_BG_GRAY;
+}
+
+struct nk_color severity_bkgnd(int severity)
+{
+  switch (severity) {
+  case 0:
+    return COLOUR_BG_BLUE;    /* debug */
+  case 2:
+    return COLOUR_BG_AQUA;    /* notice */
+  case 3:
+    return COLOUR_BG_YELLOW;  /* warning */
+  case 4:
+    return COLOUR_BG_ORANGE;  /* error */
+  case 5:
+    return COLOUR_BG_RED;     /* critical */
+  }
+  return COLOUR_BG0_S;        /* info, or parameter out of range */
+}

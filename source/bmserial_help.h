@@ -221,8 +221,8 @@ const char bmserial_help[] = {
   "The book is available as a free PDF file, and as a printed book.\n"
   "\n"
   "---\n"
-  "Version 1.2.7072M \\\n"
-  "Copyright 2022-2023 CompuPhase \\\n"
+  "Version 1.2.7084 \\\n"
+  "Copyright 2022-2024 CompuPhase \\\n"
   "Licensed under the Apache License version 2.0\n"
   "\n"
 };

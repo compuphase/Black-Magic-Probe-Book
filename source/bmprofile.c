@@ -3,7 +3,7 @@
  * DWT/ITM modules of the Cortex debug architecture. This utility is built with
  * Nuklear for a cross-platform GUI.
  *
- * Copyright 2022-2023 CompuPhase
+ * Copyright 2022-2024 CompuPhase
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -104,11 +104,12 @@ static DWARF_PATHLIST dwarf_filetable = { NULL};
 static float opt_fontsize = FONT_HEIGHT;
 
 
-int ctf_error_notify(int code, int linenr, const char *message)
+int ctf_error_notify(int code, const char *filename, int linenr, const char *message)
 {
   /* This function is not used in the profiler, but required as a dependency
      due to the "swotrace" module */
   (void)code;
+  (void)filename;
   (void)linenr;
   (void)message;
   return 0;
@@ -153,7 +154,7 @@ static void version(void)
 # endif
 
   printf("BMProfile version %s.\n", SVNREV_STR);
-  printf("Copyright 2022-2023 CompuPhase\nLicensed under the Apache License version 2.0\n");
+  printf("Copyright 2022-2024 CompuPhase\nLicensed under the Apache License version 2.0\n");
 }
 
 #if defined FORTIFY

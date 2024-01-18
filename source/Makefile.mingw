@@ -76,30 +76,29 @@ endif
 # -------------------------------------------------------------
 
 OBJLIST_BMDEBUG = bmdebug.o armdisasm.o bmcommon.o bmp-scan.o bmp-script.o \
-                  c11threads_win32.o decodectf.o demangle.o dwarf.o elf.o \
-                  guidriver.o mcu-info.o memdump.o minIni.o nuklear.o \
-                  nuklear_mousepointer.o nuklear_splitter.o nuklear_style.o \
-                  nuklear_tooltip.o osdialog.o parsetsdl.o pathsearch.o \
-                  rs232.o serialmon.o specialfolder.o svd-support.o \
-                  swotrace.o tcpip.o xmltractor.o \
-                  nuklear_gdip.o osdialog_win.o strlcpy.o usb-support.o
+                  decodectf.o demangle.o dwarf.o elf.o guidriver.o mcu-info.o \
+                  memdump.o minIni.o nuklear.o nuklear_mousepointer.o \
+                  nuklear_splitter.o nuklear_style.o nuklear_tooltip.o \
+                  osdialog.o parsetsdl.o pathsearch.o rs232.o serialmon.o \
+                  specialfolder.o strmatch.o svd-support.o swotrace.o tcpip.o \
+                  xmltractor.o \
+                  c11threads_win32.o nuklear_gdip.o osdialog_win.o strlcpy.o usb-support.o
 
 OBJLIST_BMFLASH = bmflash.o bmcommon.o bmp-scan.o bmp-script.o bmp-support.o \
-                  c11threads_win32.o cksum.o crc32.o elf.o fileloader.o \
-                  gdb-rsp.o guidriver.o ident.o mcu-info.o minIni.o \
-                  nuklear.o nuklear_guide.o nuklear_mousepointer.o \
-                  nuklear_style.o nuklear_tooltip.o osdialog.o rs232.o \
-                  specialfolder.o tcl.o tcpip.o xmltractor.o \
-                  nuklear_gdip.o osdialog_win.o strlcpy.o
+                  cksum.o crc32.o elf.o fileloader.o gdb-rsp.o guidriver.o \
+                  ident.o mcu-info.o minIni.o nuklear.o nuklear_guide.o \
+                  nuklear_mousepointer.o nuklear_style.o nuklear_tooltip.o \
+                  osdialog.o rs232.o specialfolder.o tcl.o tcpip.o xmltractor.o \
+                  c11threads_win32.o nuklear_gdip.o osdialog_win.o strlcpy.o
 
 OBJLIST_BMPROFILE = bmprofile.o bmcommon.o bmp-scan.o bmp-script.o \
-                    bmp-support.o c11threads_win32.o crc32.o decodectf.o \
-                    demangle.o dwarf.o elf.o fileloader.o gdb-rsp.o \
-                    guidriver.o mcu-info.o minIni.o nuklear.o nuklear_guide.o \
-                    nuklear_mousepointer.o nuklear_splitter.o nuklear_style.o \
-                    nuklear_tooltip.o osdialog.o parsetsdl.o rs232.o \
-                    specialfolder.o swotrace.o tcpip.o xmltractor.o \
-                    nuklear_gdip.o osdialog_win.o strlcpy.o usb-support.o
+                    bmp-support.o crc32.o decodectf.o demangle.o dwarf.o elf.o \
+                    fileloader.o gdb-rsp.o guidriver.o mcu-info.o minIni.o \
+                    nuklear.o nuklear_guide.o nuklear_mousepointer.o \
+                    nuklear_splitter.o nuklear_style.o nuklear_tooltip.o \
+                    osdialog.o parsetsdl.o rs232.o specialfolder.o strmatch.o \
+                    swotrace.o tcpip.o xmltractor.o \
+                    c11threads_win32.o nuklear_gdip.o osdialog_win.o strlcpy.o usb-support.o
 
 OBJLIST_BMSERIAL = bmserial.o guidriver.o minIni.o nuklear.o nuklear_guide.o \
                    nuklear_mousepointer.o nuklear_splitter.o nuklear_style.o \
@@ -107,18 +106,18 @@ OBJLIST_BMSERIAL = bmserial.o guidriver.o minIni.o nuklear.o nuklear_guide.o \
                    nuklear_gdip.o osdialog_win.o strlcpy.o
 
 OBJLIST_BMTRACE = bmtrace.o bmcommon.o bmp-scan.o bmp-script.o bmp-support.o \
-                  c11threads_win32.o crc32.o decodectf.o demangle.o dwarf.o \
-                  elf.o fileloader.o gdb-rsp.o guidriver.o mcu-info.o \
-                  minIni.o nuklear.o nuklear_guide.o nuklear_mousepointer.o \
+                  crc32.o decodectf.o demangle.o dwarf.o elf.o fileloader.o \
+                  gdb-rsp.o guidriver.o mcu-info.o minIni.o nuklear.o \
+                  nuklear_guide.o nuklear_mousepointer.o nuklear_msgbox.o \
                   nuklear_splitter.o nuklear_style.o nuklear_tooltip.o \
-                  osdialog.o parsetsdl.o rs232.o specialfolder.o swotrace.o \
-                  tcpip.o xmltractor.o \
-                  nuklear_gdip.o osdialog_win.o strlcpy.o usb-support.o
+                  osdialog.o parsetsdl.o rs232.o specialfolder.o strmatch.o \
+                  swotrace.o tcpip.o xmltractor.o \
+                  c11threads_win32.o nuklear_gdip.o osdialog_win.o strlcpy.o usb-support.o
 
-OBJLIST_BMSCAN = bmscan.o bmp-scan.o bmp-script.o bmp-support.o \
-                 c11threads_win32.o crc32.o elf.o fileloader.o gdb-rsp.o \
-                 rs232.o specialfolder.o tcpip.o xmltractor.o \
-                 strlcpy.o
+OBJLIST_BMSCAN = bmscan.o bmp-scan.o bmp-script.o bmp-support.o crc32.o elf.o \
+                 fileloader.o gdb-rsp.o rs232.o specialfolder.o tcpip.o \
+                 xmltractor.o \
+                 c11threads_win32.o strlcpy.o
 
 OBJLIST_CALLTREE = calltree.o strlcpy.o
 
@@ -202,6 +201,8 @@ nuklear_guide.o : nuklear_guide.c
 
 nuklear_mousepointer.o : nuklear_mousepointer.c
 
+nuklear_msgbox.o : nuklear_msgbox.c
+
 nuklear_splitter.o : nuklear_splitter.c
 
 nuklear_style.o : nuklear_style.c
@@ -218,7 +219,7 @@ serialmon.o : serialmon.c
 
 specialfolder.o : specialfolder.c
 
-strlcpy.o : strlcpy.c
+strmatch.o : strmatch.c
 
 svd-support.o : svd-support.c
 

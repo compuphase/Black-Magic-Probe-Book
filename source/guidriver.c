@@ -2,7 +2,7 @@
  * Helper functions for the back-end driver for the Nuklear GUI. Currently, GDI+
  * (for Windows) and GLFW with OpenGL (for Linux) are supported.
  *
- * Copyright 2019-2023 CompuPhase
+ * Copyright 2019-2024 CompuPhase
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -49,6 +49,7 @@
 
 static int fontType = 0;
 static GdipFont *fontStd = NULL;
+static GdipFont *fontBold = NULL;
 static GdipFont *fontMono = NULL;
 static GdipFont *fontHeading1 = NULL;
 static GdipFont *fontHeading2 = NULL;
@@ -222,6 +223,7 @@ struct nk_context* guidriver_init(const char *caption, int width, int height, in
   if (fontStd != NULL) {
     fontHeading1 = nk_gdipfont_create(fontsystem, 1.4*fontsize, NK_FONTBOLD);
     fontHeading2 = nk_gdipfont_create(fontsystem, 1.2*fontsize, NK_FONTBOLDITALIC);
+    fontBold = nk_gdipfont_create(fontsystem, fontsize, NK_FONTBOLD);
     fontSmall = nk_gdipfont_create(fontsystem, 0.75*fontsize, NK_FONTREGULAR);
   }
 
@@ -251,6 +253,8 @@ void guidriver_close(void)
   pointer_cleanup();
   if (fontStd != NULL)
     nk_gdipfont_del(fontStd);
+  if (fontBold != NULL)
+    nk_gdipfont_del(fontBold);
   if (fontMono != NULL)
     nk_gdipfont_del(fontMono);
   if (fontHeading1 != NULL)
@@ -278,6 +282,13 @@ int guidriver_setfont(struct nk_context *ctx, int type)
     if (fontStd != NULL) {
       nk_gdipfont_set_voffset(fontStd, -3);
       nk_gdip_set_font(fontStd);
+      fontType = type;
+    }
+    break;
+  case FONT_BOLD:
+    if (fontBold != NULL) {
+      nk_gdipfont_set_voffset(fontBold, -3);
+      nk_gdip_set_font(fontBold);
       fontType = type;
     }
     break;
@@ -392,6 +403,7 @@ struct nk_image guidriver_image_from_memory(const unsigned char *data, unsigned 
 static GLFWwindow *winApp;
 static int fontType = 0;
 static struct nk_font *fontStd = NULL;
+static struct nk_font *fontBold = NULL;
 static struct nk_font *fontMono = NULL;
 static struct nk_font *fontHeading1 = NULL;
 static struct nk_font *fontHeading2 = NULL;
@@ -465,6 +477,10 @@ struct nk_context* guidriver_init(const char *caption, int width, int height, in
 
     font_locate(path, sizeof path, fontname, "Bold");
     nk_glfw3_font_stash_begin(&atlas);
+    fontBold = nk_font_atlas_add_from_file(atlas, path, fontsize, &fontconfig);
+    nk_glfw3_font_stash_end();
+
+    nk_glfw3_font_stash_begin(&atlas);
     fontHeading1 = nk_font_atlas_add_from_file(atlas, path, 1.4*fontsize, &fontconfig);
     nk_glfw3_font_stash_end();
 
@@ -518,6 +534,12 @@ int guidriver_setfont(struct nk_context *ctx, int type)
   case FONT_STD:
     if (fontStd != NULL) {
       nk_style_set_font(ctx, &fontStd->handle);
+      fontType = type;
+    }
+    break;
+  case FONT_BOLD:
+    if (fontBold != NULL) {
+      nk_style_set_font(ctx, &fontBold->handle);
       fontType = type;
     }
     break;

@@ -224,6 +224,6 @@ The book is available as a free PDF file, and as a printed book.
 
 ---
 Version {{SVNREV_STR}} \
-Copyright 2022-2023 CompuPhase \
+Copyright 2022-2024 CompuPhase \
 Licensed under the Apache License version 2.0
 

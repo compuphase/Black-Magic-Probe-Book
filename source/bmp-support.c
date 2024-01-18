@@ -2,7 +2,7 @@
  * General purpose Black Magic Probe support routines, based on the GDB-RSP
  * serial interface. The "script" support can also be used with GDB.
  *
- * Copyright 2019-2023 CompuPhase
+ * Copyright 2019-2024 CompuPhase
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -1458,5 +1458,28 @@ bool bmp_runscript(const char *name, const char *mcu, const char *arch, unsigned
   }
 
   return result;
+}
+
+/** bmp_writememory() stores data at an address in the target device. The
+ *  address is supposed to be in SRAM (not Flash).
+ */
+bool bmp_writememory(uint32_t address, const uint8_t *data, size_t size)
+{
+  assert(data != NULL);
+  while (size > 0) {
+    char cmd[100];
+    size_t count = (size <= 64) ? size : 64;
+    snprintf(cmd, sizearray(cmd), "X%08X,%X:", address, (uint32_t)count);
+    size_t len = strlen(cmd);
+    assert(len + count <= sizearray(cmd));
+    memmove(cmd + len, data, count);
+    gdbrsp_xmit(cmd, len + count);
+    len = gdbrsp_recv(cmd, sizearray(cmd), 1000);
+    if (!testreply(cmd, len, "OK"))
+      return false;
+    data += count;
+    size -= count;
+  }
+  return true;
 }
 

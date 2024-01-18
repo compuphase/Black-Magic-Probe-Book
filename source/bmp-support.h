@@ -87,6 +87,7 @@ int bmp_restart(void);
 int bmp_break(void);
 
 bool bmp_runscript(const char *name, const char *driver, const char *arch, unsigned long *params, size_t paramcount);
+bool bmp_writememory(uint32_t address, const uint8_t *data, size_t size);
 
 #if defined __cplusplus
   }

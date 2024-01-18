@@ -21,6 +21,7 @@ folded in or out:
 ---
 Miscellaneous information:
     [[The Common Trace Format]]
+    [[Keyboard Interface]]
     [[About BlackMagic Trace Viewer]]
 
 # The Button Bar
@@ -39,7 +40,7 @@ Miscellaneous information:
 
 *Search*
 : Opens a dialog in which you can type a word to search for, in the list. While
-  the dialog is open, you can click on the Find button to search for the next
+  the dialog is open, you can click on the "Find" button to search for the next
   occurrence. The search wraps back to the top after searching beyond the last
   match.
 
@@ -55,6 +56,7 @@ Miscellaneous information:
 See also:
     [[The Timeline]]
     [[Configuration]]
+    [[Searching]]
     [[Filters]]
     [[Keyboard Interface]]
 
@@ -74,6 +76,8 @@ trace capture and packet reception.
 See also:
     [[The Timeline]]
     [[Status]]
+    [[Searching]]
+    [[Bookmarks]]
 
 # The Timeline
 
@@ -201,21 +205,6 @@ the following values:
 See also:
     [[Configuration]]
 
-# Filters
-
-You can filter the trace messages on keywords. Trace messages that are filtered
-out, are still saved in memory, but not displayed. When the filter is disabled
-(or deleted), the messages re-appear.
-
-Text matching is case-sensitive.
-
-If the filter text starts with a tilde ('~'), it is an inverted filter: a trace
-message passes the filter if it does not contain the text that follows the tilde.
-
-A trace message passes all filters (and is displayed) if:
-* it matches any of the standard filters,
-* and matches none of the inverted filters
-
 # Channels
 
 SWO tracing allows for 32-channels. Most implementations use only channel 0, but
@@ -225,21 +214,100 @@ the target (see the Configuration), it is disabled in the target microcontroller
 the traces on that channel are not transmitted, and thus have negligent overhead
 on the target's execution.
 
-When a TSDL file is configured, the channel names are copied from the stream names
-in the TSDL file. You can set a name (and a colour) for a channel by right-clicking
-on the channel name/number. This opens a pop-up with selection boxes for the RGB
-colour values and a field for the name.
+When a TSDL file is configured (Common Trace Format), the channel names are
+copied from the stream names in the TSDL file. You can set a name (and a colour)
+for a channel by right-clicking on the channel name/number. This opens a pop-up
+with selection boxes for the RGB colour values and a field for the name.
 
 ---
 See also:
     [[Configuration]]
+    [[Filters]]
+    [[The Common Trace Format]]
+
+# Searching
+
+The "Search" button and the Ctrl+F key combination open a dialog in which you
+type a pattern to search for.
+
+Text matching is case-sensitive. However, it supports the following wildcards:
+* a '?' matches a single arbitrary character.
+* a '*' matches any number of arbitrary characters (including zero).
+* a '/' matches punctuation or whitespace, as well as the beginning or the end
+  of a string. This wildcard is useful for matching a word delimiter.
+
+On a search, the function highlights the next matching line. While the dialog is
+open, you can click on the "Find" button to search for the next occurrence. The
+search wraps back to the top after searching beyond the last match.
+
+---
+See also:
+    [[Filters]]
+
+# Filters
+
+**Severity level** \
+When using the Common Trace Format, every trace message can be assigned a
+severity level. Trace messages with a level lower than the selected level, are
+then filtered out. The "debug" level is the lowest level; selectin "debug"
+therefore shows every trace message. The default level is "info", which shows
+all trace messages, except "debug".
+
+**Content filters** \
+You can filter the trace messages on keywords. Trace messages that are filtered
+out, are still saved in memory, but not displayed. When the filter is disabled
+(or deleted), the messages re-appear.
+
+Text matching is case-sensitive. However, it supports the following wildcards:
+* a '?' matches a single arbitrary character.
+* a '*' matches any number of arbitrary characters (including zero).
+* a '/' matches punctuation or whitespace, as well as the beginning or the end
+  of a string. This wildcard is useful for matching a word delimiter.
+
+If the filter text starts with a not sign ('¬'), it is an inverted filter: a trace
+message passes the filter if it does not contain the text that follows the '¬'.
+The tilde ('~') is equivalent to the '¬', since not every keyboard layout provides
+a key combination for the not sign.
+
+A trace message passes all filters (and is displayed) if:
+* it matches any of the standard filters,
+* and matches none of the inverted filters
+
+---
+See also:
+    [[Searching]]
+    [[The Common Trace Format]]
+
+# Bookmarks
+
+A left mouse button click in the margin of the trace view (i.e. a click to the
+left of the channel/stream label or number), toggles a bookmark on the corresponding
+message. You can browse back and forth between bookmarked positions with the keys
+"F2" and "Shift+F2".
+
+Bookmarks are saved along with the trace data, when saving the trace data to file.
+
+---
+See also:
+    [[The Button Bar]]
 
 # Keyboard Interface
 
-| F1      | Help                              |
-| F5      | Start / Stop / Resume the capture |
-| Ctrl+F  | Search                            |
-| Ctrl+S  | Save traces (CSV format)          |
+The following keyboard shortcuts are available.
+
+| F1       | Help                               |
+| F2       | Jump to the next bookmark          |
+| Shift+F2 | Jump to the previous bookmark      |
+| F5       | Start / Stop / Resume the capture  |
+| Ctrl+F   | Search                             |
+| Ctrl+O   | Open a previously saved trace file |
+| Ctrl+S   | Save traces (CSV format)           |
+
+---
+See also:
+    [[The Button Bar]]
+    [[Bookmarks]]
+    [[Searching]]
 
 # The Common Trace Format
 
@@ -270,6 +338,6 @@ Black Magic Probe. It is a self-contained utility; it does not require GDB.
 
 ---
 Version {{SVNREV_STR}} \
-Copyright 2019-2023 CompuPhase \
+Copyright 2019-2024 CompuPhase \
 Licensed under the Apache License version 2.0
 

@@ -1,7 +1,7 @@
 /*
  * Simple serial monitor (receive data from a serial port).
  *
- * Copyright 2021-2023 CompuPhase
+ * Copyright 2021-2024 CompuPhase
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -49,6 +49,7 @@
 #include "serialmon.h"
 #include "parsetsdl.h"
 #include "decodectf.h"
+#include "swotrace.h"   /* for get_timestamp() */
 
 #if defined FORTIFY
 # include <alloc/fortify.h>
@@ -68,6 +69,11 @@ typedef struct tagSERIALSTRING {
   char *text;
   unsigned short length;
   unsigned short flags; /* used to keep state while decoding plain trace messages */
+  /* copied from CTF */
+  double timestamp;
+  uint16_t streamid;
+  uint16_t eventid;
+  uint8_t severity;
 } SERIALSTRING;
 
 #define FLG_EOL     0x01
@@ -95,13 +101,21 @@ static void sermon_addstring(const unsigned char *buffer, size_t length)
     /* CTF mode */
     int count = ctf_decode(buffer, length, 0);
     if (count > 0) {
+      uint16_t streamid = 0;
+      uint16_t eventid = 0;
+      uint8_t severity = 1;
+      double timestamp = 0;
       const char *message;
-      while (msgstack_peek(NULL, NULL, &message)) {
+      while (msgstack_peek(&streamid, &eventid, &severity, &timestamp, &message)) {
         SERIALSTRING *item = malloc(sizeof(SERIALSTRING));
         if (item != NULL) {
           memset(item, 0, sizeof(SERIALSTRING));
           item->length = (unsigned short)strlen(message);
           item->text = malloc((item->length + 1) * sizeof(unsigned char));
+          item->streamid = streamid;
+          item->eventid = eventid;
+          item->severity = severity;
+          item->timestamp = (timestamp == 0) ? get_timestamp() : timestamp;
           if (item->text != NULL) {
             strcpy(item->text, message);
             /* append to tail */
@@ -140,7 +154,6 @@ static void sermon_addstring(const unsigned char *buffer, size_t length)
         sermon_tail->text[sermon_tail->length++] = ch;
       } else {
         /* truncate the buffer to the size needed, then create a new string item */
-        SERIALSTRING *item;
         if (sermon_tail == NULL && (ch == '\r' || ch == '\n'))
           continue; /* don't create an empty first string */
         if (sermon_tail != NULL && sermon_tail->length < (SERIALSTRING_MAXLENGTH-1)) {
@@ -148,10 +161,14 @@ static void sermon_addstring(const unsigned char *buffer, size_t length)
           assert(sermon_tail->text != NULL);              /* shrinking memory should always succeed */
           sermon_tail->text[sermon_tail->length] = '\0';  /* zero-terminate */
         }
-        item = malloc(sizeof(SERIALSTRING));
+        SERIALSTRING *item = malloc(sizeof(SERIALSTRING));
         if (item != NULL) {
           memset(item, 0, sizeof(SERIALSTRING));
           item->text = malloc(SERIALSTRING_MAXLENGTH * sizeof(unsigned char));
+          item->timestamp = get_timestamp();
+          item->streamid = 0;
+          item->eventid = 0;
+          item->severity = 1;
           if (item->text != NULL) {
             /* append to tail */
             if (sermon_tail != NULL)
@@ -279,17 +296,28 @@ void sermon_rewind(void)
   sermon_head = &sermon_root;
 }
 
-const char *sermon_next(bool *is_error)
+const char *sermon_next(bool *is_error, int *severity, int *streamid)
 {
   if (sermon_head != NULL)
     sermon_head = sermon_head->next;
+
   if (sermon_head == NULL) {
     if (is_error)
       *is_error = false;
+    if (severity != NULL)
+      *severity = 1;
+    if (streamid != NULL)
+      *streamid = 0;
     return NULL;
   }
-  if (is_error)
+
+  if (is_error != NULL)
     *is_error = ((sermon_head->flags & FLG_ERROR) != 0);
+  if (severity != NULL)
+    *severity = sermon_head->severity;
+  if (streamid != NULL)
+    *streamid = sermon_head->streamid;
+
   return sermon_head->text;
 }
 
@@ -303,10 +331,13 @@ int sermon_getbaud(void)
   return baudrate;
 }
 
+/** sermon_setmetadata() sets the CTF metadata file to use for decoding, or
+ *  forces "plain" mode if the parameter is NULL or an empty string.
+ */
 void sermon_setmetadata(const char *tsdlfile)
 {
   tsdl_metadata[0] = '\0';
-  if (tsdlfile != NULL && strcmp(tsdlfile, "-") != 0 && access(tsdlfile, 0) == 0)
+  if (tsdlfile != NULL && *tsdlfile != '\0' && strcmp(tsdlfile, "-") != 0 && access(tsdlfile, 0) == 0)
     strlcpy(tsdl_metadata, tsdlfile, sizearray(tsdl_metadata));
 }
 
@@ -322,6 +353,7 @@ void sermon_statusmsg(const char *message, bool is_error)
     memset(item, 0, sizeof(SERIALSTRING));
     item->text = strdup(message);
     if (item->text != NULL) {
+      item->severity = 1;
       item->flags = FLG_EOL;
       if (is_error)
         item->flags |= FLG_ERROR;
@@ -337,15 +369,37 @@ void sermon_statusmsg(const char *message, bool is_error)
   }
 }
 
-int sermon_save(const char *filename)
+int sermon_save(const char *filename, bool csvformat)
 {
   FILE *fp = fopen(filename, "wt");
   if (fp != NULL) {
-    int count = 0;
+    if (csvformat) {
+      /* set header in the file */
+      fprintf(fp, "ID,Stream,Severity,Timestamp,Text\n");
+    }
+    /* get timestamp of first item, to save relative timestamps */
     SERIALSTRING *item = sermon_root.next;
+    double starttime = (item != NULL) ? item->timestamp : 0.0;
+    int count=0;
     while (item != NULL) {
       assert(item->text != NULL);
-      fprintf(fp, "%s\n", item->text);
+      if (csvformat) {
+        const CTF_STREAM *s = stream_by_id(item->streamid);
+        const char *streamname = (s != NULL) ? s->name : "(none)";
+        const char *severity = ctf_severity_name(item->severity);
+        if (severity == NULL)
+          severity = "(invalid)";
+        fprintf(fp,"%d,\"%s\",%s,%.6f,", item->streamid, streamname, severity,
+                item->timestamp - starttime);
+        for (const char *ptr = item->text; *ptr != '\0'; ptr++) {
+          if (*ptr == '"')
+            fputc('"', fp);
+          fputc(*ptr, fp);
+        }
+        fputc('\n', fp);
+      } else {
+        fprintf(fp, "%s\n", item->text);
+      }
       item = item->next;
       count++;
     }

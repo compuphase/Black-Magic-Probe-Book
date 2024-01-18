@@ -3,7 +3,7 @@
  * parser is the base for the tracegen code generation utility and the CTF
  * binary stream decoder.
  *
- * Copyright 2019-2023 CompuPhase
+ * Copyright 2019-2024 CompuPhase
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -29,6 +29,10 @@
 
 #if defined FORTIFY
 # include <alloc/fortify.h>
+#endif
+
+#if !defined _MAX_PATH
+# define _MAX_PATH 260
 #endif
 
 #if defined __linux__
@@ -110,16 +114,18 @@ typedef struct tagTOKEN {
 
 typedef struct tagINCLUDEFILE {
   FILE *file;
+  const char *name;
   int linenr;
 } INCLUDEFILE;
 #define INCLUDE_NESTING 8
 
 static char rootpath[_MAX_PATH] = "";
 static FILE *inputfile = NULL;
+static const char *cursource = NULL;
+static int linenumber = 0;
 static INCLUDEFILE includestack[INCLUDE_NESTING] = { NULL };
 static char *linebuffer = NULL;
 static int linebuffer_index = 0;
-static int linenumber = 0;
 static int comment_block_start = 0;
 static int error_count = 0;
 static CTF_TYPE type_root = { NULL };
@@ -167,6 +173,9 @@ static int recent_error = -1;
   case CTFERR_INVALIDTOKEN:
     vsprintf(message, "Unknown token on column %d", args);
     break;
+  case CTFERR_NUMBER:
+    vsprintf(message, "Invalid number '%s'", args);
+    break;
   case CTFERR_SYNTAX_MAIN:
     vsprintf(message, "Syntax error", args);
     break;
@@ -198,11 +207,14 @@ static int recent_error = -1;
   case CTFERR_UNKNOWNCLOCK:
     vsprintf(message, "Clock with name '%s' is not defined", args);
     break;
-  case CTFERR_STREAM_NOTSET:
-    vsprintf(message, "Event '%s' is not assigned to a stream", args);
+  case CTFERR_UNKNOWNVALUE:
+    vsprintf(message, "Unknown value '%s'", args);
     break;
   case CTFERR_STREAM_NO_DEF:
     vsprintf(message, "No definition for stream id %d (required for event header)", args);
+    break;
+  case CTFERR_STREAM_NOTSET:
+    vsprintf(message, "Event '%s' is not assigned to a stream", args);
     break;
   case CTFERR_TYPE_REDEFINE:
     vsprintf(message, "Type %s is already defined", args);
@@ -216,6 +228,9 @@ static int recent_error = -1;
   case CTFERR_CLOCK_IS_INT:
     vsprintf(message, "Clock must be mapped to integer type", args);
     break;
+  case CTFERR_DUPLICATE_SETTING:
+    vsprintf(message, "Duplicate setting '%s'", args);  //??? show line number of previous definition
+    break;
   case CTFERR_EXCEED_INCLUDES:
     vsprintf(message, "Includes too deeply nested", args);
     break;
@@ -225,17 +240,32 @@ static int recent_error = -1;
     break;
   }
   va_end(args);
-  ctf_error_notify(code, linenumber, message);  /* external function */
+  ctf_error_notify(code, cursource, linenumber, message);  /* external function */
   return 0;
 }
 
+static const char *skippath(const char *filename)
+{
+  const char *result = filename;
+  const char *ptr = strrchr(result, '/');
+  if (ptr != NULL)
+    result = ptr + 1;
+  ptr = strrchr(result, '\\');
+  if (ptr != NULL)
+    result = ptr + 1;
+
+  return result;
+}
 
 static int readline_init(const char *filename)
 {
+  assert(filename != NULL);
+  cursource = strdup(skippath(filename));
   linenumber = 0;
   comment_block_start = 0;
   for (int idx = 0; idx < INCLUDE_NESTING; idx++) {
     includestack[idx].file = NULL;
+    includestack[idx].name = NULL;
     includestack[idx].linenr = 0;
   }
 
@@ -258,7 +288,11 @@ static void readline_cleanup(void)
     fclose(inputfile);
     inputfile = NULL;
   }
-  if (linebuffer != NULL) {
+  if (cursource != NULL) {
+    free((char*)cursource);
+    cursource = NULL;
+  }
+  if (linebuffer!=NULL) {
     free((void*)linebuffer);
     linebuffer = NULL;
   }
@@ -266,6 +300,8 @@ static void readline_cleanup(void)
     if (includestack[idx].file != NULL) {
       fclose(includestack[idx].file);
       includestack[idx].file = NULL;
+      free((char*)includestack[idx].name);
+      includestack[idx].name = NULL;
     }
 }
 
@@ -286,9 +322,12 @@ static int readline_next(void)
       if (top < 0)
         return 0; /* no more files -> done */
       fclose(inputfile);
+      free((char*)cursource);
       inputfile = includestack[top].file;
+      cursource = includestack[top].name;
       linenumber = includestack[top].linenr;
       includestack[top].file = NULL;
+      includestack[top].name = NULL;
       continue;
     }
 
@@ -1804,6 +1843,7 @@ static void parse_event(void)
     return;
   }
   memset(event, 0, sizeof(CTF_EVENT));
+  event->severity = -1;
   /* append to the tail, so the order in the generated header file is the same
      as in the trace specification */
   for (iter = &ctf_event_root; iter->next != NULL; iter = iter->next)
@@ -1865,6 +1905,18 @@ static void parse_event(void)
         token_need('=');
         token_need(TOK_IDENTIFIER);
         event->attribute = strdup(token_gettext());
+      } else if (strcmp(token_gettext(), "severity") == 0) {
+        if (event->severity >= 0)
+          ctf_error(CTFERR_DUPLICATE_SETTING, token_gettext());
+        token_need('=');
+        token_need(TOK_IDENTIFIER);
+        event->severity = ctf_severity_level(token_gettext());
+        if (event->severity < 0) {
+          ctf_error(CTFERR_UNKNOWNVALUE, token_gettext());
+          event->severity = 1;  /* reset to default severity */
+        }
+      } else {
+        ctf_error(CTFERR_INVALIDFIELD, token_gettext());
       }
       token_need(';');
     } else if (tok == TOK_STREAM) {
@@ -1898,6 +1950,9 @@ static void parse_event(void)
     }
   }
   token_match(';'); /* ';' after closing brace is optional */
+
+  if (event->severity == -1)
+    event->severity = CTF_SEVERITY_INFO;
 
   if (strlen(event->name) == 0) {
     ctf_error(CTFERR_NAMEREQUIRED, "event");
@@ -1982,8 +2037,11 @@ static void do_include(void)
       }
       if (fp != NULL) {
         includestack[top].file = inputfile;
+        includestack[top].name = cursource;
         includestack[top].linenr = 0;
         inputfile = fp;
+        cursource = strdup(skippath(name));
+        linenumber = 0;
       } else {
         ctf_error(CTFERR_FILEOPEN, name);
       }
@@ -1995,15 +2053,42 @@ static void do_include(void)
   }
 }
 
-/** ctf_parse_init() initializes the TSDL parser and sets up default types.
- *  It retuns 1 on success and 0 on error; the error message has then already
- *  been issued via ctf_error_notify().
+static const char *severities[] = { "debug", "info", "notice", "warning", "error", "critical" };
+
+/** ctf_severity_name() looks up the name of a severity level by its level.
+ *  \return The name, or NULL on error.
  */
-int ctf_parse_init(const char *filename)
+const char *ctf_severity_name(int level)
+{
+  if (level < 0 || level >= sizearray(severities))
+    return NULL;
+  return severities[level];
+}
+
+/** ctf_severity_level() looks up the numeric level for a severity name. The
+ *  comparison is case-sensitive.
+ *
+ *  \return The level, or -1 or error.
+ */
+int ctf_severity_level(const char *name)
+{
+  for (int idx = 0; idx < sizearray(severities); idx++)
+    if (strcmp(name, severities[idx]) == 0)
+      return idx;
+  return -1;
+}
+
+/** ctf_parse_init() initializes the TSDL parser and sets up default types.
+ *
+ *  \return true on success and false on error; the error message has then
+ *          already been issued via ctf_error_notify().
+ */
+bool ctf_parse_init(const char *filename)
 {
   rootpath[0] = '\0';
   if (filename[0] == '/' || filename[0] == '\\'
-      || (filename[0] == '.' || filename[1] == '.' && (filename[2] == '/' || filename[2] == '\\'))
+      || (filename[0] == '.' && (filename[1] == '/' || filename[1] == '\\'))
+      || (filename[0] == '.' && filename[1] == '.' && (filename[2] == '/' || filename[2] == '\\'))
       || (strlen(filename) >= 3 && filename[1] == ':' && filename[2] == '\\'))
   {
     /* save the path prefix, to be able to complete partial paths in the "include"
@@ -2019,9 +2104,9 @@ int ctf_parse_init(const char *filename)
   }
 
   if (!readline_init(filename))
-    return 0; /* error message already set via ctf_error() */
+    return false; /* error message already set via ctf_error() */
   if (!token_init())
-    return 0; /* error message already set via ctf_error() */
+    return false; /* error message already set via ctf_error() */
   memset(&ctf_trace, 0, sizeof ctf_trace);
   memset(&ctf_packet, 0, sizeof ctf_packet);
 
@@ -2038,7 +2123,7 @@ int ctf_parse_init(const char *filename)
 
   error_count = 0;
 
-  return 1;
+  return true;
 }
 
 void ctf_parse_cleanup(void)
@@ -2056,7 +2141,7 @@ void ctf_parse_cleanup(void)
  *  or more errors were found. The error messages have then already been issued
  *  via ctf_parse_run().
  */
-int ctf_parse_run(void)
+bool ctf_parse_run(void)
 {
   int tok;
 

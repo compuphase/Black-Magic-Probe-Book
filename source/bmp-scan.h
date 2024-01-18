@@ -4,7 +4,7 @@
  * it scans the registry for the Black Magic Probe device, under Linux, it
  * browses through sysfs.
  *
- * Copyright 2019-2020 CompuPhase
+ * Copyright 2019-2024 CompuPhase
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.

@@ -3,7 +3,7 @@
  * Black Magic Probe. This utility is built with Nuklear for a cross-platform
  * GUI.
  *
- * Copyright 2019-2023 CompuPhase
+ * Copyright 2019-2024 CompuPhase
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -59,6 +59,7 @@
 #include "minIni.h"
 #include "nuklear_guide.h"
 #include "nuklear_mousepointer.h"
+#include "nuklear_msgbox.h"
 #include "nuklear_splitter.h"
 #include "nuklear_style.h"
 #include "nuklear_tooltip.h"
@@ -114,19 +115,19 @@ static DWARF_PATHLIST dwarf_filetable = { NULL };
 #define WINDOW_HEIGHT   400
 #define FONT_HEIGHT     14      /* default font size */
 #define ROW_HEIGHT      (1.6f * opt_fontsize)
-#define COMBOROW_CY     (0.9f * opt_fontsize)
+#define COMBOROW_CY     (1.0f * opt_fontsize)
 #define BROWSEBTN_WIDTH (1.5f * opt_fontsize)
 static float opt_fontsize = FONT_HEIGHT;
 
 
-int ctf_error_notify(int code, int linenr, const char *message)
+int ctf_error_notify(int code, const char *filename, int linenr, const char *message)
 {
   char msg[200];
 
   (void)code;
   assert(message != NULL);
   if (linenr > 0)
-    sprintf(msg, "TSDL file error, line %d: ", linenr);
+    sprintf(msg, "TSDL file error, %s line %d: ", filename, linenr);
   else
     strcpy(msg, "TSDL file error: ");
   strlcat(msg, message, sizearray(msg));
@@ -179,7 +180,7 @@ static void version(void)
 # endif
 
   printf("BMTrace version %s.\n", SVNREV_STR);
-  printf("Copyright 2019-2023 CompuPhase\nLicensed under the Apache License version 2.0\n");
+  printf("Copyright 2019-2024 CompuPhase\nLicensed under the Apache License version 2.0\n");
 }
 
 #if defined FORTIFY
@@ -222,10 +223,12 @@ typedef struct tagAPPSTATE {
   int datasize;                 /**< packet size */
   int overflow;                 /**< number of overflow events detected */
   int line_limit;               /**< max. number of lines in the viewport while running */
-  bool reload_format;           /**< whether to reload the TSDL file */
+  bool tracedata_from_file;     /**< whether the displayed data comes from a file (as opposed of being captured) */
   bool clear_channels;          /**< whether to reset all channels to default */
+  bool reload_format;           /**< whether to reload the TSDL file */
   char TSDLfile[_MAX_PATH];     /**< CTF decoding, message file */
   char ELFfile[_MAX_PATH];      /**< ELF file for symbol/address look-up */
+  int severity;                 /**< severity level (CTF decoding) */
   TRACEFILTER *filterlist;      /**< filter expressions */
   int filtercount;              /**< count of valid entries in filterlist */
   int filterlistsize;           /**< count of allocated entries in filterlist */
@@ -233,7 +236,7 @@ typedef struct tagAPPSTATE {
   unsigned long channelmask;    /**< bit mask of enabled channels */
   int cur_chan_edit;            /**< channel info currently being edited (-1 if none) */
   char chan_str[64];            /**< edit string for channel currently being edited */
-  int cur_match_line;           /**< current line matched in "find" function */
+  int cur_match_line;           /**< current line matched in "find" function, or the timeline click position (-1 if not active) */
   int find_popup;               /**< whether "find" popup is active (plus match state) */
   char findtext[128];           /**< search text (keywords) */
   bool help_popup;              /**< whether "help" popup is active */
@@ -265,33 +268,39 @@ static bool save_settings(const char *filename, const APPSTATE *state,
   if (strlen(filename) == 0)
     return false;
 
-  char valstr[128];
-  for (int chan = 0; chan < NUM_CHANNELS; chan++) {
-    char key[40];
-    struct nk_color color = channel_getcolor(chan);
-    sprintf(key, "chan%d", chan);
-    sprintf(valstr, "%d #%06x %s", channel_getenabled(chan),
-            ((int)color.r << 16) | ((int)color.g << 8) | color.b,
-            channel_getname(chan, NULL, 0));
-    ini_puts("Channels", key, valstr, filename);
+  if (!state->tracedata_from_file) {
+    char valstr[128];
+    for (int chan = 0; chan < NUM_CHANNELS; chan++) {
+      char key[40];
+      struct nk_color color = channel_getcolor(chan);
+      snprintf(key, sizearray(key), "chan%d", chan);
+      snprintf(valstr, sizearray(valstr), "%d #%06x %s", channel_getenabled(chan),
+               ((int)color.r << 16) | ((int)color.g << 8) | color.b,
+               channel_getname(chan, NULL, 0));
+      ini_puts("Channels", key, valstr, filename);
+    }
   }
+
+  ini_putl("Filters", "severity", state->severity, filename);
   ini_putl("Filters", "count", state->filtercount, filename);
   for (int idx = 0; idx < state->filtercount; idx++) {
     char key[40], expr[FILTER_MAXSTRING+10];
     assert(state->filterlist != NULL && state->filterlist[idx].expr != NULL);
-    sprintf(key, "filter%d", idx + 1);
-    sprintf(expr, "%d,%s", state->filterlist[idx].enabled, state->filterlist[idx].expr);
+    snprintf(key, sizearray(key), "filter%d", idx + 1);
+    snprintf(expr, sizearray(expr), "%d,%s", state->filterlist[idx].enabled,
+             state->filterlist[idx].expr);
     ini_puts("Filters", key, expr, filename);
     free(state->filterlist[idx].expr);
   }
   if (state->filterlist != NULL)
     free(state->filterlist);
+  char valstr[128];
   sprintf(valstr, "%.2f %.2f", splitter_hor->ratio, splitter_ver->ratio);
   ini_puts("Settings", "splitter", valstr, filename);
   for (int idx = 0; idx < TAB_COUNT; idx++) {
     char key[40];
-    sprintf(key, "view%d", idx);
-    sprintf(valstr, "%d", tab_states[idx]);
+    snprintf(key, sizearray(key), "view%d", idx);
+    snprintf(valstr, sizearray(valstr), "%d", tab_states[idx]);
     ini_puts("Settings", key, valstr, filename);
   }
   ini_putl("Settings", "mode", state->swomode, filename);
@@ -307,7 +316,7 @@ static bool save_settings(const char *filename, const APPSTATE *state,
   double spacing;
   unsigned long scale, delta;
   timeline_getconfig(&spacing, &scale, &delta);
-  sprintf(valstr, "%.2f %lu %lu", spacing, scale, delta);
+  snprintf(valstr, sizearray(valstr), "%.2f %lu %lu", spacing, scale, delta);
   ini_puts("Settings", "timeline", valstr, filename);
 
   if (bmp_is_ip_address(state->IPaddr))
@@ -332,13 +341,14 @@ static bool load_settings(const char *filename, APPSTATE *state,
     char key[41];
     unsigned clr;
     int enabled, result;
-    channel_set(chan, (chan == 0), NULL, SWO_TRACE_DEFAULT_COLOR); /* preset: port 0 is enabled by default, others disabled by default */
-    sprintf(key, "chan%d", chan);
+    channel_set(chan, (chan == 0), NULL, default_channel_colour(chan)); /* preset: port 0 is enabled by default, others disabled by default */
+    snprintf(key, sizearray(key), "chan%d", chan);
     ini_gets("Channels", key, "", valstr, sizearray(valstr), filename);
     result = sscanf(valstr, "%d #%x %40s", &enabled, &clr, key);
     if (result >= 2)
       channel_set(chan, enabled, (result >= 3) ? key : NULL, nk_rgb(clr >> 16,(clr >> 8) & 0xff, clr & 0xff));
   }
+  state->severity = ini_getl("Filters", "severity", 1, filename);
   /* read filters (initialize the filter list) */
   state->filtercount = ini_getl("Filters", "count", 0, filename);;
   state->filterlistsize = state->filtercount + 1; /* at least 1 extra, for a NULL sentinel */
@@ -351,7 +361,7 @@ static bool load_settings(const char *filename, APPSTATE *state,
       state->filterlist[idx].expr = malloc(sizearray(state->newfiltertext) * sizeof(char));
       if (state->filterlist[idx].expr == NULL)
         break;
-      sprintf(key, "filter%d", idx + 1);
+      snprintf(key, sizearray(key), "filter%d", idx + 1);
       ini_gets("Filters", key, "", state->newfiltertext, sizearray(state->newfiltertext), filename);
       state->filterlist[idx].enabled = (int)strtol(state->newfiltertext, &ptr, 10);
       assert(ptr != NULL && *ptr != '\0');  /* a comma should be found */
@@ -402,7 +412,7 @@ static bool load_settings(const char *filename, APPSTATE *state,
     char key[40];
     int opened, result;
     tab_states[idx] = (idx == TAB_CONFIGURATION || idx == TAB_STATUS) ? NK_MAXIMIZED : NK_MINIMIZED;
-    sprintf(key, "view%d", idx);
+    snprintf(key, sizearray(key), "view%d", idx);
     ini_gets("Settings", key, "", valstr, sizearray(valstr), filename);
     result = sscanf(valstr, "%d", &opened);
     if (result >= 1)
@@ -453,6 +463,7 @@ static void find_popup(struct nk_context *ctx, APPSTATE *state, float canvas_wid
             state->cur_match_line = line;
             state->find_popup = 0;
             state->trace_running = false;
+            tracestring_findbookmark(BK_CLEAR);
           } else {
             state->cur_match_line = -1;
             state->find_popup = 2; /* to mark "string not found" */
@@ -712,15 +723,38 @@ static void panel_status(struct nk_context *ctx, APPSTATE *state,
 # undef VALUE_WIDTH
 }
 
-static void filter_options(struct nk_context *ctx, APPSTATE *state,
-                          enum nk_collapse_states tab_states[TAB_COUNT])
+static void filter_filters(struct nk_context *ctx, APPSTATE *state,
+                           enum nk_collapse_states tab_states[TAB_COUNT],
+                           float panel_width)
 {
+# define LABEL_WIDTH(n) ((n) * opt_fontsize)
+# define VALUE_WIDTH(n) (panel_width - LABEL_WIDTH(n) - 26)
+  static const char *severitylist[] = { "debug", "info", "notice", "warning", "error", "critical" };
+
   if (nk_tree_state_push(ctx, NK_TREE_TAB, "Filters", &tab_states[TAB_FILTERS], NULL)) {
+    struct nk_rect bounds = nk_widget_bounds(ctx);
+
+    nk_layout_row_begin(ctx, NK_STATIC, ROW_HEIGHT, 2);
+    nk_layout_row_push(ctx, LABEL_WIDTH(8));
+    nk_label(ctx, "Severity level", NK_TEXT_ALIGN_LEFT | NK_TEXT_ALIGN_MIDDLE);
+    nk_layout_row_push(ctx, VALUE_WIDTH(8));
+    struct nk_rect combo_rc = nk_widget_bounds(ctx);
+    int severity = nk_combo(ctx, severitylist, sizearray(severitylist), state->severity,
+                            (int)COMBOROW_CY, nk_vec2(combo_rc.w, 8.2*COMBOROW_CY));
+    if (severity != state->severity) {
+      state->severity = severity;
+      state->cur_match_line = -1;
+      /* adjust the setting in the device, in order to filter on the device */
+      const DWARF_SYMBOLLIST *symbol = dwarf_sym_from_name(&dwarf_symboltable, "trace_severity_level", -1, -1);
+      if (symbol != NULL)
+        bmp_writememory(symbol->data_addr, (const uint8_t*)&severity, 1);
+    }
+    nk_layout_row_end(ctx);
+
     char filter[FILTER_MAXSTRING];
     assert(state->filterlistsize == 0 || state->filterlist != NULL);
     assert(state->filterlistsize == 0 || state->filtercount < state->filterlistsize);
     assert(state->filterlistsize == 0 || (state->filterlist[state->filtercount].expr == NULL && !state->filterlist[state->filtercount].enabled));
-    struct nk_rect bounds = nk_widget_bounds(ctx);
     float txtwidth = bounds.w - 2 * BROWSEBTN_WIDTH - (2 * 5);
     for (int idx = 0; idx < state->filtercount; idx++) {
       nk_layout_row_begin(ctx, NK_STATIC, ROW_HEIGHT, 3);
@@ -885,13 +919,14 @@ static void channel_options(struct nk_context *ctx, APPSTATE *state,
 
 static void button_bar(struct nk_context *ctx, APPSTATE *state)
 {
-  nk_layout_row(ctx, NK_DYNAMIC, ROW_HEIGHT, 5, nk_ratio(5, 0.2, 0.2, 0.2, 0.2, 0.2));
+  nk_layout_row(ctx, NK_DYNAMIC, ROW_HEIGHT, 6, nk_ratio(6, 1.0/6.0, 1.0/6.0, 1.0/6.0, 1.0/6.0, 1.0/6.0, 1.0/6.0));
   const char *caption;
   if (state->trace_running) {
     caption = "Stop";
-  } else if (tracestring_isempty()) {
+  } else if (tracestring_isempty() || state->tracedata_from_file) {
     caption = "Start";
-    state->trace_count = 0;
+    if (!state->tracedata_from_file)
+      state->trace_count = 0;
   } else {
      caption = "Resume";
   }
@@ -899,6 +934,14 @@ static void button_bar(struct nk_context *ctx, APPSTATE *state)
     state->trace_running = !state->trace_running;
     trace_overflowerrors(true);
     state->overflow = 0;
+    if (state->tracedata_from_file) {
+      state->tracedata_from_file = false;
+      tracestring_clear();
+      ctf_decode_reset();
+      tracestring_findbookmark(BK_CLEAR);
+      state->trace_count = 0;
+      state->cur_match_line = -1;
+    }
     if (state->trace_running && state->trace_status != TRACESTAT_OK) {
       state->trace_status = trace_init(state->trace_endpoint, (state->probe == state->netprobe) ? state->IPaddr : NULL);
       if (state->trace_status != TRACESTAT_OK)
@@ -908,26 +951,66 @@ static void button_bar(struct nk_context *ctx, APPSTATE *state)
   if (nk_button_label(ctx, "Clear")) {
     tracestring_clear();
     trace_overflowerrors(true);
-    ctf_decode_reset();
-    state->trace_count = 0;
     state->overflow = 0;
+    ctf_decode_reset();
+    tracestring_findbookmark(BK_CLEAR);
+    state->trace_count = 0;
     state->cur_match_line = -1;
+    state->tracedata_from_file = false;
   }
   if (nk_button_label(ctx, "Search") || nk_input_is_key_pressed(&ctx->input, NK_KEY_FIND))
     state->find_popup = 1;
   if (nk_button_label(ctx, "Save") || nk_input_is_key_pressed(&ctx->input, NK_KEY_SAVE)) {
+    if (tracestring_isempty()) {
+      nk_msgbox(ctx, "No data to save.", "Notice");
+    } else {
+      osdialog_filters *filters = osdialog_filters_parse("CSV files:csv;All files:*");
+      char *fname = osdialog_file(OSDIALOG_SAVE, "Save to CSV file", NULL, NULL, filters);
+      osdialog_filters_free(filters);
+      if (fname != NULL) {
+        /* copy to local path, so that default extension can be appended */
+        char path[_MAX_PATH];
+        strlcpy(path, fname, sizearray(path));
+        free(fname);
+        const char *ext;
+        if ((ext = strrchr(path, '.')) == NULL || strchr(ext, DIRSEP_CHAR) != NULL)
+          strlcat(path, ".csv", sizearray(path)); /* default extension .csv */
+        int count = tracestring_save(path);
+        if (count <= 0) {
+          char msg[_MAX_PATH + 50];
+          snprintf(msg, sizearray(msg), "Failed writing to %s.", path);
+          nk_msgbox(ctx, msg, "Notice");
+        }
+      }
+    }
+  }
+  if (nk_button_label(ctx, "Load") || nk_input_is_key_pressed(&ctx->input, NK_KEY_OPEN)) {
     osdialog_filters *filters = osdialog_filters_parse("CSV files:csv;All files:*");
-    char *fname = osdialog_file(OSDIALOG_SAVE, "Save to CSV file", NULL, NULL, filters);
+    char *fname = osdialog_file(OSDIALOG_OPEN, "Open CSV file", NULL, NULL, filters);
     osdialog_filters_free(filters);
     if (fname != NULL) {
-      /* copy to local path, so that default extension can be appended */
-      char path[_MAX_PATH];
-      strlcpy(path, fname, sizearray(path));
+      /* force trace capture off */
+      state->trace_running = false;
+      trace_overflowerrors(true);
+      state->overflow = 0;
+      state->cur_match_line = -1;
+      tracestring_findbookmark(BK_CLEAR);
+      tracestring_clear();  /* delete current messages (if any) */
+      int count = tracestring_load(fname, NULL);
       free(fname);
-      const char *ext;
-      if ((ext = strrchr(path, '.')) == NULL || strchr(ext, DIRSEP_CHAR) != NULL)
-        strlcat(path, ".csv", sizearray(path)); /* default extension .csv */
-      tracestring_save(path);
+      if (count <= 0) {
+        nk_msgbox(ctx, "Empty file or unsupported format.\nNo data loaded.", "Notice");
+      } else {
+        state->tracedata_from_file = true;
+        state->trace_count = count;
+        /* rebuild the "channels" list */
+        for (int chan = 0; chan < NUM_CHANNELS; chan++) {
+          const char *name = trace_channelname(chan);
+          channel_set(chan, (name != NULL), (name != NULL && strlen(name) > 0) ? name : NULL,
+                      default_channel_colour(chan));
+        }
+        timeline_rebuild(-1, true); /* rebuild timeline, zoom to fit */
+      }
     }
   }
   if (nk_button_label(ctx, "Help") || nk_input_is_key_pressed(&ctx->input, NK_KEY_F1))
@@ -1085,6 +1168,7 @@ static void handle_stateaction(APPSTATE *state)
     trace_overflowerrors(true);
     ctf_decode_reset();
     dwarf_cleanup(&dwarf_linetable, &dwarf_symboltable, &dwarf_filetable);
+    tracestring_findbookmark(BK_CLEAR);
     state->cur_match_line = -1;
     state->error_flags = 0;
     state->trace_count = 0;
@@ -1096,14 +1180,14 @@ static void handle_stateaction(APPSTATE *state)
         /* optionally clear all channel names & colours */
         if (state->clear_channels)
           for (int chan = 0; chan < NUM_CHANNELS; chan++)
-            channel_set(chan, false, NULL, SWO_TRACE_DEFAULT_COLOR);
+            channel_set(chan, false, NULL, default_channel_colour(chan));
         /* stream names overrule configured channel names */
         const CTF_STREAM *stream;
         for (int seqnr = 0; (stream = stream_by_seqnr(seqnr)) != NULL; seqnr++) {
           if (stream->name != NULL && strlen(stream->name) > 0) {
             int chan = stream->stream_id;
             assert(chan >= 0 && chan < NUM_CHANNELS);
-            channel_set(chan, true, stream->name, SWO_TRACE_DEFAULT_COLOR);
+            channel_set(chan, true, stream->name, default_channel_colour(chan));
           }
         }
         state->error_flags &= ~ERROR_NO_TSDL;
@@ -1146,6 +1230,7 @@ int main(int argc, char *argv[])
   appstate.cur_chan_edit = -1;
   appstate.cur_match_line = -1;
   appstate.line_limit = 400;
+  appstate.severity = 1;
 
 # if defined FORTIFY
     Fortify_SetOutputFunc(Fortify_OutputFunc);
@@ -1295,7 +1380,8 @@ int main(int argc, char *argv[])
         waitidle = (count == 0);
         nk_layout_row_dynamic(ctx, nk_vsplitter_rowheight(&splitter_ver, 0), 1);
         int limitlines = appstate.trace_running ? appstate.line_limit : -1;
-        tracelog_widget(ctx, "tracelog", opt_fontsize, limitlines, appstate.cur_match_line, appstate.filterlist, NK_WINDOW_BORDER);
+        tracelog_widget(ctx, "tracelog", opt_fontsize, limitlines, appstate.cur_match_line,
+                        appstate.filterlist, appstate.severity, NK_WINDOW_BORDER);
 
         /* vertical splitter */
         nk_vsplitter(ctx, &splitter_ver);
@@ -1303,7 +1389,17 @@ int main(int argc, char *argv[])
         /* timeline & button bar */
         nk_layout_row_dynamic(ctx, nk_vsplitter_rowheight(&splitter_ver, 1), 1);
         double click_time = timeline_widget(ctx, "timeline", opt_fontsize, limitlines, NK_WINDOW_BORDER);
-        appstate.cur_match_line = (click_time >= 0.0) ? tracestring_findtimestamp(click_time) : -1;
+        if (click_time >= 0.0)
+          appstate.cur_match_line = tracestring_findtimestamp(click_time);
+
+        /* hotkeys */
+        if (nk_input_is_key_pressed(&ctx->input, NK_KEY_F2)) {
+          tracestring_findbookmark(BK_NEXT);
+          appstate.cur_match_line = -1;
+        } else if (nk_input_is_key_pressed(&ctx->input, NK_KEY_SHIFT_F2)) {
+          tracestring_findbookmark(BK_PREV);
+          appstate.cur_match_line = -1;
+        }
 
         nk_group_end(ctx);
       }
@@ -1313,9 +1409,10 @@ int main(int argc, char *argv[])
 
       /* right column */
       if (nk_group_begin(ctx, "right", NK_WINDOW_BORDER)) {
-        panel_options(ctx, &appstate, tab_states, nk_hsplitter_colwidth(&splitter_hor, 1));
-        panel_status(ctx, &appstate, tab_states, nk_hsplitter_colwidth(&splitter_hor, 1));
-        filter_options(ctx, &appstate, tab_states);
+        float panelwidth = nk_hsplitter_colwidth(&splitter_hor, 1);
+        panel_options(ctx, &appstate, tab_states, panelwidth);
+        panel_status(ctx, &appstate, tab_states, panelwidth);
+        filter_filters(ctx, &appstate, tab_states, panelwidth);
         channel_options(ctx, &appstate, tab_states);
         nk_group_end(ctx);
       }
@@ -1323,6 +1420,7 @@ int main(int argc, char *argv[])
       /* popup dialogs */
       find_popup(ctx, &appstate, nk_hsplitter_colwidth(&splitter_hor, 0), (float)canvas_height);
       help_popup(ctx, &appstate, (float)canvas_width, (float)canvas_height);
+      nk_msgbox_popup(ctx);
 
       /* mouse cursor shape */
       if (nk_is_popup_open(ctx))

@@ -2,7 +2,7 @@
  * GDB front-end with specific support for the Black Magic Probe.
  * This utility is built with Nuklear for a cross-platform GUI.
  *
- * Copyright 2019-2023 CompuPhase
+ * Copyright 2019-2024 CompuPhase
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -39,7 +39,6 @@
 #   endif
 #   define stat _stat
 #   define access(p,m)       _access((p),(m))
-#   define memicmp(p1,p2,c)  _memicmp((p1),(p2),(c))
 #   define mkdir(p)          _mkdir(p)
 #   define strdup(s)         _strdup(s)
 #   define stricmp(s1,s2)    _stricmp((s1),(s2))
@@ -87,6 +86,7 @@
 #include "pathsearch.h"
 #include "serialmon.h"
 #include "specialfolder.h"
+#include "strmatch.h"
 #include "svd-support.h"
 #include "tcpip.h"
 #include "svnrev.h"
@@ -158,23 +158,35 @@ typedef struct tagSTRINGLIST {
   unsigned short flags;
 } STRINGLIST;
 
+typedef struct tagCTFSETTINGS {
+  char metadata[_MAX_PATH];     /**< TSDL file (shared with serial port) */
+  unsigned char severity;       /**< level */
+  unsigned long streammask;     /**< mask with enabled streams */
+  unsigned long severity_addr;
+  unsigned long streammask_addr;
+} CTFSETTINGS;
+
 typedef struct tagSWOSETTINGS {
-  unsigned mode;
+  unsigned mode;                /**< Manchester / asynchronous */
   unsigned bitrate;
   unsigned clock;
   unsigned datasize;
-  char metadata[_MAX_PATH];
-  int force_plain;
-  int enabled;
-  int init_status;
+  bool enabled;                 /**< whether SWO is enabled */
+  bool init_status;
+  bool force_plain;             /**< disable CTF decoding even if TSDL file loaded */
 } SWOSETTINGS;
 
 enum { SWOMODE_NONE, SWOMODE_MANCHESTER, SWOMODE_ASYNC };
 
+typedef struct tagSERIALSETTINGS {
+  char port[64];                /**< COM port name for serial monitor */
+  int baud;                     /**< serial monitor baud rate */
+  bool force_plain;             /**< disable CTF decoding even if TSDL file loaded */
+} SERIALSETTINGS;
 
 static const char *gdbmi_leader(char *buffer, int *flags, char **next_segment);
-static void trace_info_mode(const SWOSETTINGS *swo, int showchannels, STRINGLIST *textroot);
-static void serial_info_mode(STRINGLIST *textroot);
+static void trace_info_mode(const SWOSETTINGS *swo, const CTFSETTINGS *ctf, bool showchannels, STRINGLIST *textroot);
+static void serial_info_mode(const CTFSETTINGS *ctf, bool showstreams, STRINGLIST *textroot);
 static void source_getcursorpos(int *fileindex, int *linenumber);
 
 
@@ -852,7 +864,7 @@ static void console_input(const char *text)
   console_add(text, STRFLG_INPUT);
 }
 
-static int console_autocomplete(char *text, size_t textsize, const DWARF_SYMBOLLIST *symboltable)
+static bool console_autocomplete(char *text, size_t textsize, const DWARF_SYMBOLLIST *symboltable)
 {
   typedef struct tagGDBCOMMAND {
     const char *command;
@@ -863,8 +875,8 @@ static int console_autocomplete(char *text, size_t textsize, const DWARF_SYMBOLL
     { "assembly", NULL, "off on" },
     { "attach", NULL, NULL },
     { "backtrace", "bt", NULL },
-    { "break", "b", "%func %file" },
-    { "clear", NULL, "%func %file" },
+    { "break", "b", "%func %source" },
+    { "clear", NULL, "%func %source" },
     { "command", NULL, NULL },
     { "compare-sections", NULL, NULL },
     { "cond", NULL, NULL },
@@ -881,11 +893,15 @@ static int console_autocomplete(char *text, size_t textsize, const DWARF_SYMBOLL
     { "find", NULL, "%func %var" },
     { "finish", "fin", NULL },
     { "frame", "f", NULL },
-    { "help", NULL, "assembly break breakpoints data files find keyboard monitor running serial stack status support svd trace user-defined" },
-    { "info", NULL, "args breakpoints frame functions locals scope set sources stack svd variables vtbl %var" },
-    { "list", NULL, "%func %var %file" },
+    { "help", NULL, "assembly break breakpoints data files find keyboard monitor "
+                    "running serial stack status support svd trace user-defined" },
+    { "info", NULL, "args breakpoints frame functions locals scope set sources "
+                    "stack svd variables vtbl %var" },
+    { "list", NULL, "%func %var %source" },
     { "load", NULL, NULL },
-    { "monitor", "mon", "auto_scan connect_srst frequency halt_timeout hard_srst heapinfo jtag_scan morse option swdp_scan reset rtt targets tpwr traceswo vector_catch" },
+    { "monitor", "mon", "auto_scan connect_srst frequency halt_timeout hard_srst "
+                        "heapinfo jtag_scan morse option swdp_scan reset rtt targets "
+                        "tpwr traceswo vector_catch" },
     { "next", "n", NULL },
     { "print", "p", "%var %reg" },
     { "ptype", NULL, "%var" },
@@ -893,13 +909,15 @@ static int console_autocomplete(char *text, size_t textsize, const DWARF_SYMBOLL
     { "reset", NULL, "hard load" },
     { "run", NULL, NULL },
     { "semihosting", NULL, "clear save" },
-    { "serial", NULL, "clear disable enable info plain save %path" },
+    { "serial", NULL, "clear disable enable info plain save severity stream %path "
+                      "{severity}%severity {stream}%stream" },
     { "set", NULL, "%var" },
     { "start", NULL, NULL },
     { "step", "s", NULL },
     { "target", NULL, "extended-remote remote" },
-    { "tbreak", NULL, "%func %file" },
-    { "trace", NULL, "async auto bitrate channel clear disable enable info passive plain save %path" },
+    { "tbreak", NULL, "%func %source" },
+    { "trace", NULL, "async auto bitrate channel clear disable enable info passive "
+                     "plain save %path" },  //???severity
     { "undisplay", NULL, NULL },
     { "until", "u", NULL },
     { "up", NULL, NULL },
@@ -908,9 +926,8 @@ static int console_autocomplete(char *text, size_t textsize, const DWARF_SYMBOLL
   static char *cache_text = NULL;
   static int cache_cutoff = 0;
   static int cache_skip = 0;
-  char *word;
   size_t len, idx, skip;
-  int result = 0;
+  bool result = false;
 
   assert(text != NULL);
 
@@ -929,12 +946,27 @@ static int console_autocomplete(char *text, size_t textsize, const DWARF_SYMBOLL
     memmove(text, text + 1, strlen(text));
 
   /* get the start of the last word */
+  char *word;
   if ((word = strrchr(text, ' ')) == NULL)
     word = text;
   else
     word = (char*)skipwhite(word);
   if (strlen(word) == 0 && word == text)
     return 0; /* no text -> nothing to autocomplete */
+
+  /* for "contextual" parameters, the preceding parameter is needed */
+  const char *prev_word_tail = word;
+  while (prev_word_tail > text && *(prev_word_tail - 1) <= ' ')
+    prev_word_tail--;
+  const char *prev_word_start = prev_word_tail;
+  while (prev_word_start > text && *(prev_word_start - 1) > ' ')
+    prev_word_start--;
+  char param_context[64] = "";
+  if (prev_word_start != text && (prev_word_tail - prev_word_start) < sizearray(param_context)) {
+    size_t len = (prev_word_tail - prev_word_start);
+    strncpy(param_context, prev_word_start, len);
+    param_context[len] = '\0';
+  }
 
   skip = cache_skip;
   if (word == text) {
@@ -944,7 +976,7 @@ static int console_autocomplete(char *text, size_t textsize, const DWARF_SYMBOLL
     for (idx = 0; !result && idx < sizearray(commands); idx++) {
       if (commands[idx].shorthand != NULL && strcmp(word, commands[idx].shorthand) == 0) {
         strlcpy(text, commands[idx].command, textsize);
-        result = 1;
+        result = true;
       }
     }
     /* step 2: find a partial match on the full name, but skip the first matches */
@@ -956,7 +988,7 @@ static int console_autocomplete(char *text, size_t textsize, const DWARF_SYMBOLL
           first = &commands[idx];
         if (skip == 0) {
           strlcpy(text, commands[idx].command, textsize);
-          result = 1;
+          result = true;
         }
         skip--;
       }
@@ -966,30 +998,30 @@ static int console_autocomplete(char *text, size_t textsize, const DWARF_SYMBOLL
     if (!result && first != NULL) {
       cache_skip = 0;
       strlcpy(text, first->command, textsize);
-      result = 1;
+      result = true;
     }
     if (result)
       strlcat(text, " ", textsize);
   } else {
     /* any next word: auto-completion depends on the command */
     const GDBCOMMAND *cmd = NULL;
-    char str[50], *ptr;
-    int count, fullmatch;
     /* get the command */
-    ptr = strchr(text, ' ');
-    assert(ptr != NULL);  /* last space was found, so first space must be too */
-    len = ptr - text;
+    char *start = strchr(text, ' ');
+    assert(start != NULL);  /* last space was found, so first space must be too */
+    len = start - text;
+    char str[64];
     if (len >= sizearray(str))
       len = sizearray(str) - 1;
     strncpy(str, text, len);
     str[len] = '\0';
     /* accept either a full match on the alias or a partial match on the command
        name, but only if there is a single partial match */
-    count = fullmatch = 0;
+    int count = 0;
+    bool fullmatch = false;
     for (idx = 0; !fullmatch && idx < sizearray(commands); idx++) {
       if (commands[idx].shorthand != NULL && strcmp(str, commands[idx].shorthand) == 0) {
         cmd = &commands[idx];
-        fullmatch = 1;
+        fullmatch = true;
       } else if (strncmp(str, commands[idx].command, len) == 0) {
         cmd = &commands[idx];
         count++;
@@ -1002,23 +1034,35 @@ static int console_autocomplete(char *text, size_t textsize, const DWARF_SYMBOLL
         char *params = strdup(cmd->parameters);
         if (params != NULL) {
           const char *first = NULL, *first_prefix = NULL, *first_suffix = NULL;
-          for (ptr = strtok(params, " "); !result && ptr != NULL; ptr = strtok(NULL, " ")) {
-            if (strcmp(ptr, "%file") == 0) {
+          for (start = strtok(params, " "); !result && start != NULL; start = strtok(NULL, " ")) {
+            /* check context code */
+            if (*start == '{') {
+              start += 1;
+              char *tail = strchr(start, '}');
+              if (tail != NULL) {
+                *tail = '\0';
+                if (strlen(param_context) > 0 && strcmp(start, param_context) != 0)
+                  continue; /* context does not match, skip this parameter */
+              }
+              start = tail + 1;
+            }
+            /* check the parameter, which may be variable */
+            if (strcmp(start, "%source") == 0) {
               const char *fname;
               for (idx = 0; !result && (fname = source_getname(idx)) != NULL; idx++) {
-                if (strncmp(word, fname, len)== 0) {
+                if (strncmp(word, fname, len) == 0) {
                   if (first == NULL)
                     first = fname;
                   if (skip == 0) {
                     strlcpy(word, fname, textsize - (word - text));
-                    result = 1;
+                    result = true;
                   }
                   skip--;
                 }
               }
-            } else if (strcmp(ptr, "%var") == 0 || strcmp(ptr, "%func") == 0) {
+            } else if (strcmp(start, "%var") == 0 || strcmp(start, "%func") == 0) {
               const DWARF_SYMBOLLIST *sym;
-              int match_var = (strcmp(ptr, "%var") == 0);
+              int match_var = (strcmp(start, "%var") == 0);
               int curfile, curline;
               source_getcursorpos(&curfile, &curline);
               /* translate the file index from the list returned by GDB to the
@@ -1045,19 +1089,19 @@ static int console_autocomplete(char *text, size_t textsize, const DWARF_SYMBOLL
                       first = sym->name;
                     if (skip == 0) {
                       strlcpy(word, sym->name, textsize - (word - text));
-                      result = 1;
+                      result = true;
                     }
                     skip--;
                   }
                 }
               }
-            } else if (strcmp(ptr, "%reg") == 0) {
+            } else if (strcmp(start, "%reg") == 0) {
               int prefix_len = strlen(svd_mcu_prefix());
               const char *sep;
               /* auto-complete prefix */
               if (prefix_len > 0  && len < (size_t)prefix_len && strncmp(word, svd_mcu_prefix(), len) == 0) {
                 strlcpy(word, svd_mcu_prefix(), textsize - (word - text));
-                result = 1;
+                result = true;
               }
               /* auto-complete peripheral */
               if ((sep = strstr(word, "->")) != NULL)
@@ -1077,7 +1121,7 @@ static int console_autocomplete(char *text, size_t textsize, const DWARF_SYMBOLL
                     if (skip == 0) {
                       strlcpy(word, name, textsize - (word - text));
                       strlcat(word, first_suffix, textsize - (word - text));
-                      result = 1;
+                      result = true;
                     }
                     skip--;
                   }
@@ -1114,14 +1158,14 @@ static int console_autocomplete(char *text, size_t textsize, const DWARF_SYMBOLL
                           strlcat(word, "[0]", textsize - (word - text));
                         }
                       }
-                      result = 1;
+                      result = true;
                     }
                     skip--;
                   }
                 }
               }
-            } else if (strcmp(ptr, "%path") == 0 || strcmp(ptr, "%dir") == 0) {
-              bool dir_only = (strcmp(ptr, "%dir") == 0);
+            } else if (strcmp(start, "%path") == 0 || strcmp(start, "%dir") == 0) {
+              bool dir_only = (strcmp(start, "%dir") == 0);
               char *dirname = strdup(word);
               if (dirname != NULL) {
                 const char dirseparator[] = { DIRSEP_CHAR, '\0' };
@@ -1168,7 +1212,7 @@ static int console_autocomplete(char *text, size_t textsize, const DWARF_SYMBOLL
                       }
                       if (skip == 0) {
                         strlcpy(word, filename, textsize - (word - text));
-                        result = 1;
+                        result = true;
                       }
                       skip--;
                     }
@@ -1177,12 +1221,38 @@ static int console_autocomplete(char *text, size_t textsize, const DWARF_SYMBOLL
                 }
                 free(dirname);
               }
-            } else if (strncmp(word, ptr, len)== 0) {
+            } else if (strcmp(start, "%stream") == 0) {
+              const CTF_STREAM *stream;
+              for (idx = 0; !result && (stream = stream_by_seqnr(idx)) != NULL; idx++) {
+                if (strncmp(word, stream->name, len) == 0) {
+                  if (first == NULL)
+                    first = stream->name;
+                  if (skip == 0) {
+                    strlcpy(word, stream->name, textsize - (word - text));
+                    result = true;
+                  }
+                  skip--;
+                }
+              }
+            } else if (strcmp(start, "%severity") == 0) {
+              const char *severity;
+              for (idx = 0; !result && (severity = ctf_severity_name(idx)) != NULL; idx++) {
+                if (strncmp(word, severity, len) == 0) {
+                  if (first == NULL)
+                    first = severity;
+                  if (skip == 0) {
+                    strlcpy(word, severity, textsize - (word - text));
+                    result = true;
+                  }
+                  skip--;
+                }
+              }
+            } else if (strncmp(word, start, len)== 0) {
               if (first == NULL)
-                first = ptr;
+                first = start;
               if (skip == 0) {
-                strlcpy(word, ptr, textsize - (word - text));
-                result = 1;
+                strlcpy(word, start, textsize - (word - text));
+                result = true;
               }
               skip--;
             }
@@ -1196,7 +1266,7 @@ static int console_autocomplete(char *text, size_t textsize, const DWARF_SYMBOLL
             strlcpy(word, first, textsize - (word - text));
             if (first_suffix != NULL)
               strlcat(word, first_suffix, textsize - (word - text));
-            result = 1;
+            result = true;
           }
           free((void*)params);
         }
@@ -2929,7 +2999,7 @@ static bool ctf_findmetadata(const char *target, char *metadata, size_t metadata
   return false;
 }
 
-int ctf_error_notify(int code, int linenr, const char *message)
+int ctf_error_notify(int code, const char *filename, int linenr, const char *message)
 {
   static int ctf_statusset = 0;
 
@@ -2939,13 +3009,16 @@ int ctf_error_notify(int code, int linenr, const char *message)
     char msg[200];
     ctf_statusset = 1;
     if (linenr > 0)
-      snprintf(msg, sizearray(msg), "TSDL file error, line %d: ", linenr);
+      snprintf(msg, sizearray(msg), "TSDL file error, %s line %d: ", filename, linenr);
     else
       strlcpy(msg, "TSDL file error: ", sizearray(msg));
     strlcat(msg, message, sizearray(msg));
     tracelog_statusmsg(TRACESTATMSG_CTF, msg, 0);
-    if (sermon_isopen)
-      sermon_statusmsg(msg, true);
+    if (sermon_isopen()) {
+      const char *tsdl = sermon_getmetadata();
+      if (tsdl != NULL && *tsdl != '\0')
+        sermon_statusmsg(msg, true);
+    }
     console_add(msg, STRFLG_ERROR);
   }
   return 0;
@@ -3376,14 +3449,6 @@ static char *translate_path(char *path, bool native)
 {
   (void)native;
   return path;
-}
-
-static int memicmp(const unsigned char *p1, const unsigned char *p2, size_t count)
-{
-  int diff = 0;
-  while (count-- > 0 && diff == 0)
-    diff = toupper(*p1++) - toupper(*p2++);
-  return diff;
 }
 
 #endif
@@ -3914,6 +3979,36 @@ static int is_ip_address(const char *address)
          && a > 0 && a < 255 && b >= 0 && b < 255 && c >= 0 && c < 255 && d >= 0 && d < 255;
 }
 
+/** set_extension() adds a default extension to the filename, if no extension
+ *  was set. The extension must not include a leading dot.
+ */
+static void set_extension(char *path, size_t size, const char *extension)
+{
+  char *ptr = strrchr(path, '.');
+  if (ptr == NULL || strpbrk(ptr, "\\/") != NULL) {
+    strncat(path, ".", size);
+    strncat(path, extension, size);
+  }
+}
+
+static bool get_filename(char *path, size_t size, const char *extension, const char *filter, const char *caption)
+{
+  assert(path != NULL && size > 0);
+  assert(filter != NULL);
+  osdialog_filters *filters = osdialog_filters_parse(filter);
+  char *fname = osdialog_file(OSDIALOG_SAVE, caption, NULL, NULL, filters);
+  osdialog_filters_free(filters);
+  if (fname != NULL) {
+    strlcpy(path, fname, size);
+    if (extension != NULL)
+      set_extension(path, size, extension);
+    free(fname);
+    return true;
+  }
+
+  *path = '\0';
+  return false;
+}
 
 enum {
   STATE_INIT,
@@ -3956,6 +4051,8 @@ enum {
   STATE_SWODEVICE,
   STATE_SWOGENERIC,
   STATE_SWOCHANNELS,
+  STATE_CTFSTREAMS,
+  STATE_CTFSEVERITY,
   STATE_HOVER_SYMBOL,
   STATE_QUIT,
 };
@@ -3987,8 +4084,9 @@ enum {
 
 #define MSG_BMP_NOT_FOUND   0x0001
 
-#define TERM_END(s, i)      ((s)[i] == ' ' || (s)[i] == '\0')
-#define TERM_EQU(s, key, i) (strncmp((s), (key), (i)) == 0 && TERM_END((s), (i)))
+#define END_TOKEN(sym, len)       ((sym)[len] <= ' ')
+#define IS_TOKEN(base, sym, len)  (((sym) == (base) || (sym)[-1] <= ' ') && END_TOKEN((sym), (len)))
+#define TOKEN_EQU(sym, key, len)  (strncmp((sym), (key), (len)) == 0 && END_TOKEN((sym), (len)))
 
 enum {
   POPUP_NONE,
@@ -4220,7 +4318,7 @@ static bool handle_help_cmd(char *command, STRINGLIST *textroot, int *active,
      but make an exception for "monitor" */
   ptr = strrchr(command, ' ');
   if (ptr != NULL && strcmp(skipwhite(ptr), "help") == 0) {
-    if (TERM_EQU(command, "mon", 3) || TERM_EQU(command, "monitor", 7)) {
+    if (TOKEN_EQU(command, "mon", 3) || TOKEN_EQU(command, "monitor", 7)) {
       *active = POPUP_HELP;
       *reformat = nk_false;
     } else {
@@ -4230,13 +4328,13 @@ static bool handle_help_cmd(char *command, STRINGLIST *textroot, int *active,
     }
   }
 
-  if (TERM_EQU(command, "help", 4)) {
+  if (TOKEN_EQU(command, "help", 4)) {
     const char *cmdptr = skipwhite(command + 4);
     *active = POPUP_HELP;
     *reformat = nk_true;    /* by default, reformat (overruled for "help mon") */
     if (*cmdptr == '\0') {
       stringlist_append(textroot, "BMDebug is a GDB front-end, specifcally for embedded debugging with the Black Magic Probe.", 0);
-      stringlist_append(textroot, "Copyright 2019-2023 CompuPhase", 0);
+      stringlist_append(textroot, "Copyright 2019-2024 CompuPhase", 0);
       stringlist_append(textroot, "Licensed under the Apache License version 2.0", 0);
       stringlist_append(textroot, "", 0);
       stringlist_append(textroot, "Front-end topics.", 0);
@@ -4251,22 +4349,28 @@ static bool handle_help_cmd(char *command, STRINGLIST *textroot, int *active,
       stringlist_append(textroot, "trace -- configure SWO tracing.", 0);
       stringlist_append(textroot, "", 0);
       /* drop to the default "return false", so that GDB's help follows */
-    } else if (TERM_EQU(cmdptr, "assembly", 8) || TERM_EQU(command, "disassemble", 11) || TERM_EQU(command, "disas", 5)) {
+    } else if (TOKEN_EQU(cmdptr, "assembly", 8) || TOKEN_EQU(command, "disassemble", 11) || TOKEN_EQU(command, "disas", 5)) {
       stringlist_append(textroot, "Show disassembled code interleaved with source code.", 0);
       stringlist_append(textroot, "", 0);
-      stringlist_append(textroot, "assembly [on | off] -- set the assembly mode on or off; when no parameter is given, the command toggles the current status.", 0);
+      stringlist_append(textroot, "assembly [on | off] -- set the assembly mode on or off; when no"
+                                  " parameter is given, the command toggles the current status.", 0);
       stringlist_append(textroot, "disassemble [on | off] -- a synonym for the \"assembly\" command.", 0);
       stringlist_append(textroot, "", 0);
       stringlist_append(textroot, "Note that in assembly mode, the function keys F10 and F11 step by"
                                   " instruction, rather than by source line. You can still use the \"next\""
                                   " and \"step\" commands to step by source line.", 0);
-    } else if (TERM_EQU(cmdptr, "find", 4)) {
+    } else if (TOKEN_EQU(cmdptr, "find", 4)) {
       stringlist_append(textroot, "Find text in source code, or bytes in target memory.", 0);
       stringlist_append(textroot, "", 0);
-      stringlist_append(textroot, "find [text] -- Find text in the current source file (case-insensitive). Without parameter, the find command repeats the previous search.", 0);
-      stringlist_append(textroot, "find [/sn] start, end, values -- Search the address range from \"start\" to \"end\" for a sequence of values. The \"values\" parameter is a list of numbers separated by commas.", 0);
+      stringlist_append(textroot, "find [text] -- Find text in the current source file. Without parameter,"
+                                  " the find command repeats the previous search.", 0);
+      stringlist_append(textroot, "find [/sn] start, end, values -- Search the address range from"
+                                  " \"start\" to \"end\" for a sequence of values. The \"values\""
+                                  " parameter is a list of numbers separated by commas.", 0);
+      stringlist_append(textroot, "", 0);
+      stringlist_append(textroot, "Text search is case-sensitive, but '?', '*' and '/' wildcards are supported.", 0);
       return true;
-    } else if (TERM_EQU(cmdptr, "kbd", 3) || TERM_EQU(cmdptr, "keys", 4) || TERM_EQU(cmdptr, "keyboard", 8)) {
+    } else if (TOKEN_EQU(cmdptr, "kbd", 3) || TOKEN_EQU(cmdptr, "keys", 4) || TOKEN_EQU(cmdptr, "keyboard", 8)) {
       stringlist_append(textroot, "Keyboard navigation and commands.", 0);
       stringlist_append(textroot, "", 0);
       stringlist_append(textroot, "Up/Down arrow -- scroll the source view up and down (one line).", 0);
@@ -4287,7 +4391,7 @@ static bool handle_help_cmd(char *command, STRINGLIST *textroot, int *active,
       stringlist_append(textroot, "Ctrl+F2 -- reset program, same as \"start\".", 0);
       stringlist_append(textroot, "Ctrl+F5 -- interrupt program (stop).", 0);
       return true;
-    } else if (TERM_EQU(cmdptr, "mouse", 5)) {
+    } else if (TOKEN_EQU(cmdptr, "mouse", 5)) {
       stringlist_append(textroot, "Mouse actions.", 0);
       stringlist_append(textroot, "", 0);
       stringlist_append(textroot, "A left-click in the left margin of the source view, toggles a breakpoint"
@@ -4304,19 +4408,19 @@ static bool handle_help_cmd(char *command, STRINGLIST *textroot, int *active,
       stringlist_append(textroot, "", 0);
       stringlist_append(textroot, "Hovering over a variable or symbol, shows information on the symbol (such"
                                " as the current value, in case of a variable).", 0);
-    } else if (TERM_EQU(cmdptr, "reset", 5)) {
+    } else if (TOKEN_EQU(cmdptr, "reset", 5)) {
       stringlist_append(textroot, "Restart debugging.", 0);
       stringlist_append(textroot, "", 0);
       stringlist_append(textroot, "reset -- restart the target program; keep breakpoints and variable watches.", 0);
       stringlist_append(textroot, "reset hard -- restart both the debugger and the target program.", 0);
       stringlist_append(textroot, "reset load -- restart the debugger and reload the target program.", 0);
       return true;
-    } else if (TERM_EQU(cmdptr, "semihosting", 11)) {
+    } else if (TOKEN_EQU(cmdptr, "semihosting", 11)) {
       stringlist_append(textroot, "Semihosting options.", 0);
       stringlist_append(textroot, "", 0);
       stringlist_append(textroot, "semimosting clear -- clear the semihosting monitor view (delete contents).", 0);
       stringlist_append(textroot, "semihosting save [filename] -- save the contents in the semihosting monitor to a file.", 0);
-    } else if (TERM_EQU(cmdptr, "serial", 6)) {
+    } else if (TOKEN_EQU(cmdptr, "serial", 6)) {
       stringlist_append(textroot, "Configure the serial monitor.", 0);
       stringlist_append(textroot, "", 0);
       stringlist_append(textroot, "serial [port] [bitrate] -- open the port at the bitrate. If no port is specified,"
@@ -4330,14 +4434,14 @@ static bool handle_help_cmd(char *command, STRINGLIST *textroot, int *active,
       stringlist_append(textroot, "", 0);
       stringlist_append(textroot, "serial clear -- clear the serial monitor view (delete contents).", 0);
       stringlist_append(textroot, "serial save [filename] -- save the contents in the serial monitor to a file.", 0);
-    } else if (TERM_EQU(cmdptr, "svd", 3)) {
+    } else if (TOKEN_EQU(cmdptr, "svd", 3)) {
       stringlist_append(textroot, "Show information from the System View Description file.", 0);
       stringlist_append(textroot, "", 0);
       stringlist_append(textroot, "info svd -- list all peripherals.", 0);
       stringlist_append(textroot, "info svd [peripheral] -- list registers in the peripheral.", 0);
       stringlist_append(textroot, "info svd [register] -- look up register, display matching registers.", 0);
       stringlist_append(textroot, "info svd [peripheral->register] -- show register details.", 0);
-    } else if (TERM_EQU(cmdptr, "trace", 5) || TERM_EQU(cmdptr, "tracepoint", 10) || TERM_EQU(cmdptr, "tracepoints", 11)) {
+    } else if (TOKEN_EQU(cmdptr, "trace", 5) || TOKEN_EQU(cmdptr, "tracepoint", 10) || TOKEN_EQU(cmdptr, "tracepoints", 11)) {
       stringlist_append(textroot, "Configure SWO tracing.", 0);
       stringlist_append(textroot, "", 0);
       stringlist_append(textroot, "trace [target-clock] [bitrate] -- configure Manchester tracing.", 0);
@@ -4366,31 +4470,34 @@ static bool handle_help_cmd(char *command, STRINGLIST *textroot, int *active,
       stringlist_append(textroot, "trace clear -- clear the trace view (delete contents).", 0);
       stringlist_append(textroot, "trace save [filename] -- save the contents in the trace view to a file.", 0);
       return true;
-    } else if (TERM_EQU(cmdptr, "mon", 3)) {
+    } else if (TOKEN_EQU(cmdptr, "mon", 3)) {
       memcpy(command, "mon help", 8);       /* translate "help mon" -> "mon help" */
       *reformat = nk_false;
-    } else if (TERM_EQU(cmdptr, "monitor", 7)) {
+    } else if (TOKEN_EQU(cmdptr, "monitor", 7)) {
       memcpy(command, "monitor help", 12);  /* translate "help monitor" -> "monitor help" */
       *reformat = nk_false;
     }
-  } else if (*active == POPUP_HELP && !(TERM_EQU(command, "mon", 3) || TERM_EQU(command, "monitor", 7))) {
+  } else if (*active == POPUP_HELP && !(TOKEN_EQU(command, "mon", 3) || TOKEN_EQU(command, "monitor", 7))) {
     *active = POPUP_NONE;
   }
   return false;
 }
 
 static bool handle_info_cmd(char *command, STRINGLIST *textroot, int *active,
-                            nk_bool *reformat, const SWOSETTINGS *swo, TASK *task)
+                            nk_bool *reformat, const SWOSETTINGS *swo,
+                            const CTFSETTINGS *ctf, TASK *task)
 {
   assert(command != NULL);
   assert(textroot != NULL);
   assert(active != NULL);
   assert(reformat != NULL);
   assert(swo != NULL);
+  assert(ctf != NULL);
+  assert(task != NULL);
 
   command = (char*)skipwhite(command);
-  bool is_info = TERM_EQU(command, "info", 4);
-  bool is_print = TERM_EQU(command, "print", 5) || TERM_EQU(command, "p", 1);
+  bool is_info = TOKEN_EQU(command, "info", 4);
+  bool is_print = TOKEN_EQU(command, "print", 5) || TOKEN_EQU(command, "p", 1);
   if (!is_info && !is_print) {
     if (*active == POPUP_INFO)
       *active = POPUP_NONE;
@@ -4421,13 +4528,13 @@ static bool handle_info_cmd(char *command, STRINGLIST *textroot, int *active,
     stringlist_append(textroot, "trace -- status SWO tracing.", 0);
     stringlist_append(textroot, "", 0);
     /* drop to the default "return false", so that GDB's info follows */
-  } else if (is_info && TERM_EQU(cmdptr, "trace", 5)) {
-    trace_info_mode(swo, 1, textroot);
+  } else if (is_info && TOKEN_EQU(cmdptr, "trace", 5)) {
+    trace_info_mode(swo, ctf, true, textroot);
     return true;
-  } else if (is_info && TERM_EQU(cmdptr, "serial", 6)) {
-    serial_info_mode(textroot);
+  } else if (is_info && TOKEN_EQU(cmdptr, "serial", 6)) {
+    serial_info_mode(ctf, true, textroot);
     return true;
-  } else if (is_info && TERM_EQU(cmdptr, "svd", 3)) {
+  } else if (is_info && TOKEN_EQU(cmdptr, "svd", 3)) {
     svd_info(skipwhite(cmdptr + 3), textroot, false, 0);
     return true;
   } else {
@@ -4497,8 +4604,8 @@ static bool handle_info_cmd(char *command, STRINGLIST *textroot, int *active,
 static bool handle_disasm_cmd(const char *command, bool *curstate)
 {
   command = skipwhite(command);
-  if (TERM_EQU(command, "disassemble", 11) || TERM_EQU(command, "disas", 5)
-      || TERM_EQU(command, "assembly", 8))
+  if (TOKEN_EQU(command, "disassemble", 11) || TOKEN_EQU(command, "disas", 5)
+      || TOKEN_EQU(command, "assembly", 8))
   {
     const char *ptr = command;
     while (isalpha(*ptr))
@@ -4506,9 +4613,9 @@ static bool handle_disasm_cmd(const char *command, bool *curstate)
     ptr = skipwhite(ptr);
     if (*ptr == '\0')
       *curstate =!*curstate;
-    else if (TERM_EQU(ptr, "on", 2))
+    else if (TOKEN_EQU(ptr, "on", 2))
       *curstate = true;
-    else if (TERM_EQU(ptr, "off", 3))
+    else if (TOKEN_EQU(ptr, "off", 3))
       *curstate = false;
     else
       console_add("Invalid argument\n", STRFLG_ERROR);
@@ -4523,7 +4630,7 @@ static bool handle_list_cmd(const char *command, const DWARF_SYMBOLLIST *symbolt
                             const DWARF_PATHLIST *filetable)
 {
   command = skipwhite(command);
-  if (TERM_EQU(command, "list", 4)) {
+  if (TOKEN_EQU(command, "list", 4)) {
     const char *p1 = skipwhite(command + 4);
     if (*p1 == '+' || *p1 == '\0') {
       int linecount = source_linecount(source_cursorfile);
@@ -4592,7 +4699,7 @@ static bool handle_display_cmd(const char *command, int *param, char *symbol, si
   assert(param != NULL);
   assert(symbol != NULL && symlength > 0);
   command = skipwhite(command);
-  if (TERM_EQU(command, "disp", 4) || TERM_EQU(command, "display", 7)) {
+  if (TOKEN_EQU(command, "disp", 4) || TOKEN_EQU(command, "display", 7)) {
     param[0] = STATEPARAM_WATCH_SET;
     param[1] = FORMAT_NATURAL;  /* preset, may be overruled, see below */
     ptr = strchr(command, ' ');
@@ -4620,7 +4727,7 @@ static bool handle_display_cmd(const char *command, int *param, char *symbol, si
     }
     strlcpy(symbol, skipwhite(ptr), symlength);
     return true;
-  } else if (TERM_EQU(command, "undisp", 6) || TERM_EQU(command, "undisplay", 9)) {
+  } else if (TOKEN_EQU(command, "undisp", 6) || TOKEN_EQU(command, "undisplay", 9)) {
     param[0] = STATEPARAM_WATCH_DEL;
     ptr = strchr(command, ' ');
     assert(ptr != NULL);
@@ -4641,78 +4748,72 @@ static bool handle_display_cmd(const char *command, int *param, char *symbol, si
   return false;
 }
 
-#define RESET_FILE    1 /* equivalent to the GDB "file" command */
-#define HARD_RESET    2 /* stop & restart GDB */
-#define LOAD_CUR_ELF  3 /* equivalent to the GDB "load" command, plus running to the entry point */
-#define LOAD_FILE_ELF 4 /* equivalent to the GDB "load" command with a specific ELF file, plus running to the entry point */
-#define RESET_LOAD    5 /* equivalent to the GDB "file" command, but forcing ELF file download */
+enum {
+  ACTION_SKIP,          /* command did not match */
+
+  /* tracing actions */
+  ACTION_OPEN,          /* open or re-open */
+  ACTION_CLOSE,
+  ACTION_CHANNELS,      /* change channel settings (SWO) */
+  ACTION_CTFSETTINGS,   /* change stream mask & severity level (CTF) */
+  ACTION_INFO,          /* show info panel */
+
+  /* file reset and load actions */
+  ACTION_RESET_FILE,    /* equivalent to the GDB "file" command */
+  ACTION_HARD_RESET,    /* stop & restart GDB */
+  ACTION_LOAD_CUR_ELF,  /* equivalent to the GDB "load" command, plus running to the entry point */
+  ACTION_LOAD_FILE_ELF, /* equivalent to the GDB "load" command with a specific ELF file, plus running to the entry point */
+  ACTION_RESET_LOAD,    /* equivalent to the GDB "file" command, but forcing ELF file download */
+
+  ACTION_NOP,           /* no-operation, command has been handled and requires no further operation */
+};
 
 static int handle_file_load_reset(const char *command, char *filename, size_t namelength)
 {
   assert(command != NULL);
   assert(filename != NULL && namelength > 0);
   command = skipwhite(command);
-  if (TERM_EQU(command, "file", 4)) {
+  if (TOKEN_EQU(command, "file", 4)) {
     const char *ptr = strchr(command, ' ');
     if (ptr != NULL) {
       strlcpy(filename, skipwhite(ptr), namelength);
       translate_path(filename, true);
     }
-    return RESET_FILE;
-  } else if (TERM_EQU(command, "reset", 5)) {
+    return ACTION_RESET_FILE;
+  } else if (TOKEN_EQU(command, "reset", 5)) {
     /* interpret "reset" as "file ..." for the current ELF file, but "reset hard"
        does a full reset (GDB is stopped and restarted) */
     const char *ptr = strchr(command, ' ');
     if (ptr != NULL) {
       ptr = skipwhite(ptr);
-      if (TERM_EQU(ptr, "hard", 4))
-        return HARD_RESET;
-      if (TERM_EQU(ptr, "load", 4))
-        return RESET_LOAD;
+      if (TOKEN_EQU(ptr, "hard", 4))
+        return ACTION_HARD_RESET;
+      if (TOKEN_EQU(ptr, "load", 4))
+        return ACTION_RESET_LOAD;
     }
-    return RESET_FILE;
-  } else if (TERM_EQU(command, "load", 4)) {
+    return ACTION_RESET_FILE;
+  } else if (TOKEN_EQU(command, "load", 4)) {
     /* load has an optional filename */
     const char *ptr = strchr(command, ' ');
     if (ptr != NULL) {
       strlcpy(filename, skipwhite(ptr), namelength);
       translate_path(filename, true);
-      return LOAD_FILE_ELF;
+      return ACTION_LOAD_FILE_ELF;
     }
     /* check if source files have changed, if so -> reload sources when
        re-flashing the target */
     if (sources_ischanged())
-      return RESET_LOAD;
-    return LOAD_CUR_ELF;
+      return ACTION_RESET_LOAD;
+    return ACTION_LOAD_CUR_ELF;
   }
   return 0;
-}
-
-static int find_substring(const char *text, const char *pattern)
-{
-  int idx, txtlen, patlen;
-
-  assert(text != NULL && pattern != NULL);
-  txtlen = strlen(text);
-  patlen = strlen(pattern);
-  idx = 0;
-  while (idx < txtlen) {
-    while (idx < txtlen && toupper(text[idx]) != toupper(pattern[0]))
-      idx++;
-    if (idx + patlen > txtlen)
-      break;      /* not found on this line */
-    if (memicmp((const unsigned char*)text + idx, (const unsigned char*)pattern, patlen) == 0)
-      break;      /* found on this line */
-    idx++;
-  }
-  return (idx + patlen <= txtlen);
 }
 
 static bool handle_find_cmd(const char *command)
 {
   assert(command != NULL);
   command = skipwhite(command);
-  if (TERM_EQU(command, "find", 4)) {
+  if (TOKEN_EQU(command, "find", 4)) {
     /* check whether this is a memory search command */
     const char *ptr = skipwhite(command + 4);
     const char *p2 = ptr;
@@ -4742,19 +4843,18 @@ static bool handle_find_cmd(const char *command)
     /* find pattern, starting from source_cursorline */
     int linenr = source_cursorline;
     SOURCELINE *item = sourceline_get(source_cursorfile, linenr);
-    int found_on_curline;
+    bool found_on_curline = false;  /* flag to distinguish "no matches" from "no more matches" */
     if (item == NULL || source_cursorline <= 0) {
-      found_on_curline = 0;
       linenr = 1;
       item = sourceline_get(source_cursorfile, linenr);
     } else {
-      found_on_curline = find_substring(item->text, pattern);
+      found_on_curline = (strmatch(pattern, item->text, NULL) != NULL);
       item = item->next;
       linenr++;
     }
     while (linenr != source_cursorline) {
       assert(item != NULL && item->text != NULL);
-      if (find_substring(item->text, pattern)) {
+      if (strmatch(pattern, item->text, NULL)) {
         source_cursorline = linenr;
         return true;     /* found, stop search */
       }
@@ -4793,7 +4893,7 @@ static bool handle_x_cmd(const char *command, MEMDUMP *memdump)
 
   assert(command != NULL);
   command = skipwhite(command);
-  if (!TERM_EQU(command, "x", 1))
+  if (!TOKEN_EQU(command, "x", 1))
     return false;
 
   assert(memdump != NULL);
@@ -4846,16 +4946,19 @@ static bool handle_x_cmd(const char *command, MEMDUMP *memdump)
 static bool is_monitor_cmd(const char *command)
 {
   assert(command != NULL);
-  return TERM_EQU(command, "mon", 3) || TERM_EQU(command, "monitor", 7);
+  return TOKEN_EQU(command, "mon", 3) || TOKEN_EQU(command, "monitor", 7);
 }
 
-static void trace_info_channel(int ch_start, int ch_end, STRINGLIST *textroot)
+static void trace_info_channel(int ch_start, int ch_end, bool indent, STRINGLIST *textroot)
 {
   char msg[100];
   int chan;
 
   for (chan = ch_start; chan <= ch_end; chan++) {
-    snprintf(msg, sizearray(msg), "Channel %d: ", chan);
+    if (indent)
+      snprintf(msg, sizearray(msg), "    %d: ", chan);
+    else
+      snprintf(msg, sizearray(msg), "Channel %d: ", chan);
     if (chan < 0 || chan >= NUM_CHANNELS) {
       strlcat(msg, "invalid", sizearray(msg));
     } else {
@@ -4865,15 +4968,15 @@ static void trace_info_channel(int ch_start, int ch_end, STRINGLIST *textroot)
         strlcat(msg, "disabled", sizearray(msg));
       const char *ptr = channel_getname(chan, NULL, 0);
       if (ptr != NULL && strlen(ptr) > 0) {
-        strlcat(msg, " \"", sizearray(msg));
+        strlcat(msg, " - \"", sizearray(msg));
         strlcat(msg, ptr, sizearray(msg));
         strlcat(msg, "\"", sizearray(msg));
       }
       struct nk_color clr = channel_getcolor(chan);
-      struct nk_color defclr = SWO_TRACE_DEFAULT_COLOR;
+      struct nk_color defclr = default_channel_colour(chan);
       if (clr.r != defclr.r || clr.g != defclr.g || clr.b != defclr.b) {
         char str[30];
-        sprintf(str, " #%02x%02x%02x", clr.r, clr.g, clr.b);
+        snprintf(str, sizearray(str), " #%02x%02x%02x", clr.r, clr.g, clr.b);
         strlcat(msg, str, sizearray(msg));
       }
     }
@@ -4886,10 +4989,13 @@ static void trace_info_channel(int ch_start, int ch_end, STRINGLIST *textroot)
   }
 }
 
-static void trace_info_mode(const SWOSETTINGS *swo, int showchannels, STRINGLIST *textroot)
+static void trace_info_mode(const SWOSETTINGS *swo, const CTFSETTINGS *ctf,
+                            bool showchannels, STRINGLIST *textroot)
 {
-  char msg[200];
+  assert(swo != NULL);
+  assert(ctf != NULL);
 
+  char msg[200];
   strlcpy(msg, "SWO Trace configuration", sizearray(msg));
   if (textroot != NULL) {
     stringlist_append(textroot, msg, 0);
@@ -4935,55 +5041,50 @@ static void trace_info_mode(const SWOSETTINGS *swo, int showchannels, STRINGLIST
     console_add(msg, STRFLG_STATUS);
   }
 
-  assert(swo->metadata != NULL);
+  assert(ctf->metadata != NULL);
   if (textroot != NULL) {
     strlcpy(msg, "CTF / TSDL: ", sizearray(msg));
-    if (strlen(swo->metadata) > 0 && strcmp(swo->metadata, "-") != 0) {
-      const char *basename = lastdirsep(swo->metadata);
-      strlcat(msg, (basename != NULL) ? basename + 1 : swo->metadata, sizearray(msg));
+    if (strlen(ctf->metadata) > 0 && strcmp(ctf->metadata, "-") != 0) {
+      const char *basename = lastdirsep(ctf->metadata);
+      strlcat(msg, (basename != NULL) ? basename + 1 : ctf->metadata, sizearray(msg));
     } else {
       strlcat(msg, "-", sizearray(msg));
     }
     stringlist_append(textroot, msg, 0);
   } else {
-    if (strlen(swo->metadata) > 0 && strcmp(swo->metadata, "-") != 0) {
-      const char *basename = lastdirsep(swo->metadata);
-      snprintf(msg, sizearray(msg), "CTF / TSDL = %s\n", (basename != NULL) ? basename + 1 : swo->metadata);
+    if (strlen(ctf->metadata) > 0 && strcmp(ctf->metadata, "-") != 0) {
+      const char *basename = lastdirsep(ctf->metadata);
+      snprintf(msg, sizearray(msg), "CTF / TSDL = %s\n", (basename != NULL) ? basename + 1 : ctf->metadata);
       console_add(msg, STRFLG_STATUS);
     }
   }
 
   if (textroot != NULL) {
     stringlist_append(textroot, "", 0);
-    stringlist_append(textroot, "Enabled channels", 0);
+    stringlist_append(textroot, "Channels", 0);
   }
   if (showchannels && swo->mode != SWOMODE_NONE && swo->enabled) {
-    int count, chan;
-    for (count = chan = 0; chan < NUM_CHANNELS; chan++)
-      if (channel_getenabled(chan))
-        count++;
     if (textroot != NULL) {
-      if (count == 0) {
-        stringlist_append(textroot, "(all channels disabled)", 0);
-      } else {
-        for (chan = 0; chan < NUM_CHANNELS; chan++)
-          if (channel_getenabled(chan))
-            trace_info_channel(chan, chan, textroot);
-      }
+      for (int chan = 0; chan < NUM_CHANNELS; chan++)
+        trace_info_channel(chan, chan, true, textroot);
     } else {
+      int count = 0;
+      for (int chan = 0; chan < NUM_CHANNELS; chan++)
+        if (channel_getenabled(chan))
+          count++;
       if (count == NUM_CHANNELS) {
         console_add("All channels enabled\n", STRFLG_STATUS);
       } else if (count == 0) {
         console_add("All channels disabled\n", STRFLG_STATUS);
       } else {
-        int comma = 0;
+        bool comma = false;
         strlcpy(msg, "Enabled channels:", sizearray(msg));
-        for (chan = 0; chan < NUM_CHANNELS; chan++) {
+        for (int chan = 0; chan < NUM_CHANNELS; chan++) {
           if (channel_getenabled(chan)) {
             if (comma)
               strlcat(msg, ",", sizearray(msg));
             sprintf(msg + strlen(msg), " %d", chan);
-            comma = 1;
+            comma = true;
           }
         }
         strlcat(msg, "\n", sizearray(msg));
@@ -4995,59 +5096,84 @@ static void trace_info_mode(const SWOSETTINGS *swo, int showchannels, STRINGLIST
 
 /** handle_trace_cmd()
  *  \param command    [in] command string.
- *  \param swo        [out] the various settings, see below.
+ *  \param swo        [in/out] various SWO settings, see below.
+ *  \param ctf        [in/out] various CTF settings.
  *
- *  \note * mode       SWOMODE_NONE, SWOMODE_ASYNC or SWOMODE_MANCHESTER.
+ *  \note For SWO:
+ *        * mode       SWOMODE_NONE, SWOMODE_ASYNC or SWOMODE_MANCHESTER.
  *        * clock      target clock rate; this is set to zero for passive mode.
  *        * bitrate    transmission speed.
  *        * datasize   payload data size in bytes (not bits).
+ *
+ *  \note For CTF:
  *        * metadata   definition file for CTF.
- *  \return 0=unchanged, 1=protocol settings changed, 2=channels changed,
- *          3="info"
+ *        * severity   severity level (filetering).
+ *        * streammask mask for stream.
+ *
+ *  \return ACTION_SKIP, 1=ACTION_OPEN (protocol settings
+ *          changed), ACTION_CLOSE, ACTION_CHANNELS=channels changed,
+ *          ACTION_INFO
  */
-static int handle_trace_cmd(const char *command, SWOSETTINGS *swo)
+static int handle_trace_cmd(const char *command, SWOSETTINGS *swo, CTFSETTINGS *ctf)
 {
   unsigned newmode = SWOMODE_NONE;
   int tsdl_set = 0;
 
   assert(command != NULL);
   command = skipwhite(command);
-  if (!TERM_EQU(command, "trace", 5))
-    return 0;
+  if (!TOKEN_EQU(command, "trace", 5))
+    return ACTION_SKIP;
 
-  /* make a copy of the command string, to be able to clear parts of it */
+  /* make a copy of the command string (minus the "trace" keyword), to be able
+     to clear parts of it */
   char *cmdcopy = alloca(strlen(command) + 1);
-  strcpy(cmdcopy, command);
-  char *ptr = (char*)skipwhite(cmdcopy + 5);
+  strcpy(cmdcopy, skipwhite(command + 5));
 
-  if (*ptr == '\0' || TERM_EQU(ptr, "info", 4))
-    return 3; /* if only "trace" is typed, interpret it as "trace info" */
+  if (*cmdcopy == '\0' || TOKEN_EQU(cmdcopy, "info", 4))
+    return ACTION_INFO; /* if only "trace" is typed, interpret it as "trace info" */
 
   char *opt_save;
-  if ((opt_save = strstr(cmdcopy, "save")) != NULL && TERM_END(opt_save, 4)) {
+  if ((opt_save = strstr(cmdcopy, "save")) != NULL && IS_TOKEN(cmdcopy, opt_save, 4)) {
     /* get the filename */
     const char *ptr_name = skipwhite(opt_save + 4);
     const char *tail = ptr_name;
     while (*tail > ' ')
       tail++;
-    if (tail != ptr_name) {
-      char *name = alloca((tail - ptr_name + 1) * sizeof(char));
-      strncpy(name, ptr_name, tail - ptr_name);
-      name[tail - ptr_name] = '\0';
-      tracestring_save(name);
+    char fname[_MAX_PATH];
+    if (tail != ptr_name && (tail - ptr_name) < sizearray(fname)) {
+      strncpy(fname, ptr_name, tail - ptr_name);
+      fname[tail - ptr_name] = '\0';
+      set_extension(fname, sizearray(fname), "csv");
+    } else {
+      get_filename(fname, sizearray(fname), "csv", "CSV files:csv;All files:*", "Save SWO Trace output");
+    }
+    if (strlen(fname) > 0) {
+      int count = tracestring_save(fname);
+      char message[_MAX_PATH + 50];
+      if (count >= 0) {
+        snprintf(message, sizearray(message), "%d lines saved into %s\n", count, fname);
+        console_add(message, STRFLG_STATUS);
+      } else {
+        snprintf(message, sizearray(message), "Failed to save to file %s\n", fname);
+        console_add(message, STRFLG_ERROR);
+      }
     }
     memset(opt_save, ' ', tail - opt_save);  /* erase the "save" parameter from the string (plus the filename) */
   }
 
   char *opt_clear;
-  if ((opt_clear = strstr(cmdcopy, "clear")) != NULL && TERM_END(opt_clear, 5)) {
+  if ((opt_clear = strstr(cmdcopy, "clear")) != NULL && IS_TOKEN(cmdcopy, opt_clear, 5)) {
     tracestring_clear();
     memset(opt_clear, ' ', 5);  /* erase the "clear" parameter from the string */
   }
 
+  char *ptr = (char*)skipwhite(cmdcopy);
+  if (*ptr == '\0')
+    return ACTION_NOP;
+
   assert(swo != NULL);
 
-  if (TERM_EQU(ptr, "channel", 7) || TERM_EQU(ptr, "chan", 4) || TERM_EQU(ptr, "ch", 2)) {
+  if (TOKEN_EQU(ptr, "channel", 7) || TOKEN_EQU(ptr, "chan", 4) || TOKEN_EQU(ptr, "ch", 2)) {
     int ch_start, ch_end;
     char *opts, *p2;
     ptr = ((p2 = strchr(ptr, ' ')) != NULL) ? (char*)skipwhite(p2) : strchr(ptr, '\0');
@@ -5093,13 +5219,13 @@ static int handle_trace_cmd(const char *command, SWOSETTINGS *swo)
           channel_setname(chan, ptr);
       }
     }
-    trace_info_channel(ch_start, ch_end, NULL);
-    return 2; /* only channel set changed */
+    trace_info_channel(ch_start, ch_end, false, NULL);
+    return ACTION_CHANNELS; /* only channel set changed */
   }
 
   /* key terms like "8-bit", "16-bit", "32-bit" or "auto" may be combined on
      a mode set command */
-  if ((ptr = strstr(cmdcopy, "bit")) != 0 && TERM_END(ptr, 3) && (*(ptr - 1) == ' ' || *(ptr - 1) == '-' || isdigit(*(ptr - 1)))) {
+  if ((ptr = strstr(cmdcopy, "bit")) != 0 && END_TOKEN(ptr, 3) && (*(ptr - 1) == ' ' || *(ptr - 1) == '-' || isdigit(*(ptr - 1)))) {
     char *endptr = ptr + 3;
     ptr--;
     if (!isdigit(*ptr))
@@ -5114,32 +5240,32 @@ static int handle_trace_cmd(const char *command, SWOSETTINGS *swo)
         swo->datasize = v / 8;
     }
     memset(ptr, ' ', (unsigned)(endptr - ptr)); /* erase the datasize setting from the string */
-  } else if ((ptr = strstr(cmdcopy, "auto")) != 0 && TERM_END(ptr, 4) && *(ptr - 1) == ' ') {
+  } else if ((ptr = strstr(cmdcopy, "auto")) != 0 && IS_TOKEN(cmdcopy, ptr, 4)) {
     swo->datasize = 0;
     memset(ptr, ' ', 4);    /* erase the datasize setting from the string */
   }
 
   /* when "passive" is set, the clock is set to 0 (so that the target is not
      initialized) */
-  if ((ptr = strstr(cmdcopy, "passive")) != 0 && TERM_END(ptr, 7)) {
+  if ((ptr = strstr(cmdcopy, "passive")) != 0 && IS_TOKEN(cmdcopy, ptr, 7)) {
     swo->clock = 0;
     memset(ptr, ' ', 7);    /* erase the setting from the string */
-  } else if ((ptr = strstr(cmdcopy, "pasv")) != 0 && TERM_END(ptr, 4)) {
+  } else if ((ptr = strstr(cmdcopy, "pasv")) != 0 && IS_TOKEN(cmdcopy, ptr, 4)) {
     swo->clock = 0;
     memset(ptr, ' ', 4);    /* erase the setting from the string */
   }
 
   /* explicit bitrate */
-  if ((ptr = strstr(cmdcopy, "bitrate")) != 0 && TERM_END(ptr, 7)) {
+  if ((ptr = strstr(cmdcopy, "bitrate")) != 0 && IS_TOKEN(cmdcopy, ptr, 7)) {
     char *start = ptr;
     if ((ptr = strchr(ptr, ' ')) != NULL) {
       double v = strtod(ptr, (char**)&ptr);
       ptr = (char*)skipwhite(ptr);
-      if ((strnicmp(ptr, "mhz", 3) == 0 && TERM_END(ptr, 3)) || (strnicmp(ptr, "m", 1) == 0 && TERM_END(ptr, 1))) {
+      if ((strnicmp(ptr, "mhz", 3) == 0 && END_TOKEN(ptr, 3)) || (strnicmp(ptr, "m", 1) == 0 && END_TOKEN(ptr, 1))) {
         v *= 1000000;
         ptr = strchr(ptr, ' ');
         ptr = (ptr != NULL) ? (char*)skipwhite(ptr) : strchr(cmdcopy, '\0');
-      } else if ((strnicmp(ptr, "kbps", 4) == 0 && TERM_END(ptr, 4)) || (strnicmp(ptr, "khz", 3) == 0 && TERM_END(ptr, 3)) || (strnicmp(ptr, "k", 1) == 0 && TERM_END(ptr, 1))) {
+      } else if ((strnicmp(ptr, "kbps", 4) == 0 && END_TOKEN(ptr, 4)) || (strnicmp(ptr, "khz", 3) == 0 && END_TOKEN(ptr, 3)) || (strnicmp(ptr, "k", 1) == 0 && END_TOKEN(ptr, 1))) {
         v *= 1000;
         ptr = strchr(ptr, ' ');
         ptr = (ptr != NULL) ? (char*)skipwhite(ptr) : strchr(cmdcopy, '\0');
@@ -5153,10 +5279,10 @@ static int handle_trace_cmd(const char *command, SWOSETTINGS *swo)
 
   /* optionally clear a TSDL file */
   ptr = (char*)skipwhite(cmdcopy + 6);  /* reset to start */
-  if (TERM_EQU(ptr, "plain", 5)) {
-    strcpy(swo->metadata, "-"); /* set it explicitly to "none" */
+  if (TOKEN_EQU(ptr, "plain", 5)) {
+    strcpy(ctf->metadata, "-"); /* set it explicitly to "none" */
     memset(ptr, ' ', 5);    /* erase the setting from the string */
-    swo->force_plain = 1;
+    swo->force_plain = true;
   }
   /* check whether any of the parameters is a TSDL file */
   ptr = (char*)skipwhite(cmdcopy + 6);  /* reset to start */
@@ -5170,27 +5296,27 @@ static int handle_trace_cmd(const char *command, SWOSETTINGS *swo)
     }
     if (tsdl_set) {
       unsigned len = (unsigned)(endptr - ptr);
-      strncpy(swo->metadata, ptr, len);
-      swo->metadata[len] = '\0';
+      strncpy(ctf->metadata, ptr, len);
+      ctf->metadata[len] = '\0';
       memset(ptr, ' ', len);    /* erase the filename from the string */
-      swo->force_plain = 0;
+      swo->force_plain = false;
     }
     ptr =(char*)skipwhite(endptr);
   }
 
   /* mode (explicit or implied) */
   ptr = (char*)skipwhite(cmdcopy + 6);  /* reset to start */
-  if (TERM_EQU(ptr, "disable", 7)) {
-    swo->enabled = 0;
+  if (TOKEN_EQU(ptr, "disable", 7)) {
+    swo->enabled = false;
     swo->mode = SWOMODE_NONE;
-    return 1; /* special mode, disable all channels when turning tracing off */
+    return ACTION_CLOSE;
   }
-  if (TERM_EQU(ptr, "enable", 6)) {
-    swo->enabled = 1;
+  if (TOKEN_EQU(ptr, "enable", 6)) {
+    swo->enabled = true;
     newmode = (swo->mode == SWOMODE_NONE) ? SWOMODE_MANCHESTER : swo->mode;
     ptr = (char*)skipwhite(ptr + 6);
   }
-  if (TERM_EQU(ptr, "async", 5)) {
+  if (TOKEN_EQU(ptr, "async", 5)) {
     newmode = SWOMODE_ASYNC;
     ptr = (char*)skipwhite(ptr + 5);
   }
@@ -5198,7 +5324,7 @@ static int handle_trace_cmd(const char *command, SWOSETTINGS *swo)
   if (isdigit(*ptr)) {
     double v = strtod(ptr, (char**)&ptr);
     ptr = (char*)skipwhite(ptr);
-    if ((strnicmp(ptr, "mhz", 3) == 0 && TERM_END(ptr, 3)) || (strnicmp(ptr, "m", 1) == 0 && TERM_END(ptr, 1))) {
+    if ((strnicmp(ptr, "mhz", 3) == 0 && END_TOKEN(ptr, 3)) || (strnicmp(ptr, "m", 1) == 0 && END_TOKEN(ptr, 1))) {
       v *= 1000000;
       ptr = strchr(ptr, ' ');
       ptr = (ptr != NULL) ? (char*)skipwhite(ptr) : strchr(cmdcopy, '\0');
@@ -5206,17 +5332,17 @@ static int handle_trace_cmd(const char *command, SWOSETTINGS *swo)
     swo->clock = (unsigned)(v + 0.5);
     if (swo->mode != SWOMODE_ASYNC)
       newmode = SWOMODE_MANCHESTER; /* if clock is set, mode must be async or manchester */
-    swo->enabled = 1;
+    swo->enabled = true;
   }
   /* (implied) bitrate */
   if (isdigit(*ptr)) {
     double v = strtod(ptr, (char**)&ptr);
     ptr = (char*)skipwhite(ptr);
-    if ((strnicmp(ptr, "mhz", 3) == 0 && TERM_END(ptr, 3)) || (strnicmp(ptr, "m", 1) == 0 && TERM_END(ptr, 1))) {
+    if ((strnicmp(ptr, "mhz", 3) == 0 && END_TOKEN(ptr, 3)) || (strnicmp(ptr, "m", 1) == 0 && END_TOKEN(ptr, 1))) {
       v *= 1000000;
       ptr = strchr(ptr, ' ');
       ptr = (ptr != NULL) ? (char*)skipwhite(ptr) : strchr(cmdcopy, '\0');
-    } else if ((strnicmp(ptr, "kbps", 4) == 0 && TERM_END(ptr, 4)) || (strnicmp(ptr, "khz", 3) == 0 && TERM_END(ptr, 3)) || (strnicmp(ptr, "k", 1) == 0 && TERM_END(ptr, 1))) {
+    } else if ((strnicmp(ptr, "kbps", 4) == 0 && END_TOKEN(ptr, 4)) || (strnicmp(ptr, "khz", 3) == 0 && END_TOKEN(ptr, 3)) || (strnicmp(ptr, "k", 1) == 0 && END_TOKEN(ptr, 1))) {
       v *= 1000;
       ptr = strchr(ptr, ' ');
       ptr = (ptr != NULL) ? (char*)skipwhite(ptr) : strchr(cmdcopy, '\0');
@@ -5224,7 +5350,7 @@ static int handle_trace_cmd(const char *command, SWOSETTINGS *swo)
     swo->bitrate = (unsigned)(v + 0.5);
     if (swo->mode != SWOMODE_ASYNC)
       newmode = SWOMODE_MANCHESTER; /* if bitrate is set, mode must be async or manchester */
-    swo->enabled = 1;
+    swo->enabled = true;
   }
   if (newmode != SWOMODE_NONE && swo->clock > 0 && swo->bitrate > swo->clock) {
     /* if bitrate > clock swap the two (this can never happen, so it is likely
@@ -5236,8 +5362,8 @@ static int handle_trace_cmd(const char *command, SWOSETTINGS *swo)
   if (newmode != SWOMODE_NONE)
     swo->mode = newmode;
 
-  trace_info_mode(swo, 0, NULL);
-  return 1; /* assume entire protocol changed */
+  trace_info_mode(swo, ctf, false, NULL);
+  return ACTION_OPEN; /* assume entire protocol changed */
 }
 
 /** handle_semihosting_cmd()
@@ -5249,15 +5375,22 @@ static bool handle_semihosting_cmd(const char *command)
 {
   assert(command != NULL);
   command = skipwhite(command);
-  if (!TERM_EQU(command, "semihosting", 11))
+  if (!TOKEN_EQU(command, "semihosting", 11))
     return false;
   const char *ptr = (char*)skipwhite(command + 11);
-  if (TERM_EQU(ptr, "clear", 5)) {
+  if (TOKEN_EQU(ptr, "clear", 5)) {
     stringlist_clear(&semihosting_root);
-  } else if (TERM_EQU(ptr, "save", 4)) {
+  } else if (TOKEN_EQU(ptr, "save", 4)) {
     ptr = skipwhite(ptr + 4);
-    if (*ptr != '\0') {
-      FILE *fp = fopen(ptr, "wt");
+    char fname[_MAX_PATH];
+    if (*ptr != '\0' && strlen(ptr) < sizearray(fname)) {
+      strcpy(fname, ptr);
+      set_extension(fname, sizearray(fname), "txt");
+    } else {
+      get_filename(fname, sizearray(fname), "txt", "Text files:txt;All files:*", "Save semihosting output");
+    }
+    if (strlen(fname) > 0) {
+      FILE *fp = fopen(fname, "wt");
       if (fp != NULL) {
         int count = 0;
         STRINGLIST *item = semihosting_root.next;
@@ -5268,14 +5401,14 @@ static bool handle_semihosting_cmd(const char *command)
           count++;
         }
         fclose(fp);
-        char message[100];
-        sprintf(message,"%d lines saved\n", count);
+        char message[_MAX_PATH + 50];
+        snprintf(message, sizearray(message), "%d lines saved into %s\n", count, fname);
         console_add(message, STRFLG_STATUS);
       } else {
-        console_add("Failed to save to file\n", STRFLG_ERROR);
+        char message[_MAX_PATH + 50];
+        snprintf(message, sizearray(message), "Failed to save to file %s\n", fname);
+        console_add(message, STRFLG_ERROR);
       }
-    } else {
-      console_add("Missing filename\n", STRFLG_ERROR);
     }
     return 4;
   }
@@ -5295,9 +5428,9 @@ static bool handle_directory_cmd(const char *command, char *sourcepath, size_t m
   const char *ptr = NULL;
   assert(command != NULL);
   command = skipwhite(command);
-  if (TERM_EQU(command, "directory", 9))
+  if (TOKEN_EQU(command, "directory", 9))
     ptr = (char*)skipwhite(command + 9);
-  else if (TERM_EQU(command, "dir", 3))
+  else if (TOKEN_EQU(command, "dir", 3))
     ptr = (char*)skipwhite(command + 3);
   else
     return false;
@@ -5319,7 +5452,7 @@ static bool handle_directory_cmd(const char *command, char *sourcepath, size_t m
   return true;
 }
 
-static void serial_info_mode(STRINGLIST *textroot)
+static void serial_info_mode(const CTFSETTINGS *ctf, bool showstreams, STRINGLIST *textroot)
 {
   char msg[_MAX_PATH + 20];
 
@@ -5346,14 +5479,76 @@ static void serial_info_mode(STRINGLIST *textroot)
   }
 
   if (sermon_isopen()) {
-    const char *tdsl = sermon_getmetadata();
-    if (strlen(tdsl) > 0 && strcmp(tdsl, "-") != 0) {
-      sprintf(msg, "CTF mode: %s", tdsl);
+    const char *tsdl = sermon_getmetadata();
+    if (strlen(tsdl) > 0 && strcmp(tsdl, "-") != 0) {
+      /* TSDL file */
+      snprintf(msg, sizearray(msg), "CTF mode: %s", tsdl);
       if (textroot != NULL) {
         stringlist_append(textroot, msg, 0);
       } else {
         strlcat(msg, "\n", sizearray(msg));
         console_add(msg, STRFLG_STATUS);
+      }
+      /* severity level */
+      assert(ctf_severity_name(ctf->severity) != NULL);
+      snprintf(msg, sizearray(msg), "Severity level: %s", ctf_severity_name(ctf->severity));
+      if (ctf->severity_addr == 0)
+        strlcat(msg, " (filtered on host)", sizearray(msg));
+      else
+        strlcat(msg, " (filtered on target device)", sizearray(msg));
+      if (textroot != NULL) {
+        stringlist_append(textroot, msg, 0);
+      } else {
+        strlcat(msg, "\n", sizearray(msg));
+        console_add(msg, STRFLG_STATUS);
+      }
+      /* stream mask & firmware support */
+      if (showstreams) {
+        strlcpy(msg, "Streams:", sizearray(msg));
+        int count, chan;
+        for (count = chan = 0; chan < NUM_CHANNELS; chan++)
+          if (ctf->streammask & (1 << chan))
+            count++;
+        if (textroot != NULL) {
+          if (ctf->streammask_addr == 0)
+            strlcat(msg, " (filtered on host)", sizearray(msg));
+          else
+            strlcat(msg, " (filtered on target device)", sizearray(msg));
+          stringlist_append(textroot, msg, 0);
+          for (chan = 0; chan < NUM_CHANNELS; chan++) {
+            const CTF_STREAM *s = stream_by_id(chan);
+            if (s == NULL)
+              continue;
+            snprintf(msg, sizearray(msg), "    %d: ", chan);
+            if (ctf->streammask & (1 << chan))
+              strlcat(msg, "enabled  - ", sizearray(msg));
+            else
+              strlcat(msg, "disabled - ", sizearray(msg));
+            strlcat(msg, s->name, sizearray(msg));
+            stringlist_append(textroot, msg, 0);
+          }
+        } else {
+          if (count == NUM_CHANNELS) {
+            strlcat(msg, " all streams enabled", sizearray(msg));
+          } else if (count == 0) {
+            strlcat(msg, " all streams disabled", sizearray(msg));
+          } else {
+            bool comma = false;
+            for (chan = 0; chan < NUM_CHANNELS; chan++) {
+              if (ctf->streammask & (1 << chan)) {
+                const CTF_STREAM *s = stream_by_id(chan);
+                if (s) {
+                  if (comma)
+                    strlcat(msg, ",", sizearray(msg));
+                  strlcat(msg, s->name, sizearray(msg));
+                  comma = true;
+                }
+              }
+            }
+            strlcat(msg, "\n", sizearray(msg));
+            console_add(msg, STRFLG_STATUS);
+          }
+        }
       }
     }
   }
@@ -5361,55 +5556,175 @@ static void serial_info_mode(STRINGLIST *textroot)
 
 /** handle_serial_cmd()
  *  \param command    [in] command string.
- *  \param port       [out] the name of the serial port to open/monitor.
- *  \param baud       [out] the baud rate to use.
- *  \param tsdlfile   [out] the metadata file for CTF mode.
- *  \param tsdlmaxlen [in] the maximum length of the TSDL metadata filename.
+ *  \param serial     [in/out] serial port settings.
+ *  \param ctf        [in/out] TSDL / CTF settings.
  *
- *  \return 0=not "serial" command, 1=open or re-open, 2=close, 3="info",
- *          4=do-nothing (already handled)
+ *  \return One of the ACTION_xxx codes.
  */
-static int handle_serial_cmd(const char *command, char *port, int *baud,
-                             char *tsdlfile, size_t tsdlmaxlen)
+static int handle_serial_cmd(const char *command, SERIALSETTINGS *serial, CTFSETTINGS *ctf)
 {
-  const char *ptr;
+  int default_action = ACTION_NOP;
 
   assert(command != NULL);
+  assert(serial != NULL);
   command = skipwhite(command);
-  if (!TERM_EQU(command, "serial", 6))
-    return 0;
-  ptr = (char*)skipwhite(command + 6);
-  if (*ptr == '\0' || TERM_EQU(ptr, "info", 4))
-    return 3; /* if only "serial" is typed in, handle it as "serial info" */
+  if (!TOKEN_EQU(command, "serial", 6))
+    return ACTION_SKIP;
 
-  if (TERM_EQU(ptr, "disable", 7))
-    return 2;
-  if (TERM_EQU(ptr, "enable", 6))
-    return 1;
-  if (TERM_EQU(ptr, "clear", 5)) {
-    sermon_clear();
-    return 4;
+  /* make a copy of the command string (minus the "trace" keyword), to be able
+     to clear parts of it */
+  char *cmdcopy = alloca(strlen(command) + 1);
+  strcpy(cmdcopy, skipwhite(command + 6));
+  if (*cmdcopy == '\0' || TOKEN_EQU(cmdcopy, "info", 4))
+    return ACTION_INFO; /* if only "serial" is typed in, handle it as "serial info" */
+
+  if (TOKEN_EQU(cmdcopy, "disable", 7))
+    return ACTION_CLOSE;
+  if (TOKEN_EQU(cmdcopy, "enable", 6)) {
+    default_action = ACTION_OPEN;
+    memset(cmdcopy, ' ', 6);  /* just erase the parameter from the string, (re-)opening is the default */
   }
-  if (TERM_EQU(ptr, "save", 4)) {
-    ptr = skipwhite(ptr + 4);
-    if (*ptr != '\0') {
-      int count = sermon_save(ptr);
+
+  char *opt_save;
+  if ((opt_save = strstr(cmdcopy, "save")) != NULL && IS_TOKEN(cmdcopy, opt_save, 4)) {
+    /* get the filename */
+    const char *ptr_name = skipwhite(opt_save + 4);
+    const char *tail = ptr_name;
+    while (*tail > ' ')
+      tail++;
+    char fname[_MAX_PATH];
+    if (tail != ptr_name && (tail - ptr_name) < sizearray(fname)) {
+      strncpy(fname, ptr_name, tail - ptr_name);
+      fname[tail - ptr_name] = '\0';
+      if (strlen(ctf->metadata) > 0 && !serial->force_plain)
+        set_extension(fname, sizearray(fname), "csv");
+      else
+        set_extension(fname, sizearray(fname), "txt");
+    } else {
+      if (strlen(ctf->metadata) > 0 && !serial->force_plain)
+        get_filename(fname, sizearray(fname), "csv", "CSV files:csv;All files:*", "Save serial output");
+      else
+        get_filename(fname, sizearray(fname), "txt", "Text files:txt;All files:*", "Save serial output");
+    }
+    if (strlen(fname) > 0) {
+      int count = sermon_save(fname, strlen(ctf->metadata) > 0 && !serial->force_plain);
+      char message[_MAX_PATH + 50];
       if (count >= 0) {
-        char message[100];
-        sprintf(message,"%d lines saved\n", count);
+        snprintf(message, sizearray(message), "%d lines saved into %s\n", count, fname);
         console_add(message, STRFLG_STATUS);
       } else {
-        console_add("Failed to save to file\n", STRFLG_ERROR);
+        snprintf(message, sizearray(message), "Failed to save to file %s\n", fname);
+        console_add(message, STRFLG_ERROR);
+      }
+    }
+    memset(opt_save, ' ', tail - opt_save);  /* erase the "save" parameter from the string (plus the filename) */
+  }
+
+  char *opt_clear;
+  if ((opt_clear = strstr(cmdcopy, "clear")) != NULL && IS_TOKEN(cmdcopy, opt_clear, 5)) {
+    tracestring_clear();
+    memset(opt_clear, ' ', 5);  /* erase the "clear" parameter from the string */
+  }
+
+  char *opt_stream;
+  if ((opt_stream = strstr(cmdcopy, "stream")) != NULL && IS_TOKEN(cmdcopy, opt_stream, 6)) {
+    bool ok = true;
+    unsigned long mask = ~0Lu;
+    /* get the name, and make the mask */
+    const char *ptr_name = skipwhite(opt_stream + 6);
+    const char *tail = ptr_name;
+    while (*tail > ' ')
+      tail++;
+    if (tail != ptr_name) {
+      char *name = alloca((tail - ptr_name + 1) * sizeof(char));
+      strncpy(name, ptr_name, tail - ptr_name);
+      name[tail - ptr_name] = '\0';
+      if (strcmp(name, "*") != 0) {
+        const CTF_STREAM *s = stream_by_name(name);
+        if (s != NULL) {
+          if (s->stream_id >= 0 && s->stream_id < NUM_CHANNELS) {
+            mask = 1Lu << s->stream_id;
+          } else {
+            console_add("Stream ID is out of range\n", STRFLG_ERROR);
+            ok = false;
+          }
+        } else {
+          console_add("Unknown stream name\n", STRFLG_ERROR);
+          ok = false;
+        }
       }
     } else {
-      console_add("Missing filename\n", STRFLG_ERROR);
+      console_add("Missing stream name\n", STRFLG_ERROR);
+      ok = false;
     }
-    return 4;
+    /* get the operation */
+    if (ok) {
+      const char *ptr_op = skipwhite(tail);
+      assert(ctf != NULL);
+      if (TOKEN_EQU(ptr_op, "enable", 6)) {
+        mask |= ctf->streammask;
+        tail = ptr_op + 6;
+      } else if (TOKEN_EQU(ptr_op, "disable", 7)) {
+        mask = ctf->streammask & ~mask;
+        tail = ptr_op + 7;
+      } else if (TOKEN_EQU(ptr_op, "exclusive", 9)) {
+        tail = ptr_op + 9;
+      } else {
+        console_add("Missing or invalid operation (enable / disable / exclusive)\n", STRFLG_ERROR);
+        ok = false;
+      }
+    }
+    if (ok) {
+      assert(ctf != NULL);
+      ctf->streammask = mask;
+      if (ctf->streammask_addr != 0)
+        return ACTION_CTFSETTINGS; /* if the variable isn't found, we do not need to try to set it */
+      else
+        console_add("Note: no firmware support for \"stream\" filtering\n", STRFLG_STATUS);
+    }
+    memset(opt_stream, ' ', tail - opt_stream);
   }
-  if (TERM_EQU(ptr, "plain", 5) && tsdlfile != NULL && tsdlmaxlen > 0)
-    tsdlfile[0] = '\0'; /* reset to plain mode (disable TSDL) */
 
-  assert(port != NULL);
+  char *opt_severity;
+  if ((opt_severity = strstr(cmdcopy, "severity")) != NULL && IS_TOKEN(cmdcopy, opt_severity, 8)) {
+    /* get the level parameter */
+    const char *ptr_level = skipwhite(opt_severity + 8);
+    const char *tail = ptr_level;
+    while (*tail > ' ')
+      tail++;
+    if (tail != ptr_level) {
+      char *name = alloca((tail - ptr_level + 1) * sizeof(char));
+      strncpy(name, ptr_level, tail - ptr_level);
+      name[tail - ptr_level] = '\0';
+      int level = ctf_severity_level(name);
+      if (level >= 0) {
+        assert(ctf != NULL);
+        ctf->severity = level;
+        if (ctf->severity_addr != 0)
+          return ACTION_CTFSETTINGS; /* if the variable isn't found, we do not need to try to set it */
+        else
+          console_add("Note: no firmware support for \"severity\" level filtering\n", STRFLG_STATUS);
+      } else {
+        console_add("Invalid parameter for \"severity\" option\n", STRFLG_ERROR);
+      }
+    } else {
+      console_add("Missing value for \"severity\"\n", STRFLG_ERROR);
+    }
+    memset(opt_severity, ' ', tail - opt_severity);
+  }
+
+  char *opt_plain;
+  if ((opt_plain = strstr(cmdcopy, "plain")) != NULL && IS_TOKEN(cmdcopy, opt_plain, 5)) {
+    assert(serial != NULL);
+    serial->force_plain = true; /* reset to plain mode (disable TSDL) */
+    memset(opt_plain, ' ', 5);
+  }
+
+  /* if remaining string is empty, return default_action */
+  char *ptr = (char*)skipwhite(cmdcopy);
+  if (*ptr == '\0')
+    return default_action;
+
   if (isalpha(*ptr) || *ptr == DIRSEP_CHAR) {
     int len, isport;
     for (len = 0; ptr[len] > ' '; len++)
@@ -5422,15 +5737,15 @@ static int handle_serial_cmd(const char *command, char *port, int *baud,
       isport = (len > 5 && strncmp(ptr, "/dev/", 5) == 0);
 #   endif
     if (isport) {
+      assert(serial != NULL);
       int i;
       for (i = 0; ptr[i] > ' '; i++)
-        port[i] = ptr[i];
-      port[i] = '\0';
-      ptr = skipwhite(ptr + i);
+        serial->port[i] = ptr[i];
+      serial->port[i] = '\0';
+      ptr = (char*)skipwhite(ptr + i);
     }
   }
 
-  assert(baud != NULL);
   if (isdigit(*ptr)) {
     double v = strtod(ptr, (char**)&ptr);
     if (toupper(*ptr) == 'K') {
@@ -5438,31 +5753,33 @@ static int handle_serial_cmd(const char *command, char *port, int *baud,
       while (*ptr > ' ')
         ptr++;
     }
-    *baud = (int)(v + 0.5);
-    ptr = skipwhite(ptr);
+    assert(serial != NULL);
+    serial->baud = (int)(v + 0.5);
+    ptr = (char*)skipwhite(ptr);
   }
 
-  if (tsdlfile != NULL && tsdlmaxlen > 0) {
-    char stop = ' ';
-    if (*ptr == '"') {
-      ptr++;
-      stop = '"';
-    }
-    unsigned count = 0;
-    while (*ptr != stop && *ptr != '\0') {
-      if (count < tsdlmaxlen - 1) /* -1 to make sure space is left for the terminating zero */
-        tsdlfile[count++] = *ptr;
-      ptr++;
-    }
-    if (stop == '"' && *ptr == '"')
-      ptr++;
-    tsdlfile[count] = '\0';
-    /* also test whether the file exists */
-    if (strcmp(tsdlfile, "plain") == 0 || access(tsdlfile, 0) != 0)
-      tsdlfile[0] = '\0';
+  assert(ctf != NULL);
+  char stop = ' ';
+  if (*ptr == '"') {
+    ptr++;
+    stop = '"';
   }
+  unsigned count = 0;
+  while (*ptr != stop && *ptr != '\0') {
+    if (count < sizearray(ctf->metadata) - 1) /* -1 to make sure space is left for the terminating zero */
+      ctf->metadata[count++] = *ptr;
+    ptr++;
+  }
+  if (stop == '"' && *ptr == '"')
+    ptr++;
+  ctf->metadata[count] = '\0';
+  /* also test whether the file exists */
+  if (strcmp(ctf->metadata, "plain") == 0 || access(ctf->metadata, 0) != 0)
+    ctf->metadata[0] = '\0';
+  else
+    serial->force_plain = false;
 
-  return 1;
+  return ACTION_OPEN;
 }
 
 static void usage(const char *invalid_option)
@@ -5499,7 +5816,7 @@ static void version(void)
 # endif
 
   printf("BMDebug version %s.\n", SVNREV_STR);
-  printf("Copyright 2019-2023 CompuPhase\nLicensed under the Apache License version 2.0\n");
+  printf("Copyright 2019-2024 CompuPhase\nLicensed under the Apache License version 2.0\n");
 }
 
 #if defined FORTIFY
@@ -5542,9 +5859,9 @@ static void config_write_tabstate(const char *key, enum nk_collapse_states state
   assert(key != NULL);
   char valstr[64];
   if (sizer != NULL)
-    sprintf(valstr, "%d %f", state, sizer->size);
+    snprintf(valstr, sizearray(valstr), "%d %f", state, sizer->size);
   else
-    sprintf(valstr, "%d", state);
+    snprintf(valstr, sizearray(valstr), "%d", state);
   ini_puts("Views", key, valstr, configfile);
 }
 
@@ -5594,8 +5911,6 @@ typedef struct tagAPPSTATE {
   char GDBpath[_MAX_PATH];      /**< path to GDB executable */
   TASK gdb_task;                /**< GDB process */
   char *cmdline;                /**< command & response buffer (for GDB task) */
-  char port_sermon[64];         /**< COM port name for serial monitor */
-  int sermon_baud;              /**< serial monitor baud rate */
   int trace_status;             /**< status of TRACESWO */
   unsigned char trace_endpoint; /**< USB endpoint for TRACESWO */
   nk_bool tpwr;                 /**< option: tpwr (target power) */
@@ -5627,6 +5942,8 @@ typedef struct tagAPPSTATE {
   char SVDfile[_MAX_PATH];      /**< target MCU definitions */
   char EntryPoint[64];          /**< name of the entry-point function (e.g. "main") */
   SWOSETTINGS swo;              /**< TRACESWO configuration */
+  SERIALSETTINGS serial;        /**< serial monitor configuration */
+  CTFSETTINGS ctf;              /**< metadata and settings/options for CTF and filtering */
   ARMSTATE armstate;            /**< state of the disassembler */
   unsigned long scriptparams[4];/**< parameters for running configuration scripts (for TRACESWO) */
   const char **sourcefiles;     /**< array of all source file names (base names) */
@@ -5769,15 +6086,15 @@ static bool save_targetoptions(const char *filename, const APPSTATE *state)
   ini_putl("SWO trace", "bitrate", state->swo.bitrate, filename);
   ini_putl("SWO trace", "clock", state->swo.clock, filename);
   ini_putl("SWO trace", "datasize", state->swo.datasize * 8, filename);
-  ini_putl("SWO trace", "enabled", state->swo.enabled, filename);
-  ini_puts("SWO trace", "ctf", state->swo.metadata, filename);
+  ini_putbool("SWO trace", "enabled", state->swo.enabled, filename);
+  ini_puts("SWO trace", "ctf", state->ctf.metadata, filename);
   for (unsigned idx = 0; idx < NUM_CHANNELS; idx++) {
     char key[32], value[128];
     struct nk_color color = channel_getcolor(idx);
-    sprintf(key, "chan%d", idx);
-    sprintf(value, "%d #%06x %s", channel_getenabled(idx),
-            ((int)color.r << 16) | ((int)color.g << 8) | color.b,
-            channel_getname(idx, NULL, 0));
+    snprintf(key, sizearray(key), "chan%d", idx);
+    snprintf(value, sizearray(value), "%d #%06x %s", channel_getenabled(idx),
+             ((int)color.r << 16) | ((int)color.g << 8) | color.b,
+             channel_getname(idx, NULL, 0));
     ini_puts("SWO trace", key, value, filename);
   }
 
@@ -5807,15 +6124,15 @@ static bool load_targetoptions(const char *filename, APPSTATE *state)
   state->swo.bitrate = (unsigned)ini_getl("SWO trace", "bitrate", 100000, filename);
   state->swo.clock = (unsigned)ini_getl("SWO trace", "clock", 48000000, filename);
   state->swo.datasize = (unsigned)ini_getl("SWO trace", "datasize", 8, filename) / 8;
-  state->swo.enabled = (unsigned)ini_getl("SWO trace", "enabled", 0, filename);
-  state->swo.force_plain = 0;
-  state->swo.init_status = 0;
-  ini_gets("SWO trace", "ctf", "", state->swo.metadata, sizearray(state->swo.metadata), filename);
+  state->swo.enabled = ini_getbool("SWO trace", "enabled", 0, filename);
+  state->swo.force_plain = false;
+  state->swo.init_status = false;
+  ini_gets("SWO trace", "ctf", "", state->ctf.metadata, sizearray(state->ctf.metadata), filename);
   for (unsigned idx = 0; idx < NUM_CHANNELS; idx++) {
     char key[41], value[128];
     /* preset: port 0 is enabled by default, others disabled by default */
-    channel_set(idx, (idx == 0), NULL, SWO_TRACE_DEFAULT_COLOR);
-    sprintf(key, "chan%d", idx);
+    channel_set(idx, (idx == 0), NULL, default_channel_colour(idx));
+    snprintf(key, sizearray(key), "chan%d", idx);
     unsigned clr;
     int enabled;
     ini_gets("SWO trace", key, "", value, sizearray(value), filename);
@@ -5831,7 +6148,7 @@ static bool load_targetoptions(const char *filename, APPSTATE *state)
     ini_gets("Serial monitor", "port", "", portname, sizearray(portname), filename);
     baud = ini_getl("Serial monitor", "baud", 0, filename);
     sermon_open(portname, baud);
-    sermon_setmetadata(state->swo.metadata);
+    sermon_setmetadata(state->ctf.metadata);
   }
 
   return true;
@@ -5867,7 +6184,7 @@ static void help_popup(struct nk_context *ctx, APPSTATE *state, float canvas_wid
         memmove(state->help_edit, (state->popup_active == POPUP_INFO) ? "info " : "help ", 5);
       }
       if (!handle_help_cmd(state->help_edit, &helptext_root, &state->popup_active, &state->reformat_help)
-          && !handle_info_cmd(state->help_edit, &helptext_root, &state->popup_active, &state->reformat_help, &state->swo, &state->gdb_task))
+          && !handle_info_cmd(state->help_edit, &helptext_root, &state->popup_active, &state->reformat_help, &state->swo, &state->ctf, &state->gdb_task))
       {
         strlcat(state->help_edit, "\n", sizearray(state->help_edit));
         if (task_stdin(&state->gdb_task, state->help_edit))
@@ -6188,13 +6505,13 @@ static void console_view(struct nk_context *ctx, APPSTATE *state,
           tab_states[TAB_WATCHES] = NK_MAXIMIZED; /* make sure the watch view to open */
         } else if ((result = handle_file_load_reset(state->console_edit, state->ELFfile, sizearray(state->ELFfile))) != 0) {
           state->force_download = nk_false;
-          if (result == HARD_RESET) {
+          if (result == ACTION_HARD_RESET) {
             RESETSTATE(state, STATE_HARDRESET);
-          } else if (result == LOAD_CUR_ELF) {
+          } else if (result == ACTION_LOAD_CUR_ELF) {
             state->force_download = nk_true;
             RESETSTATE(state, STATE_MEMACCESS);
           } else {
-            if (result == LOAD_FILE_ELF || result == RESET_LOAD)
+            if (result == ACTION_LOAD_FILE_ELF || result == ACTION_RESET_LOAD)
               state->force_download = nk_true;
             RESETSTATE(state, STATE_FILE);
           }
@@ -6203,48 +6520,61 @@ static void console_view(struct nk_context *ctx, APPSTATE *state,
              STATE_FILE case) */
           if (strlen(state->ELFfile) > 0 && access(state->ELFfile, 0) == 0)
             save_targetoptions(state->ParamFile, state);
-        } else if ((result = handle_serial_cmd(state->console_edit,
-                                               state->port_sermon, &state->sermon_baud,
-                                               state->swo.metadata, sizearray(state->swo.metadata))) != 0) {
-          if (result == 1) {
+        } else if ((result = handle_serial_cmd(state->console_edit, &state->serial, &state->ctf)) != ACTION_SKIP) {
+          if (result == ACTION_OPEN) {
             if (sermon_isopen())
               sermon_close();
-            sermon_open(state->port_sermon, state->sermon_baud);
+            sermon_open(state->serial.port, state->serial.baud);
             if (sermon_isopen()) {
-              sermon_setmetadata(state->swo.metadata);
-              if (strlen(state->swo.metadata) > 0 && strcmp(state->swo.metadata, "-") != 0) {
+              sermon_setmetadata(state->serial.force_plain ? NULL : state->ctf.metadata);
+              if (strlen(state->ctf.metadata) > 0 && strcmp(state->ctf.metadata, "-") != 0) {
                 ctf_parse_cleanup();
                 ctf_decode_cleanup();
-                ctf_error_notify(CTFERR_NONE, 0, NULL);
-                if (ctf_parse_init(state->swo.metadata) && ctf_parse_run()) {
-                  if (state->dwarf_loaded)
+                ctf_error_notify(CTFERR_NONE, NULL, 0, NULL);
+                if (ctf_parse_init(state->ctf.metadata) && ctf_parse_run()) {
+                  if (state->dwarf_loaded) {
                     ctf_set_symtable(&dwarf_symboltable);
+                    /* get symbols for stream/severity filtering */
+                    const DWARF_SYMBOLLIST *symbol = dwarf_sym_from_name(&dwarf_symboltable, "trace_severity_level", -1, -1);
+                    state->ctf.severity_addr = (symbol != NULL) ? symbol->data_addr : 0;
+                    symbol = dwarf_sym_from_name(&dwarf_symboltable, "trace_stream_mask", -1, -1);
+                    state->ctf.streammask_addr = (symbol != NULL) ? symbol->data_addr : 0;
+                  }
+                  /* set the values for filtering severity level and streams */
+                  ctf_set_filter(state->ctf.streammask, state->ctf.severity);
                 } else {
                   ctf_parse_cleanup();
                 }
               }
-              serial_info_mode(NULL);
+              serial_info_mode(&state->ctf, false, NULL);
               tab_states[TAB_SERMON] = NK_MAXIMIZED;  /* make sure the serial monitor view is open */
             } else {
               console_add("Failed to configure the port.\n", STRFLG_STATUS);
             }
-          } else if (result == 2 && sermon_isopen()) {
+          } else if (result == ACTION_CLOSE && sermon_isopen()) {
             sermon_close();
-          } else if (result == 3) {
-            serial_info_mode(NULL);
-          }
-        } else if ((result = handle_trace_cmd(state->console_edit, &state->swo)) != 0) {
-          if (result == 1) {
+          } else if (result == ACTION_INFO) {
+            serial_info_mode(&state->ctf, false, NULL);
+          } else if (result == ACTION_CTFSETTINGS) {
+            ctf_set_filter(state->ctf.streammask, state->ctf.severity);
             state->monitor_cmd_active = true;   /* to silence output of scripts */
-            if (state->swo.enabled)
-              RESETSTATE(state, STATE_SWOTRACE);
-            else
-              RESETSTATE(state, STATE_SWOCHANNELS);  /* special case: disabling SWO tracing disables all channels */
-          } else if (result == 2) {
+            RESETSTATE(state, STATE_CTFSTREAMS);
+          }
+        } else if ((result = handle_trace_cmd(state->console_edit, &state->swo, &state->ctf)) != ACTION_SKIP) {
+          if (result == ACTION_OPEN) {
+            state->swo.enabled = true;
+            state->monitor_cmd_active = true;   /* to silence output of scripts */
+            RESETSTATE(state, STATE_SWOTRACE);
+          } else if (result == ACTION_CLOSE) {
+            state->swo.enabled = false;
+            state->swo.mode = SWOMODE_NONE;
+            state->monitor_cmd_active = true;   /* to silence output of scripts */
+            RESETSTATE(state, STATE_SWOCHANNELS);  /* special mode: disable SWO tracing by disabling all channels */
+          } else if (result == ACTION_CHANNELS) {
             state->monitor_cmd_active = true;   /* to silence output of scripts */
             RESETSTATE(state, STATE_SWOCHANNELS);
-          } else if (result == 3) {
-            trace_info_mode(&state->swo, 1, NULL);
+          } else if (result == ACTION_INFO) {
+            trace_info_mode(&state->swo, &state->ctf, true, NULL);
           }
           tab_states[TAB_SWO] = NK_MAXIMIZED;  /* make sure the SWO tracing view is open */
         } else if (handle_x_cmd(state->console_edit, &state->memdump)) {
@@ -6259,7 +6589,7 @@ static void console_view(struct nk_context *ctx, APPSTATE *state,
           }
         } else if (!handle_list_cmd(state->console_edit, &dwarf_symboltable, &dwarf_filetable)
                    && !handle_find_cmd(state->console_edit)
-                   && !handle_info_cmd(state->console_edit, &helptext_root, &state->popup_active, &state->reformat_help, &state->swo, &state->gdb_task)
+                   && !handle_info_cmd(state->console_edit, &helptext_root, &state->popup_active, &state->reformat_help, &state->swo, &state->ctf, &state->gdb_task)
                    && !handle_disasm_cmd(state->console_edit, &state->disassemble_mode)
                    && !handle_semihosting_cmd(state->console_edit)
                    && !handle_directory_cmd(state->console_edit, state->sourcepath, sizearray(state->sourcepath)))
@@ -6277,15 +6607,15 @@ static void console_view(struct nk_context *ctx, APPSTATE *state,
         }
         /* check for a list of breakpoint commands, so that we can refresh
            the breakpoint list after the command executed */
-        if (TERM_EQU(state->console_edit, "b", 1) ||
-            TERM_EQU(state->console_edit, "break", 5) ||
-            TERM_EQU(state->console_edit, "watch", 5) ||
-            TERM_EQU(state->console_edit, "del", 3) ||
-            TERM_EQU(state->console_edit, "delete", 6) ||
-            TERM_EQU(state->console_edit, "clear", 5) ||
-            TERM_EQU(state->console_edit, "disable", 7) ||
-            TERM_EQU(state->console_edit, "enable", 6) ||
-            TERM_EQU(state->console_edit, "dprintf", 7))
+        if (TOKEN_EQU(state->console_edit, "b", 1) ||
+            TOKEN_EQU(state->console_edit, "break", 5) ||
+            TOKEN_EQU(state->console_edit, "watch", 5) ||
+            TOKEN_EQU(state->console_edit, "del", 3) ||
+            TOKEN_EQU(state->console_edit, "delete", 6) ||
+            TOKEN_EQU(state->console_edit, "clear", 5) ||
+            TOKEN_EQU(state->console_edit, "disable", 7) ||
+            TOKEN_EQU(state->console_edit, "enable", 6) ||
+            TOKEN_EQU(state->console_edit, "dprintf", 7))
           state->refreshflags |= REFRESH_BREAKPOINTS | IGNORE_DOUBLE_DONE;
 
         // save most recent keyboard command in the command history list list
@@ -6390,8 +6720,8 @@ static void panel_configuration(struct nk_context *ctx, APPSTATE *state,
           SetCursor(hcur);
 #       endif
         if (count == 1) {
-          sprintf(state->IPaddr, "%lu.%lu.%lu.%lu",
-                 addr & 0xff, (addr >> 8) & 0xff, (addr >> 16) & 0xff, (addr >> 24) & 0xff);
+          snprintf(state->IPaddr, sizearray(state->IPaddr), "%lu.%lu.%lu.%lu",
+                  addr & 0xff, (addr >> 8) & 0xff, (addr >> 16) & 0xff, (addr >> 24) & 0xff);
           reconnect = true;
         } else {
           strlcpy(state->IPaddr, "none found", sizearray(state->IPaddr));
@@ -6919,7 +7249,7 @@ static void panel_registers(struct nk_context *ctx, APPSTATE *state,
         nk_layout_row_push(ctx, valwidth);
         int fonttype = guidriver_setfont(ctx, FONT_MONO);
         char field[20];
-        sprintf(field, "0x%08lx", register_def[idx].value);
+        snprintf(field, sizearray(field), "0x%08lx", register_def[idx].value);
         if (register_def[idx].flags & REGFLG_CHANGED)
           nk_label_colored(ctx, field, NK_TEXT_LEFT, COLOUR_FG_RED);
         else
@@ -7010,23 +7340,45 @@ static void panel_serialmonitor(struct nk_context *ctx, APPSTATE *state,
       struct nk_user_font const *font = ctx->style.font;
       int linecount = 0;
       float lineheight = 0;
-      const char *text;
+      int numstreams = 0;
+      const char *text = sermon_getmetadata();
+      if (text != NULL && *text != '\0')
+        numstreams = stream_count();
       bool is_error;
+      int severity, streamid;
       sermon_rewind();
-      while ((text = sermon_next(&is_error)) != NULL) {
+      while ((text = sermon_next(&is_error, &severity, &streamid)) != NULL) {
         nk_layout_row_begin(ctx, NK_STATIC, opt_fontsize, 1);
         if (lineheight < 0.01) {
           struct nk_rect rcline = nk_layout_widget_bounds(ctx);
           lineheight = rcline.h;
         }
-        size_t textlength = strlen(text);
+        struct nk_color txtcolor = COLOUR_TEXT;
+        if (severity != 1) {
+          struct nk_color bkgnd = severity_bkgnd(severity);
+          txtcolor = CONTRAST_COLOUR(bkgnd);
+          nk_layout_row_background(ctx, bkgnd);
+        }
+        const char *streamname = NULL;
+        if (numstreams > 0) {
+          const CTF_STREAM *s = stream_by_id(streamid);
+          if (s != NULL && s->name[0] != '\0')
+            streamname = s->name;
+        }
+        size_t textlength = strlen(text) + ((streamname != NULL) ? strlen(streamname) + 3 : 0);
+        char *fulltext = (char*)text;
+        if (streamname != NULL) {
+          fulltext = alloca((textlength + 1) * sizeof(char));
+          sprintf(fulltext, "[%s] ", streamname);
+          strcat(fulltext, text);
+        }
         assert(font != NULL && font->width != NULL);
-        float textwidth = font->width(font->userdata, font->height, text, textlength) + 10;
+        float textwidth = font->width(font->userdata, font->height, fulltext, textlength) + 10;
         nk_layout_row_push(ctx, textwidth);
         if (is_error)
-          nk_text_colored(ctx,text,textlength,NK_TEXT_LEFT, COLOUR_FG_RED);
+          nk_text_colored(ctx, fulltext, textlength, NK_TEXT_LEFT, COLOUR_FG_RED);
         else
-          nk_text(ctx,text,textlength,NK_TEXT_LEFT);
+          nk_text_colored(ctx, fulltext, textlength, NK_TEXT_LEFT, txtcolor);
         nk_layout_row_end(ctx);
         linecount += 1;
       }
@@ -7071,7 +7423,7 @@ static void panel_traceswo(struct nk_context *ctx, APPSTATE *state,
   if (result) {
     tracestring_process(state->trace_status == TRACESTAT_OK);
     nk_layout_row_dynamic(ctx, state->sizerbar_swo.size, 1);
-    tracelog_widget(ctx, "tracelog", opt_fontsize, -1, -1, NULL, 0);
+    tracelog_widget(ctx, "tracelog", opt_fontsize, -1, -1, NULL, state->ctf.severity, 0);
     state->swo_lines = tracestring_count();
     nk_sizer(ctx, &state->sizerbar_swo);
     nk_tree_state_pop(ctx);
@@ -7213,7 +7565,7 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
       if (state->probe == state->netprobe) {
         if (is_ip_address(state->IPaddr)) {
           char portnr[20];
-          sprintf(portnr, ":%d", BMP_PORT_GDB);
+          snprintf(portnr, sizearray(portnr), ":%d", BMP_PORT_GDB);
           strlcpy(state->port_gdb, state->IPaddr, sizearray(state->port_gdb));
           strlcat(state->port_gdb, portnr, sizearray(state->port_gdb));
         }
@@ -7311,13 +7663,21 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
           if (strlen(state->SVDfile) > 0)
             svd_load(state->SVDfile);
           /* (re-)load a TSDL metadata file, if any was provided */
-          if (strlen(state->swo.metadata) > 0 && strcmp(state->swo.metadata, "-") != 0) {
+          if (strlen(state->ctf.metadata) > 0 && strcmp(state->ctf.metadata, "-") != 0) {
             ctf_parse_cleanup();
             ctf_decode_cleanup();
-            ctf_error_notify(CTFERR_NONE, 0, NULL);
-            if (ctf_parse_init(state->swo.metadata) && ctf_parse_run()) {
-              if (state->dwarf_loaded)
+            ctf_error_notify(CTFERR_NONE, NULL, 0, NULL);
+            if (ctf_parse_init(state->ctf.metadata) && ctf_parse_run()) {
+              if (state->dwarf_loaded) {
                 ctf_set_symtable(&dwarf_symboltable);
+                /* get symbols for stream/severity filtering */
+                const DWARF_SYMBOLLIST *symbol = dwarf_sym_from_name(&dwarf_symboltable, "trace_severity_level", -1, -1);
+                state->ctf.severity_addr = (symbol != NULL) ? symbol->data_addr : 0;
+                symbol = dwarf_sym_from_name(&dwarf_symboltable, "trace_stream_mask", -1, -1);
+                state->ctf.streammask_addr = (symbol != NULL) ? symbol->data_addr : 0;
+              }
+              /* set the values for filtering severity level and streams */
+              ctf_set_filter(state->ctf.streammask, state->ctf.severity);
             } else {
               ctf_parse_cleanup();
             }
@@ -8209,7 +8569,7 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
       }
       break;
     case STATE_SWOTRACE:
-      state->swo.init_status = 1;  /* avoid dual automatic init */
+      state->swo.init_status = true;  /* avoid dual automatic init */
       if (!state->atprompt)
         break;
       if (STATESWITCH(state)) {
@@ -8219,18 +8579,26 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
         tracelog_statusclear();
         if (state->swo.mode == SWOMODE_NONE || !state->swo.enabled)
           tracelog_statusmsg(TRACESTATMSG_BMP, "Disabled", -1);
-        ctf_error_notify(CTFERR_NONE, 0, NULL);
+        ctf_error_notify(CTFERR_NONE, NULL, 0, NULL);
         if (!state->swo.force_plain
-            && ctf_findmetadata(state->ELFfile, state->swo.metadata, sizearray(state->swo.metadata))
-            && ctf_parse_init(state->swo.metadata) && ctf_parse_run())
+            && ctf_findmetadata(state->ELFfile, state->ctf.metadata, sizearray(state->ctf.metadata))
+            && ctf_parse_init(state->ctf.metadata) && ctf_parse_run())
         {
-          if (state->dwarf_loaded)
+          if (state->dwarf_loaded) {
             ctf_set_symtable(&dwarf_symboltable);
+            /* get symbols for stream/severity filtering */
+            const DWARF_SYMBOLLIST *symbol = dwarf_sym_from_name(&dwarf_symboltable, "trace_severity_level", -1, -1);
+            state->ctf.severity_addr = (symbol != NULL) ? symbol->data_addr : 0;
+            symbol = dwarf_sym_from_name(&dwarf_symboltable, "trace_stream_mask", -1, -1);
+            state->ctf.streammask_addr = (symbol != NULL) ? symbol->data_addr : 0;
+          }
           /* stream names overrule configured channel names */
           const CTF_STREAM *stream;
           for (int idx = 0; (stream = stream_by_seqnr(idx)) != NULL; idx++)
             if (stream->name != NULL && strlen(stream->name) > 0)
               channel_setname(idx, stream->name);
+          /* set the values for filtering severity level and streams */
+          ctf_set_filter(state->ctf.streammask, state->ctf.severity);
         } else {
           ctf_parse_cleanup();
         }
@@ -8343,7 +8711,7 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
       }
       break;
     case STATE_SWOCHANNELS:
-      state->swo.init_status = 1;
+      state->swo.init_status = true;
       if (!state->atprompt)
         break;
       if (STATESWITCH(state)) {
@@ -8376,6 +8744,39 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
         } else {
           console_replaceflags = console_xlateflags = 0;
           bmscript_clearcache();
+          MOVESTATE(state, STATE_STOPPED);
+        }
+        log_console_strings(state);
+        gdbmi_sethandled(false);
+      }
+      break;
+    case STATE_CTFSTREAMS:
+    case STATE_CTFSEVERITY:
+      if (state->curstate == STATE_CTFSTREAMS && state->ctf.streammask_addr == 0) {
+        MOVESTATE(state, STATE_CTFSEVERITY);
+        break;
+      } else if (state->curstate == STATE_CTFSEVERITY && state->ctf.severity_addr == 0) {
+        MOVESTATE(state, STATE_STOPPED);
+        break;
+      }
+      if (!state->atprompt)
+        break;
+      if (STATESWITCH(state)) {
+        if (state->curstate == STATE_CTFSTREAMS) {
+          snprintf(state->cmdline, CMD_BUFSIZE, "-data-write-memory-bytes 0x%lX %08lX 4\n",
+                   state->ctf.streammask_addr, state->ctf.streammask);
+        } else
+          snprintf(state->cmdline, CMD_BUFSIZE, "-data-write-memory-bytes 0x%lX %02X 1\n",
+                   state->ctf.severity_addr, state->ctf.severity);
+        task_stdin(&state->gdb_task, state->cmdline);
+        state->atprompt = false;
+        MARKSTATE(state);
+      } else if (gdbmi_isresult() != NULL) {
+        if (state->curstate == STATE_CTFSTREAMS) {
+          console_add("Set CTF stream filtering mask (filtered on target device)\n", STRFLG_STATUS);
+          MOVESTATE(state, STATE_CTFSEVERITY);
+        } else {
+          console_add("Set CTF severity level (filtered on target device)\n", STRFLG_STATUS);
           MOVESTATE(state, STATE_STOPPED);
         }
         log_console_strings(state);
@@ -8457,6 +8858,8 @@ int main(int argc, char *argv[])
   appstate.trace_endpoint = BMP_EP_TRACE;
   appstate.popup_active = POPUP_NONE;
   appstate.sourcefiles_index = -1;
+  appstate.ctf.severity = 1;
+  appstate.ctf.streammask = ~0Lu;
   appstate.cmdline = malloc(CMD_BUFSIZE * sizeof(char));
   if (appstate.cmdline == NULL)
     return EXIT_FAILURE;
@@ -8506,7 +8909,7 @@ int main(int argc, char *argv[])
   /* read saved recent commands */
   for (idx = 1; ; idx++) {
     char key[32];
-    sprintf(key, "cmd%d", idx);
+    snprintf(key, sizearray(key), "cmd%d", idx);
     ini_gets("Commands", key, "", appstate.console_edit, sizearray(appstate.console_edit), txtConfigFile);
     if (strlen(appstate.console_edit) == 0)
       break;
@@ -8774,9 +9177,9 @@ int main(int argc, char *argv[])
 
   /* save settings */
   ini_puts("Settings", "gdb", appstate.GDBpath, txtConfigFile);
-  sprintf(valstr, "%d %d", canvas_width, canvas_height);
+  snprintf(valstr, sizearray(valstr), "%d %d", canvas_width, canvas_height);
   ini_puts("Settings", "size", valstr, txtConfigFile);
-  sprintf(valstr, "%.2f %.2f", splitter_hor.ratio, splitter_ver.ratio);
+  snprintf(valstr, sizearray(valstr), "%.2f %.2f", splitter_hor.ratio, splitter_ver.ratio);
   ini_puts("Settings", "splitter", valstr, txtConfigFile);
   config_write_tabstate("configuration", tab_states[TAB_CONFIGURATION], NULL, txtConfigFile);
   config_write_tabstate("breakpoints", tab_states[TAB_BREAKPOINTS], &appstate.sizerbar_breakpoints, txtConfigFile);
@@ -8797,7 +9200,7 @@ int main(int argc, char *argv[])
   idx = 1;
   for (appstate.consoleedit_next = appstate.consoleedit_root.next; appstate.consoleedit_next != NULL; appstate.consoleedit_next = appstate.consoleedit_next->next) {
     char key[32];
-    sprintf(key, "cmd%d", idx);
+    snprintf(key, sizearray(key), "cmd%d", idx);
     ini_puts("Commands", key, appstate.consoleedit_next->text, txtConfigFile);
     if (idx++ > 50)
       break;  /* limit the number of memorized commands */
