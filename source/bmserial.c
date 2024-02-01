@@ -1339,7 +1339,7 @@ static void help_popup(struct nk_context *ctx, APPSTATE *state, float canvas_wid
     struct nk_rect rc = nk_rect((canvas_width - w) / 2, (canvas_height - h) / 2, w, h);
 #   undef MARGIN
 
-    state->help_popup = nk_guide(ctx, &rc, opt_fontsize, (const char*)bmserial_help, NULL);
+    state->help_popup = nk_guide(ctx, &rc, opt_fontsize, (const char*)bmserial_help, 1);
   }
 }
 

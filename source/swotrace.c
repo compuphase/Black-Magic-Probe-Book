@@ -37,9 +37,6 @@
 # if defined __MINGW32__ || defined __MINGW64__ || defined _MSC_VER
 #   include "strlcpy.h"
 # endif
-# if defined _MSC_VER
-#   define memicmp(p1,p2,c)  _memicmp((p1),(p2),(c))
-# endif
 #elif defined __linux__
 # include <alloca.h>
 # include <errno.h>
@@ -69,7 +66,6 @@
 
 #if defined __linux__ || defined __FreeBSD__ || defined __APPLE__
 # define stricmp(s1,s2)    strcasecmp((s1),(s2))
-  static int memicmp(const unsigned char *p1, const unsigned char *p2, size_t count);
 #elif defined _MSC_VER
 # define stricmp(a,b)      _stricmp((a),(b))
 #endif
@@ -1354,14 +1350,6 @@ static pthread_t hThread;
 static libusb_device_handle *hUSBiface;
 static unsigned char usbTraceEP = BMP_EP_TRACE;
 static volatile int force_exit;
-
-static int memicmp(const unsigned char *p1, const unsigned char *p2, size_t count)
-{
-  int diff = 0;
-  while (count-- > 0 && diff == 0)
-    diff = toupper(*p1++) - toupper(*p2++);
-  return diff;
-}
 
 /** get_timestamp() returns a precision timestamp; the returned value is in
  *  seconds, but the fractional part has a precision of at least milliseconds.

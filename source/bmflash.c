@@ -668,7 +668,7 @@ static bool help_popup(struct nk_context *ctx)
   rc.w -= 2*MARGIN;
   rc.h -= 2*MARGIN;
 # undef MARGIN
-  return nk_guide(ctx, &rc, opt_fontsize, (const char*)bmflash_help, NULL);
+  return nk_guide(ctx, &rc, opt_fontsize, (const char*)bmflash_help, 1);
 }
 
 

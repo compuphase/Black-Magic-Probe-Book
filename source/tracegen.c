@@ -169,11 +169,6 @@ static const char *generate_symbolname(char *symbol, size_t size, const char *na
 
 static int generate_functionheader(FILE *fp, const CTF_EVENT *evt, unsigned flags)
 {
-  const CTF_STREAM *stream;
-  const CTF_EVENT_FIELD *field;
-  char streamname[128], funcname[128];
-  int paramcount;
-
   if ((flags & FLAG_NO_INSTR)) {
     if (flags & FLAG_INDENT)
       fprintf(fp, "  ");
@@ -195,7 +190,9 @@ static int generate_functionheader(FILE *fp, const CTF_EVENT *evt, unsigned flag
   else
     fprintf(fp, "void trace_");
 
-  stream = stream_by_id(evt->stream_id);
+  char streamname[128];
+  char funcname[128];
+  const CTF_STREAM *stream = stream_by_id(evt->stream_id);
   if (stream == NULL || (strlen(stream->name) == 0 && stream_count() == 1 && stream->stream_id == 0))
     fprintf(fp, "%s", generate_symbolname(funcname, sizearray(funcname), evt->name));
   else if (strlen(stream->name) == 0)
@@ -208,8 +205,8 @@ static int generate_functionheader(FILE *fp, const CTF_EVENT *evt, unsigned flag
   fprintf(fp, "(");
 
   /* the parameters */
-  paramcount = 0;
-  for (field = evt->field_root.next; field != NULL; field = field->next) {
+  int paramcount = 0;
+  for (const CTF_EVENT_FIELD *field = evt->field_root.next; field != NULL; field = field->next) {
     if (field != evt->field_root.next)
       fprintf(fp, ", ");
     if (!(flags & FLAG_MACRO)) {
@@ -303,9 +300,12 @@ void generate_prototypes(FILE *fp, unsigned flags, const char *trace_func,
   fprintf(fp, "#endif /* TRACEGEN_PROTOTYPE_FUNCTIONS */\n");
 }
 
-void generate_funcstubs(FILE *fp, unsigned flags, const char *trace_func,
-                        const char *timestamp_func, const char *headerfile)
+bool generate_funcstubs(FILE *fp, unsigned flags, const char *trace_func,
+                        const char *timestamp_func, const char *headerfile,
+                        int severitylevel, unsigned long streammask)
 {
+  bool ok = true;
+
   /* file header */
   assert(fp != NULL);
   assert(headerfile != NULL);
@@ -321,9 +321,9 @@ void generate_funcstubs(FILE *fp, unsigned flags, const char *trace_func,
   fprintf(fp, "#include \"%s\"\n\n", headerfile);
 
   if (flags & FLAG_STREAM_MASK)
-    fprintf(fp, "unsigned long trace_stream_mask = ~0Lu;\n");
+    fprintf(fp, "unsigned long trace_stream_mask = %08lxLu;\n", streammask);
   if (flags & FLAG_SEVERITY_LVL)
-    fprintf(fp, "unsigned char trace_severity_level = 1;\n");
+    fprintf(fp, "unsigned char trace_severity_level = %d;\n", severitylevel);
   if (flags & (FLAG_STREAM_MASK | FLAG_SEVERITY_LVL))
     fprintf(fp, "\n");
 
@@ -373,6 +373,7 @@ void generate_funcstubs(FILE *fp, unsigned flags, const char *trace_func,
           fprintf(stderr, "ERROR: stream '%s' has id %d, which is larger than the stream mask\n", stream->name, stream->stream_id);
         else
           fprintf(stderr, "ERROR: anonymous stream has id %d, which is larger than the stream mask\n", stream->stream_id);
+        ok = false;
       }
       if ((flags & (FLAG_STREAM_MASK | FLAG_SEVERITY_LVL)) == (FLAG_STREAM_MASK | FLAG_SEVERITY_LVL))
         fprintf(fp, "%sif ((trace_stream_mask & 0x%08lxLu) && trace_severity_level <= %d) {\n",
@@ -529,27 +530,89 @@ void generate_funcstubs(FILE *fp, unsigned flags, const char *trace_func,
 
   /* file trailer */
   fprintf(fp, "#endif /* NTRACE */\n");
+  return ok;
+}
+
+static const char *skip_opt(const char *opt, int count)
+{
+  opt += count;
+  if (*opt == '=' || *opt == ':')
+    opt += 1;
+  return opt;
+}
+
+#define MAX_STREAMS 32
+static char *enabled_streams[MAX_STREAMS] = { NULL };
+
+static int collect_streams(const char *list)
+{
+  memset(enabled_streams, 0, sizeof(enabled_streams));
+  assert(list != NULL);
+  int count = 0;
+  while (*list != '\0') {
+    const char *tail = strchr(list, ',');
+    if (tail == NULL)
+      tail = list + strlen(list);
+    size_t len = tail - list;
+    if (len > 0) {
+      if (count >= MAX_STREAMS) {
+        fprintf(stderr, "Too many stream names listed on '-f=streams' option\n");
+        return count;
+      }
+      enabled_streams[count] = malloc((len + 1) * sizeof(char));
+      if (enabled_streams[count] == NULL) {
+        fprintf(stderr, "Memory allocation failure\n");
+        return count;
+      }
+      strncpy(enabled_streams[count], list, len);
+      enabled_streams[count][len] = '\0';
+      count++;
+    }
+    list = tail;
+    if (*list == ',')
+      list++;
+  }
+  return count;
+}
+
+static void free_streams(void)
+{
+  for (int idx = 0; idx < sizearray(enabled_streams); idx++) {
+    if (enabled_streams[idx] != NULL) {
+      free(enabled_streams[idx]);
+      enabled_streams[idx] = NULL;
+    }
+  }
 }
 
 static void usage(int status)
 {
-  printf("\ntragegen - generate C source & header files from TSDL specifications, for"
+  printf("\ntragegen - generate C source & header files from TSDL specifications, for\n"
          "           tracing in the Common Trace Format.\n\n"
          "Usage: tracegen [options] inputfile\n\n"
          "Options:\n"
-         "-c99       Generate C99-compatible code (default is C90).\n"
+         "-c=99      Generate C99-compatible code (default is C90).\n"
+         "-c=basic   Force basic C types on arguments, if available.\n"
          "-f=level   Generate code to enable/disable message severity levels.\n"
+         "           The initial level may be set in the option, e.g. '-f=level:3' to set\n"
+         "           'warning' level. If not specified, the initial level is 1 ('info').\n"
+         "           Note that this is only the initial level; a debugger or trace viewer\n"
+         "           may overrule this setting at run-time.\n"
          "-f=stream  Generate code to enable/disable streams.\n"
-         "-fs=name   Set the name for the time stamp function, default = trace_timestamp\n"
-         "-fx=name   Set the name for the trace transmit function, default = trace_xmit\n"
-         "-g=stream  Generate code to enable/disable streams.\n"
-         "-i=path    Add an #include <...> directive with this path.\n"
-         "-I=path    Add an #include \"...\" directive with this path.\n"
-         "           The -i and -I options may appear multiple times.\n"
-         "-no-instr  Add a \"no_instrument_function\" attribute to all generated functions.\n"
-         "-o=name    Base output filename; a .c and .h suffix is added to this name.\n"
+         "           The names of the initially active streams may be appended to the\n"
+         "           option, e.g. '-f=stream:main,graphics' (enables streams 'main' and\n"
+         "           'graphics' by default, all others disabled). If not specified, all\n"
+         "           streams are initially enabled. Note that the enabled streams are\n"
+         "           only the initial status; a debugger or trace viewer may overrule\n"
+         "           this setting at run-time.\n"
+         "-fs=name   Set the name for the time stamp function, default: 'trace_timestamp'\n"
+         "-fx=name   Set the name for the trace transmit function, default: 'trace_xmit'\n"
+         "-i=path    Add an '#include <...>' directive with this path.\n"
+         "-I=path    Add an '#include \"...\"' directive with this path.\n"
+         "           The '-i' and '-I' options may appear multiple times.\n"
+         "-no-instr  Add a 'no_instrument_function' attribute to all generated functions.\n"
+         "-o=name    Base output filename; a .c and .h suffix are added to this name.\n"
          "-s=swo     SWO tracing: use SWO channels for stream ids.\n"
-         "-t         Force basic C types on arguments, if available.\n"
          "-v         Show version information.\n");
   exit(status);
 }
@@ -575,21 +638,19 @@ static void version(int status)
 
 int main(int argc, char *argv[])
 {
-  PATHLIST includepaths = { NULL, NULL }, *path;
-  char infile[_MAX_PATH], outfile[_MAX_PATH];
-  char trace_func[64], timestamp_func[64];
-  char *ptr;
-  unsigned opt_flags;
-
   if (argc <= 1)
     usage(EXIT_FAILURE);
 
   /* command line options */
-  infile[0] = '\0';
-  outfile[0] = '\0';
-  strcpy(trace_func, "trace_xmit");
-  strcpy(timestamp_func, "trace_timestamp");
-  opt_flags = 0;
+  char infile[_MAX_PATH] = "";
+  char outfile[_MAX_PATH] = "";
+  char trace_func[64] = "trace_xmit";
+  char timestamp_func[64] = "trace_timestamp";
+  PATHLIST includepaths = { NULL, NULL };
+  PATHLIST *path;
+  unsigned opt_flags = 0;
+  int opt_severity = 1;
+  const char *opt;
   for (int idx = 1; idx < argc; idx++) {
     if (IS_OPTION(argv[idx])) {
       switch (argv[idx][1]) {
@@ -598,22 +659,25 @@ int main(int argc, char *argv[])
         usage(EXIT_SUCCESS);
         break;
       case 'c':
-        if (strcmp(argv[idx]+1, "c99") == 0)
+        opt = skip_opt(argv[idx], 2);
+        if (strcmp(argv[idx]+1, "99") == 0)
           opt_flags |= FLAG_C99;
+        else if (strcmp(argv[idx]+1, "basic") == 0)
+          opt_flags |= FLAG_BASICTYPES;
         else
           unknown_option(argv[idx]);
         break;
       case 'f':
-        ptr = &argv[idx][2];
-        if (strcmp(ptr, "stream") == 0) {
+        opt = &argv[idx][2];
+        if (strcmp(opt, "stream") == 0) {
           opt_flags |= FLAG_STREAM_MASK;
-        } else if (*ptr == 's' || *ptr == 'x') {
-          const char *name = ptr + 1;
-          if (*name == '=' || *name == ':')
-            name++;
+          opt = skip_opt(opt, 6);
+          collect_streams(opt);
+        } else if (*opt == 's' || *opt == 'x') {
+          const char *name = skip_opt(opt, 1);
           if (*name == '\0')
             incomplete_option(argv[idx]);
-          switch (*ptr) {
+          switch (*opt) {
           case 's':
             strlcpy(timestamp_func, name, sizearray(timestamp_func));
             break;
@@ -622,24 +686,32 @@ int main(int argc, char *argv[])
             break;
           }
         } else {
-          if (*ptr == '=' || *ptr == ':')
-            ptr++;
-          if (strcmp(ptr, "stream") == 0)
+          opt = skip_opt(opt, 0);
+          if (strcmp(opt, "stream") == 0) {
             opt_flags |= FLAG_STREAM_MASK;
-          else if (strcmp(ptr, "level") == 0)
+            opt = skip_opt(opt, 6);
+            collect_streams(opt);
+          } else if (strncmp(opt, "level", 5) == 0) {
             opt_flags |= FLAG_SEVERITY_LVL;
-          else
+            opt = skip_opt(opt, 5);
+            if (*opt != '\0') {
+              opt_severity = strtol(opt, NULL, 10);
+              if (opt_severity < 0 || opt_severity > 6) {
+                fprintf(stderr, "Invalid level %d for -f=level option.\n", opt_severity);
+                opt_severity = 1;
+              }
+            }
+          } else {
             unknown_option(argv[idx]);
+          }
         }
         break;
       case 'I':
       case 'i':
-        ptr = &argv[idx][2];
-        if (*ptr == '=' || *ptr == ':')
-          ptr++;
+        opt = skip_opt(argv[idx], 2);
         path = malloc(sizeof(PATHLIST));
         if (path != NULL) {
-          path->path = strdup(ptr);
+          path->path = strdup(opt);
           if (path->path != NULL) {
             PATHLIST *last;
             path->system =(argv[idx][1]== 'i');
@@ -659,26 +731,23 @@ int main(int argc, char *argv[])
           unknown_option(argv[idx]);
         break;
       case 'o':
-        ptr = &argv[idx][2];
-        if (*ptr == '=' || *ptr == ':')
-          ptr++;
-        strlcpy(outfile, ptr, sizearray(outfile));
+        opt = skip_opt(argv[idx], 2);
+        strlcpy(outfile, opt, sizearray(outfile));
         break;
       case 's':
-        ptr = &argv[idx][2];
-        if (*ptr == '\0') {
-          opt_flags |= FLAG_STREAMID; /* old option */
+        opt = &argv[idx][2];
+        if (*opt == '\0') {
+          opt_flags |= FLAG_STREAMID; /* old option, now -s=swo */
         } else {
-          if (*ptr=='=' || *ptr==':')
-            ptr++;
-          if (strcmp(ptr, "swo") == 0)
+          opt = skip_opt(opt, 0);
+          if (strcmp(opt, "swo") == 0)
             opt_flags |= FLAG_STREAMID;
           else
             unknown_option(argv[idx]);
         }
         break;
       case 't':
-        opt_flags |= FLAG_BASICTYPES;
+        opt_flags |= FLAG_BASICTYPES; /* old option, now -c=basic */
         break;
       case 'v':
         version(EXIT_SUCCESS);
@@ -696,7 +765,7 @@ int main(int argc, char *argv[])
   }
   if (strlen(outfile) == 0) {
 #   if defined _WIN32
-      ptr = infile;
+      char *ptr = infile;
       if (strrchr(ptr, '\\') != NULL)
         ptr = strrchr(ptr, '\\') + 1;
       if (strrchr(ptr, '/') != NULL)
@@ -712,22 +781,32 @@ int main(int argc, char *argv[])
   }
 
   if (!ctf_parse_init(infile))
-    return EXIT_FAILURE; /* error message already issued via ctf_error_notify() */
+    return EXIT_FAILURE;  /* error message already issued via ctf_error_notify() */
   if (ctf_parse_run()) {
-    FILE *fp;
-    int done_msg = 1;
+    bool ok = true;       /* toggled to false when an error message is printed */
+
+    /* create mask from streams */
+    unsigned long stream_mask = ~0;
+    if (opt_flags & FLAG_STREAM_MASK) {
+      stream_mask = 0;
+      for (int idx = 0; idx < sizearray(enabled_streams); idx++) {
+        const CTF_STREAM *stream = stream_by_name(enabled_streams[idx]);
+        if (stream != NULL)
+          stream_mask |= stream->stream_id;
+      }
+    }
 
     strlcat(outfile, ".h", sizearray(outfile));
-    fp = fopen(outfile, "wt");
+    FILE *fp = fopen(outfile, "wt");
     if (fp != NULL) {
       generate_prototypes(fp, opt_flags, trace_func, timestamp_func, &includepaths);
       fclose(fp);
     } else {
       fprintf(stderr, "Error writing file \"%s\", error %d.\n", outfile, errno);
-      done_msg = 0;
+      ok = false;
     }
 
-    ptr = strrchr(outfile, '.');
+    char *ptr = strrchr(outfile, '.');
     assert(ptr != NULL);
     *(ptr + 1) = 'c';
     fp = fopen(outfile, "wt");
@@ -735,19 +814,21 @@ int main(int argc, char *argv[])
       /* temporarily rename the extension back to .h */
       assert(ptr != NULL && *(ptr + 1) == 'c');
       *(ptr + 1) = 'h';
-      generate_funcstubs(fp, opt_flags, trace_func, timestamp_func, outfile);
+      ok = generate_funcstubs(fp, opt_flags, trace_func, timestamp_func, outfile,
+                              opt_severity, stream_mask);
       assert(ptr != NULL && *(ptr + 1) == 'h');
       *(ptr + 1) = 'c';
       fclose(fp);
     } else {
       fprintf(stderr, "Error writing file \"%s\", error %d.\n", outfile, errno);
-      done_msg = 0;
+      ok = false;
     }
 
-    if (done_msg)
+    if (ok)
       printf("Generated \"%s\".\n", outfile);
   }
 
+  free_streams();
   ctf_parse_cleanup();
   while (includepaths.next != NULL) {
     path = includepaths.next;
@@ -756,6 +837,10 @@ int main(int argc, char *argv[])
     free(path);
   }
 
+# if defined FORTIFY
+    Fortify_CheckAllMemory();
+    Fortify_ListAllMemory();
+# endif
   return EXIT_SUCCESS;
 }
 

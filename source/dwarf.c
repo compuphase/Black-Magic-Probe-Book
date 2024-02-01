@@ -106,13 +106,15 @@ typedef struct tagDWARF_PROLOGUE32 {  /* fixed part of the header */
   /* standard opcode lengths (array of length "opcode_base" - 1) */
 
   /* DWARF 2..4, include directories, a sequence of zero-terminated strings (and
-     the sequence itself ends with a zero-byte) */
+                 the sequence itself ends with a zero-byte) */
   /* DWARF 2..4, file names: base name, location, modification date, size */
 
   /* DWARF 5+, directory entry formats (length-prefixed array of ULEB128 pairs) */
-  /* DWARF 5+, include directories, a length-prefixed sequence of entries in a format described in the earier table */
+  /* DWARF 5+, include directories, a length-prefixed sequence of entries in a
+               format described in the earier table */
   /* DWARF 5+, filename entry formats (length-prefixed array of ULEB128 pairs) */
-  /* DWARF 5+, filenames, a length-prefixed sequence of entries in a format described in the earier table */
+  /* DWARF 5+, filenames, a length-prefixed sequence of entries in a format
+               described in the earier table */
 } PACKED DWARF_PROLOGUE32;
 
 typedef struct tagSTATE {

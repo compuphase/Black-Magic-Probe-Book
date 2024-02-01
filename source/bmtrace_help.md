@@ -1,4 +1,4 @@
-#c-include svnrev.h
+%include svnrev.h
 -- ---------------------------------------------------------------------------
 # BlackMagic Trace Viewer
 
@@ -7,58 +7,58 @@ tracing protocol defined in the ARM Cortex core.
 
 The user interface of the Trace Viewer has the main controls and views in the
 left, with (from top to bottom):
-    [[The Button Bar]]
-    [[The Trace View]]
-    [[The Timeline]]
+> [The Button Bar]
+> [The Trace View]
+> [The Timeline]
 
 At the right is a sidebar for settings & status with TAB panels that can be
 folded in or out:
-    [[Configuration]]
-    [[Status]]
-    [[Filters]]
-    [[Channels]]
+> [Configuration]
+> [Status]
+> [Filters]
+> [Channels]
 
 ---
 Miscellaneous information:
-    [[The Common Trace Format]]
-    [[Keyboard Interface]]
-    [[About BlackMagic Trace Viewer]]
+> [The Common Trace Format]
+> [Keyboard Interface]
+> [About BlackMagic Trace Viewer]
 
 # The Button Bar
 
 *Start / Stop*
-: The Start button starts capturing the trace messages, and the Stop button stops
+> The Start button starts capturing the trace messages, and the Stop button stops
   the capture. When running, the label on the button changes from "Start" to
   "Stop," and after stopping, the button is relabeled to "Resume."
 
-: Note that if you change any of the configuration options in the sidebar, you
+> Note that if you change any of the configuration options in the sidebar, you
   may need to stop and re-start the capture, in order to let the Trace Viewer
   re-configure the debug probe.
 
 *Clear*
-: Clears the messages from the list, and also clears the timeline.
+> Clears the messages from the list, and also clears the timeline.
 
 *Search*
-: Opens a dialog in which you can type a word to search for, in the list. While
+> Opens a dialog in which you can type a word to search for, in the list. While
   the dialog is open, you can click on the "Find" button to search for the next
   occurrence. The search wraps back to the top after searching beyond the last
   match.
 
 *Save*
-: Stores the currently displayed messages in a CSV file (Comma Separated Values).
+> Stores the currently displayed messages in a CSV file (Comma Separated Values).
   You can open these files in a spreadsheet program (Excel, LibreOffice Calc, ...)
   for further analysis.
 
 *Help*
-: Opens up the on-line help that you are reading now.
+> Opens up the on-line help that you are reading now.
 
 ---
 See also:
-    [[The Timeline]]
-    [[Configuration]]
-    [[Searching]]
-    [[Filters]]
-    [[Keyboard Interface]]
+> [The Timeline]
+> [Configuration]
+> [Searching]
+> [Filters]
+> [Keyboard Interface]
 
 # The Trace View
 
@@ -74,10 +74,10 @@ trace capture and packet reception.
 
 ---
 See also:
-    [[The Timeline]]
-    [[Status]]
-    [[Searching]]
-    [[Bookmarks]]
+> [The Timeline]
+> [Status]
+> [Searching]
+> [Bookmarks]
 
 # The Timeline
 
@@ -98,7 +98,7 @@ around that time.
 
 ---
 See also:
-    [[The Trace View]]
+> [The Trace View]
 
 # Configuration
 
@@ -106,67 +106,67 @@ The Configuration view is an expandable panel in the sidebar at the right. It
 contains the following settings:
 
 *Probe*
-: The debug probe to use. If only a single probe is connected to the work~station,
+> The debug probe to use. If only a single probe is connected to the work~station,
   it will be automatically selected. Otherwise, you can select it from the drop-down
   list.
 
-: In the case of a ctxLink probe configured for Wi-Fi, you select "TCP/IP" from
+> In the case of a ctxLink probe configured for Wi-Fi, you select "TCP/IP" from
   this list.
 
 *IP Addr*
-: This option is only visible when "TCP/IP" is selected from the drop-down list
+> This option is only visible when "TCP/IP" is selected from the drop-down list
   of the preceding "Probe" option. Here, you can fill in the IP address that
   the debug probe (likely a ctxLink probe) is configured at. Alternatively,
   you can click on the "..." button at the right of the edit field, to let the
   utility scan the network for the debug probe.
 
 *Mode*
-: Either Manchester or NRZ (asynchronous). Which mode to use, depends on the
+> Either Manchester or NRZ (asynchronous). Which mode to use, depends on the
   particular debug probe: the original Black Magic Probe supports only Manchester,
   while the ctxLink probe supports only NRZ. If the Trace Viewer detects the
   type of debug probe, this field is updated automatically.
 
 *Configure Target*
-: If selected, the Trace Viewer configures the microcontroller on the target
+> If selected, the Trace Viewer configures the microcontroller on the target
   device for SWO tracing. For this to work, the Trace Viewer must have support
   for the particular microcontroller. The Trace Viewer supports several
   microcontroller families out of the box, and more can be added.
 
 *Configure Debug Probe*
-: If selected, the Trace Viewer configures the Black Magic Probe for capturing
+> If selected, the Trace Viewer configures the Black Magic Probe for capturing
   SWO tracing.
 
-: If neither this option, nor the option "Configure Target" are set, the Trace Viewer
+> If neither this option, nor the option "Configure Target" are set, the Trace Viewer
   does not open a connection with the debug interface of the Black Magic Probe.
   This allows you to control the debug probe and the target with another program
   (such as GDB) while capturing SWO tracing with the Trace Viewer.
 
 *Reset target during connect*
-: This option may be needed on some microcontrollers, especially if SWD pins get redefined.
+> This option may be needed on some microcontrollers, especially if SWD pins get redefined.
 
 *CPU clock*
-: The clock of the microcontroller in Hz. This value is needed when the Trace Viewer configures
+> The clock of the microcontroller in Hz. This value is needed when the Trace Viewer configures
   the target.
 
 *Bit rate*
-: The transfer speed in bits/second. This value is needed when the Trace Viewer
+> The transfer speed in bits/second. This value is needed when the Trace Viewer
   configures the target (it may also be needed for configuring the debug probe,
   depending on the mode).
 
 *Data size*
-: Most targets implement SWO tracing with an 8-bit payload in a packet. However,
+> Most targets implement SWO tracing with an 8-bit payload in a packet. However,
   16-bit or 32-bit payloads per packet are more efficient (less overhead, and
   thus a higher effective transfer speed).
 
-: When set to "auto", the Trace Viewer attempts to detect the data size.
+> When set to "auto", the Trace Viewer attempts to detect the data size.
 
 *TSDL file*
-: When a file with CTF metadata (Common Trace Format) is selected in this field,
+> When a file with CTF metadata (Common Trace Format) is selected in this field,
   the Trace Viewer will activate CTF decoding on the channels defined in the
   metadata file.
 
 *ELF file*
-: Selecting the ELF file, enables symbol lookup for addresses transmitted by the
+> Selecting the ELF file, enables symbol lookup for addresses transmitted by the
   target firmware. The ELF file that is set in this field, must of course match
   the firmware loaded into the target. This option is furthermore only useful
   when CTF decoding is active (i.e. when a TSDL file is set), because the
@@ -175,8 +175,8 @@ contains the following settings:
 
 ---
 See also:
-    [[Status]]
-    [[Common Trace Format]]
+> [Status]
+> [Common Trace Format]
 
 # Status
 
@@ -184,26 +184,26 @@ The Status view is an expandable panel in the sidebar at the right. It contains
 the following values:
 
 *Total received*
-: The total number of packets received. While running, the number of messages
+> The total number of packets received. While running, the number of messages
   in the Trace View is limited to 400 messages. This number has the total.
 
 *Overflow events*
-: When the overflow event count is non-zero, captured trace data is incomplete.
+> When the overflow event count is non-zero, captured trace data is incomplete.
   The cause is that trace data arrives more quickly than can be processed.
 
-: If an overflow occurs, the Trace Viewer automatically reduces the number of
+> If an overflow occurs, the Trace Viewer automatically reduces the number of
   messages that it displays while running. This limit is 400 messages by default,
   but may be reduced down to 50 (in gradual steps) if overflow events are
   detected.
 
 *Packet errors*
-: When the number of packet errors is non-zero, the configuration of the SWO
+> When the number of packet errors is non-zero, the configuration of the SWO
   protocol is likely incorrect (Data size & CPU clock), or the Bit rate is too
   high.
 
 ---
 See also:
-    [[Configuration]]
+> [Configuration]
 
 # Channels
 
@@ -221,9 +221,9 @@ with selection boxes for the RGB colour values and a field for the name.
 
 ---
 See also:
-    [[Configuration]]
-    [[Filters]]
-    [[The Common Trace Format]]
+> [Configuration]
+> [Filters]
+> [The Common Trace Format]
 
 # Searching
 
@@ -242,7 +242,7 @@ search wraps back to the top after searching beyond the last match.
 
 ---
 See also:
-    [[Filters]]
+> [Filters]
 
 # Filters
 
@@ -275,8 +275,8 @@ A trace message passes all filters (and is displayed) if:
 
 ---
 See also:
-    [[Searching]]
-    [[The Common Trace Format]]
+> [Searching]
+> [The Common Trace Format]
 
 # Bookmarks
 
@@ -289,7 +289,7 @@ Bookmarks are saved along with the trace data, when saving the trace data to fil
 
 ---
 See also:
-    [[The Button Bar]]
+> [The Button Bar]
 
 # Keyboard Interface
 
@@ -305,9 +305,9 @@ The following keyboard shortcuts are available.
 
 ---
 See also:
-    [[The Button Bar]]
-    [[Bookmarks]]
-    [[Searching]]
+> [The Button Bar]
+> [Bookmarks]
+> [Searching]
 
 # The Common Trace Format
 
@@ -323,8 +323,8 @@ chapter on CTF, the syntax of TSDL and how to use the tools.
 
 ---
 See also:
-    [[Configuration]]
-    [[About BlackMagic Trace Viewer]]
+> [Configuration]
+> [About BlackMagic Trace Viewer]
 
 # About BlackMagic Trace Viewer
 

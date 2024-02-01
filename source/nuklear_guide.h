@@ -23,7 +23,7 @@
 #include "nuklear.h"
 
 bool nk_guide(struct nk_context *ctx, struct nk_rect *viewport, float fontsize,
-              const char *content, const char *topic);
+              const char *content, uint32_t topic);
 void nk_guide_cleanup(void);
 
 #endif /* _NK_GUIDE_H */

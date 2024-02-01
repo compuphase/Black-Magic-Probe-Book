@@ -164,6 +164,7 @@ typedef struct tagCTFSETTINGS {
   unsigned long streammask;     /**< mask with enabled streams */
   unsigned long severity_addr;
   unsigned long streammask_addr;
+  bool initvars;                /**< variables must be (re-)initialized from the target */
 } CTFSETTINGS;
 
 typedef struct tagSWOSETTINGS {
@@ -4051,8 +4052,10 @@ enum {
   STATE_SWODEVICE,
   STATE_SWOGENERIC,
   STATE_SWOCHANNELS,
-  STATE_CTFSTREAMS,
-  STATE_CTFSEVERITY,
+  STATE_CTF_SETSTREAMS,
+  STATE_CTF_SETSEVERITY,
+  STATE_CTF_GETSTREAMS,
+  STATE_CTF_GETSEVERITY,
   STATE_HOVER_SYMBOL,
   STATE_QUIT,
 };
@@ -6082,12 +6085,18 @@ static bool save_targetoptions(const char *filename, const APPSTATE *state)
 
   ini_putl("Flash", "auto-download", state->autodownload, filename);
 
+  ini_puts("CTF", "metadata", state->ctf.metadata, filename);
+  char mask[20];
+  snprintf(mask, sizearray(mask), "%08lx", state->ctf.streammask);
+  ini_puts("CTF", "stream-mask", mask, filename);
+  ini_putl("CTF", "severity-level", state->ctf.severity, filename);
+  ini_puts("SWO trace", "ctf", NULL, filename); /* old key (remove) */
+
   ini_putl("SWO trace", "mode", state->swo.mode, filename);
   ini_putl("SWO trace", "bitrate", state->swo.bitrate, filename);
   ini_putl("SWO trace", "clock", state->swo.clock, filename);
   ini_putl("SWO trace", "datasize", state->swo.datasize * 8, filename);
   ini_putbool("SWO trace", "enabled", state->swo.enabled, filename);
-  ini_puts("SWO trace", "ctf", state->ctf.metadata, filename);
   for (unsigned idx = 0; idx < NUM_CHANNELS; idx++) {
     char key[32], value[128];
     struct nk_color color = channel_getcolor(idx);
@@ -6120,6 +6129,16 @@ static bool load_targetoptions(const char *filename, APPSTATE *state)
 
   state->autodownload = (int)ini_getl("Flash", "auto-download", 1, filename);
 
+  ini_gets("CTF", "metadata", "", state->ctf.metadata, sizearray(state->ctf.metadata), filename);
+  if (strlen(state->ctf.metadata) == 0)
+    ini_gets("SWO trace", "ctf", "", state->ctf.metadata, sizearray(state->ctf.metadata), filename);  /* old key */
+  char mask[20];
+  ini_gets("CTF", "stream-mask", "ffffffff", mask, sizearray(mask), filename);
+  state->ctf.streammask = strtoul(mask, NULL, 16);
+  state->ctf.severity = (int)ini_getl("CTF", "severity-level", 1, filename);
+  if (strlen(state->ctf.metadata) > 0)
+    state->ctf.initvars = true;
+
   state->swo.mode = (unsigned)ini_getl("SWO trace", "mode", SWOMODE_NONE, filename);
   state->swo.bitrate = (unsigned)ini_getl("SWO trace", "bitrate", 100000, filename);
   state->swo.clock = (unsigned)ini_getl("SWO trace", "clock", 48000000, filename);
@@ -6127,7 +6146,6 @@ static bool load_targetoptions(const char *filename, APPSTATE *state)
   state->swo.enabled = ini_getbool("SWO trace", "enabled", 0, filename);
   state->swo.force_plain = false;
   state->swo.init_status = false;
-  ini_gets("SWO trace", "ctf", "", state->ctf.metadata, sizearray(state->ctf.metadata), filename);
   for (unsigned idx = 0; idx < NUM_CHANNELS; idx++) {
     char key[41], value[128];
     /* preset: port 0 is enabled by default, others disabled by default */
@@ -6557,8 +6575,7 @@ static void console_view(struct nk_context *ctx, APPSTATE *state,
             serial_info_mode(&state->ctf, false, NULL);
           } else if (result == ACTION_CTFSETTINGS) {
             ctf_set_filter(state->ctf.streammask, state->ctf.severity);
-            state->monitor_cmd_active = true;   /* to silence output of scripts */
-            RESETSTATE(state, STATE_CTFSTREAMS);
+            RESETSTATE(state, STATE_CTF_SETSTREAMS);
           }
         } else if ((result = handle_trace_cmd(state->console_edit, &state->swo, &state->ctf)) != ACTION_SKIP) {
           if (result == ACTION_OPEN) {
@@ -6576,6 +6593,7 @@ static void console_view(struct nk_context *ctx, APPSTATE *state,
           } else if (result == ACTION_INFO) {
             trace_info_mode(&state->swo, &state->ctf, true, NULL);
           }
+          //??? also handle setting CTF severity level
           tab_states[TAB_SWO] = NK_MAXIMIZED;  /* make sure the SWO tracing view is open */
         } else if (handle_x_cmd(state->console_edit, &state->memdump)) {
           if (state->memdump.count > 0 && state->memdump.size > 0) {
@@ -8050,7 +8068,6 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
         gdbmi_sethandled(false);
       }
       break;
-
     case STATE_PARTID_1:
       if (!exist_monitor_cmd("partid", state->monitor_cmds)) {
         MOVESTATE(state, STATE_PARTID_2);  /* no command for part id, use a script */
@@ -8085,7 +8102,6 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
         }
       }
       break;
-
     case STATE_PARTID_2:
       if (!state->atprompt)
         break;
@@ -8347,7 +8363,9 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
       }
       if (state->swo.enabled && state->swo.mode != SWOMODE_NONE && !state->swo.init_status) {
         state->monitor_cmd_active = true;   /* to silence output of scripts */
-        RESETSTATE(state, STATE_SWOTRACE);
+        RESETSTATE(state, STATE_SWOTRACE);  /* initialize SWO tracing */
+      } else if (state->ctf.initvars) {
+        RESETSTATE(state, STATE_CTF_GETSTREAMS);/* get trace filter variables from the target */
       } else if (state->refreshflags & REFRESH_BREAKPOINTS) {
         RESETSTATE(state, STATE_LIST_BREAKPOINTS);
       } else if (state->refreshflags & REFRESH_LOCALS) {
@@ -8750,19 +8768,16 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
         gdbmi_sethandled(false);
       }
       break;
-    case STATE_CTFSTREAMS:
-    case STATE_CTFSEVERITY:
-      if (state->curstate == STATE_CTFSTREAMS && state->ctf.streammask_addr == 0) {
-        MOVESTATE(state, STATE_CTFSEVERITY);
-        break;
-      } else if (state->curstate == STATE_CTFSEVERITY && state->ctf.severity_addr == 0) {
+    case STATE_CTF_SETSTREAMS:
+    case STATE_CTF_SETSEVERITY:
+      if (state->curstate == STATE_CTF_SETSTREAMS && state->ctf.streammask_addr == 0)
+        MOVESTATE(state, STATE_CTF_SETSEVERITY);
+      if (state->curstate == STATE_CTF_SETSEVERITY && state->ctf.severity_addr == 0)
         MOVESTATE(state, STATE_STOPPED);
-        break;
-      }
-      if (!state->atprompt)
+      if (!state->atprompt || state->curstate == STATE_STOPPED)
         break;
       if (STATESWITCH(state)) {
-        if (state->curstate == STATE_CTFSTREAMS) {
+        if (state->curstate == STATE_CTF_SETSTREAMS) {
           snprintf(state->cmdline, CMD_BUFSIZE, "-data-write-memory-bytes 0x%lX %08lX 4\n",
                    state->ctf.streammask_addr, state->ctf.streammask);
         } else
@@ -8772,13 +8787,54 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
         state->atprompt = false;
         MARKSTATE(state);
       } else if (gdbmi_isresult() != NULL) {
-        if (state->curstate == STATE_CTFSTREAMS) {
+        if (state->curstate == STATE_CTF_SETSTREAMS) {
           console_add("Set CTF stream filtering mask (filtered on target device)\n", STRFLG_STATUS);
-          MOVESTATE(state, STATE_CTFSEVERITY);
+          MOVESTATE(state, STATE_CTF_SETSEVERITY);
         } else {
           console_add("Set CTF severity level (filtered on target device)\n", STRFLG_STATUS);
           MOVESTATE(state, STATE_STOPPED);
         }
+        log_console_strings(state);
+        gdbmi_sethandled(false);
+      }
+      break;
+    case STATE_CTF_GETSTREAMS:
+    case STATE_CTF_GETSEVERITY:
+      state->ctf.initvars = false;
+      if (state->curstate == STATE_CTF_GETSTREAMS && state->ctf.streammask_addr == 0)
+        MOVESTATE(state, STATE_CTF_GETSEVERITY);
+      if (state->curstate == STATE_CTF_GETSEVERITY && state->ctf.severity_addr == 0)
+        MOVESTATE(state, STATE_STOPPED);
+      if (!state->atprompt || state->curstate == STATE_STOPPED)
+        break;
+      if (STATESWITCH(state)) {
+        if (state->curstate == STATE_CTF_GETSTREAMS) {
+          snprintf(state->cmdline, CMD_BUFSIZE, "-data-read-memory-bytes 0x%lX 4\n",
+                   state->ctf.streammask_addr);
+        } else
+          snprintf(state->cmdline, CMD_BUFSIZE, "-data-read-memory-bytes 0x%lX 1\n",
+                   state->ctf.severity_addr);
+        task_stdin(&state->gdb_task, state->cmdline);
+        state->atprompt = false;
+        MARKSTATE(state);
+      } else if (gdbmi_isresult() != NULL) {
+        const char *head = gdbmi_isresult();
+        if (strncmp(head, "done,", 5) == 0) {
+          const char *data = strstr(head, "contents=");
+          if (data != NULL) {
+            data += 9;
+            if (*data == '"')
+              data += 1;
+            if (state->curstate == STATE_CTF_GETSTREAMS)
+              state->ctf.streammask = strtoul(data, NULL, 16);
+            else
+              state->ctf.severity = (unsigned char)strtoul(data,NULL,16);
+          }
+        }
+        if (state->curstate == STATE_CTF_GETSTREAMS)
+          MOVESTATE(state, STATE_CTF_GETSEVERITY);
+        else
+          MOVESTATE(state, STATE_STOPPED);
         log_console_strings(state);
         gdbmi_sethandled(false);
       }
