@@ -771,7 +771,7 @@ int main(int argc, char *argv[])
       if (strrchr(ptr, '/') != NULL)
         ptr = strrchr(ptr, '/') + 1;
 #   else
-      ptr = strrchr(infile, '/');
+      char *ptr = strrchr(infile, '/');
       ptr = (ptr != NULL) ? ptr + 1 : infile;
 #   endif
     strlcat(outfile, "trace_", sizearray(outfile));

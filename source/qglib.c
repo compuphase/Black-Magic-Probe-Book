@@ -1069,6 +1069,8 @@ bool qg_history_init(QG_HISTORY *stack,unsigned maxitems)
     return false;
   memset(stack->pages,0,maxitems*sizeof(QG_HISTORY_PAGE));
   stack->size=maxitems;
+  stack->count=0;
+  stack->pos=0;
   return true;
 }
 
