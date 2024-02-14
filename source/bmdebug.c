@@ -164,7 +164,7 @@ typedef struct tagCTFSETTINGS {
   unsigned long streammask;     /**< mask with enabled streams */
   unsigned long severity_addr;
   unsigned long streammask_addr;
-  bool initvars;                /**< variables must be (re-)initialized from the target */
+  int initvars;                /**< 1=filter variables must be initialized from the target; 2=target must be initialized from the debugger */
 } CTFSETTINGS;
 
 typedef struct tagSWOSETTINGS {
@@ -896,8 +896,8 @@ static bool console_autocomplete(char *text, size_t textsize, const DWARF_SYMBOL
     { "frame", "f", NULL },
     { "help", NULL, "assembly break breakpoints data files find keyboard monitor "
                     "running serial stack status support svd trace user-defined" },
-    { "info", NULL, "args breakpoints frame functions locals scope set sources "
-                    "stack svd variables vtbl %var" },
+    { "info", NULL, "args breakpoints frame functions locals scope set serial "
+                    "sources stack svd trace variables vtbl %var" },
     { "list", NULL, "%func %var %source" },
     { "load", NULL, NULL },
     { "monitor", "mon", "auto_scan connect_srst frequency halt_timeout hard_srst "
@@ -4427,13 +4427,22 @@ static bool handle_help_cmd(char *command, STRINGLIST *textroot, int *active,
       stringlist_append(textroot, "Configure the serial monitor.", 0);
       stringlist_append(textroot, "", 0);
       stringlist_append(textroot, "serial [port] [bitrate] -- open the port at the bitrate. If no port is specified,"
-                               " the secondary UART of the Black Magic Probe is used.", 0);
+                                  " the secondary UART of the Black Magic Probe is used.", 0);
       stringlist_append(textroot, "serial enable -- open the serial monitor with the previously confugured settings.", 0);
       stringlist_append(textroot, "serial disable -- close the virtual monitor.", 0);
       stringlist_append(textroot, "serial info -- show current status and configuration.", 0);
       stringlist_append(textroot, "", 0);
       stringlist_append(textroot, "serial [filename] -- configure CTF decoding using the given TSDL file.", 0);
       stringlist_append(textroot, "serial plain -- disable CTF decoding, display received data as text.", 0);
+      stringlist_append(textroot, "serial severity [level] -- set level for filtering on severity; level may be 'debug',"
+                                  " 'info', 'notice', 'warning', 'error' or 'critical'. This is only relevant for CTF"
+                                  " decoding.", 0);
+      stringlist_append(textroot, "serial stream [name] enable -- enable a CTF stream for tracing. If the name is '*',"
+                                  " all streams are enabled.", 0);
+      stringlist_append(textroot, "serial stream [name] disable -- disable a CTF stream for tracing. If the name is '*',"
+                                  " all streams are disabled.", 0);
+      stringlist_append(textroot, "serial stream [name] exclusive -- enable the specified CTF stream for tracing, while"
+                                  " disabling all other streams.", 0);
       stringlist_append(textroot, "", 0);
       stringlist_append(textroot, "serial clear -- clear the serial monitor view (delete contents).", 0);
       stringlist_append(textroot, "serial save [filename] -- save the contents in the serial monitor to a file.", 0);
@@ -4462,6 +4471,9 @@ static bool handle_help_cmd(char *command, STRINGLIST *textroot, int *active,
       stringlist_append(textroot, "", 0);
       stringlist_append(textroot, "trace [filename] -- configure CTF decoding using the given TSDL file.", 0);
       stringlist_append(textroot, "trace plain -- disable CTF decoding, trace plain input data.", 0);
+      stringlist_append(textroot, "trace severity [level] -- set level for filtering on severity; level may be 'debug',"
+                                  " 'info', 'notice', 'warning', 'error' or 'critical'. This is only relevant for CTF"
+                                  " decoding.", 0);
       stringlist_append(textroot, "", 0);
       stringlist_append(textroot, "trace channel [index] enable -- enable a channel (0..31).", 0);
       stringlist_append(textroot, "trace channel [index] disable -- disable a channel (0..31).", 0);
@@ -5625,67 +5637,71 @@ static int handle_serial_cmd(const char *command, SERIALSETTINGS *serial, CTFSET
 
   char *opt_clear;
   if ((opt_clear = strstr(cmdcopy, "clear")) != NULL && IS_TOKEN(cmdcopy, opt_clear, 5)) {
-    tracestring_clear();
+    sermon_clear();
     memset(opt_clear, ' ', 5);  /* erase the "clear" parameter from the string */
   }
 
   char *opt_stream;
   if ((opt_stream = strstr(cmdcopy, "stream")) != NULL && IS_TOKEN(cmdcopy, opt_stream, 6)) {
-    bool ok = true;
-    unsigned long mask = ~0Lu;
-    /* get the name, and make the mask */
-    const char *ptr_name = skipwhite(opt_stream + 6);
-    const char *tail = ptr_name;
-    while (*tail > ' ')
-      tail++;
-    if (tail != ptr_name) {
-      char *name = alloca((tail - ptr_name + 1) * sizeof(char));
-      strncpy(name, ptr_name, tail - ptr_name);
-      name[tail - ptr_name] = '\0';
-      if (strcmp(name, "*") != 0) {
-        const CTF_STREAM *s = stream_by_name(name);
-        if (s != NULL) {
-          if (s->stream_id >= 0 && s->stream_id < NUM_CHANNELS) {
-            mask = 1Lu << s->stream_id;
-          } else {
-            console_add("Stream ID is out of range\n", STRFLG_ERROR);
-            ok = false;
-          }
-        } else {
-          console_add("Unknown stream name\n", STRFLG_ERROR);
-          ok = false;
-        }
+    /* get the stream name & operation */
+    char *name = NULL;
+    char *oper = NULL;
+    const char *head = skipwhite(opt_stream + 6);
+    for (int param = 0; param < 2; param++) {
+      const char *tail = head;
+      while (*tail > ' ')
+        tail++;
+      if (tail != head) {
+        char *word = alloca((tail - head + 1) * sizeof(char));
+        strncpy(word, head, tail - head);
+        word[tail - head] = '\0';
+        if (strcmp(word, "enable") == 0 || strcmp(word, "disable") == 0 || strcmp(word, "exclusive") == 0)
+          oper = word;
+        else
+          name = word;
       }
-    } else {
+      head = skipwhite(tail);
+    }
+    /* test fields, make mask for given stream */
+    bool ok = true;
+    if (name == NULL) {
       console_add("Missing stream name\n", STRFLG_ERROR);
       ok = false;
     }
-    /* get the operation */
-    if (ok) {
-      const char *ptr_op = skipwhite(tail);
-      assert(ctf != NULL);
-      if (TOKEN_EQU(ptr_op, "enable", 6)) {
-        mask |= ctf->streammask;
-        tail = ptr_op + 6;
-      } else if (TOKEN_EQU(ptr_op, "disable", 7)) {
-        mask = ctf->streammask & ~mask;
-        tail = ptr_op + 7;
-      } else if (TOKEN_EQU(ptr_op, "exclusive", 9)) {
-        tail = ptr_op + 9;
+    if (oper == NULL) {
+      console_add("Missing or invalid operation (enable / disable / exclusive)\n", STRFLG_ERROR);
+      ok = false;
+    }
+    unsigned long mask = ~0Lu;
+    if (ok && strcmp(name, "*") != 0) {
+      const CTF_STREAM *s = stream_by_name(name);
+      if (s != NULL) {
+        if (s->stream_id >= 0 && s->stream_id < NUM_CHANNELS) {
+          mask = 1Lu << s->stream_id;
+        } else {
+          console_add("Stream ID is out of range\n", STRFLG_ERROR);
+          ok = false;
+        }
       } else {
-        console_add("Missing or invalid operation (enable / disable / exclusive)\n", STRFLG_ERROR);
+        console_add("Unknown stream name\n", STRFLG_ERROR);
         ok = false;
       }
     }
+    /* set the mask, depending on the operation */
     if (ok) {
       assert(ctf != NULL);
-      ctf->streammask = mask;
-      if (ctf->streammask_addr != 0)
-        return ACTION_CTFSETTINGS; /* if the variable isn't found, we do not need to try to set it */
+      if (strcmp(oper, "enable") == 0)
+        ctf->streammask |= mask;
+      else if (strcmp(oper, "disable") == 0)
+        ctf->streammask &= ~mask;
       else
+        ctf->streammask = mask;
+      if (ctf->streammask_addr == 0)
         console_add("Note: no firmware support for \"stream\" filtering\n", STRFLG_STATUS);
+      if (default_action == ACTION_NOP)
+        default_action = ACTION_CTFSETTINGS;
     }
-    memset(opt_stream, ' ', tail - opt_stream);
+    memset(opt_stream, ' ', head - opt_stream);
   }
 
   char *opt_severity;
@@ -5703,10 +5719,10 @@ static int handle_serial_cmd(const char *command, SERIALSETTINGS *serial, CTFSET
       if (level >= 0) {
         assert(ctf != NULL);
         ctf->severity = level;
-        if (ctf->severity_addr != 0)
-          return ACTION_CTFSETTINGS; /* if the variable isn't found, we do not need to try to set it */
-        else
+        if (ctf->severity_addr == 0)
           console_add("Note: no firmware support for \"severity\" level filtering\n", STRFLG_STATUS);
+        if (default_action == ACTION_NOP)
+          default_action = ACTION_CTFSETTINGS;
       } else {
         console_add("Invalid parameter for \"severity\" option\n", STRFLG_ERROR);
       }
@@ -6136,8 +6152,8 @@ static bool load_targetoptions(const char *filename, APPSTATE *state)
   ini_gets("CTF", "stream-mask", "ffffffff", mask, sizearray(mask), filename);
   state->ctf.streammask = strtoul(mask, NULL, 16);
   state->ctf.severity = (int)ini_getl("CTF", "severity-level", 1, filename);
-  if (strlen(state->ctf.metadata) > 0)
-    state->ctf.initvars = true;
+  if (strlen(state->ctf.metadata) > 0 && state->ctf.initvars == 0)
+    state->ctf.initvars = 1;
 
   state->swo.mode = (unsigned)ini_getl("SWO trace", "mode", SWOMODE_NONE, filename);
   state->swo.bitrate = (unsigned)ini_getl("SWO trace", "bitrate", 100000, filename);
@@ -6271,6 +6287,7 @@ static void button_bar(struct nk_context *ctx, APPSTATE *state, float panel_widt
                      "Reload and restart the program (Ctrl+F2)")) {
     if (strlen(state->ELFfile) > 0 && access(state->ELFfile, 0) == 0)
       save_targetoptions(state->ParamFile, state);
+    state->ctf.initvars = 2;  /* do not initialize stream/severity variables, contrariwise: initialize the target */
     RESETSTATE(state, STATE_FILE);
   }
   nk_layout_row_push(ctx, BUTTON_WIDTH);
@@ -7537,6 +7554,42 @@ static void handle_kbdinput_main(struct nk_context *ctx, APPSTATE *state)
   }
 }
 
+static int getbytestream(unsigned char *target, const char *source, size_t sourcelength)
+{
+  assert(target != NULL);
+  assert(source != NULL);
+  int count = 0;
+  while (sourcelength >= 2 && isxdigit(source[0]) && isxdigit(source[1])) {
+    char hex[3];
+    hex[0] = source[0];
+    hex[1] = source[1];
+    hex[2] = '\0';
+    *target = (unsigned char)strtoul(hex, NULL, 16);
+    source += 2;
+    target += 1;
+    sourcelength -= 2;
+    count += 1;
+  }
+  return count;
+}
+
+static int makebytestream(char *target, const unsigned char *source, size_t sourcelength)
+{
+  assert(target != NULL);
+  assert(source != NULL);
+  int count = 0;
+  while (sourcelength > 0) {
+    unsigned char digit = (*source >> 4) & 0x0f;
+    *target++ = (digit < 10) ? (char)(digit + '0') : (char)(digit - 10 + 'A');
+    digit = *source & 0x0f;
+    *target++ = (digit < 10) ? (char)(digit + '0') : (char)(digit - 10 + 'A');
+    source += 1;
+    sourcelength -= 1;
+    count += 1;
+  }
+  return count;
+}
+
 static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states tab_states[TAB_COUNT])
 {
   assert(state != NULL);
@@ -8364,8 +8417,10 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
       if (state->swo.enabled && state->swo.mode != SWOMODE_NONE && !state->swo.init_status) {
         state->monitor_cmd_active = true;   /* to silence output of scripts */
         RESETSTATE(state, STATE_SWOTRACE);  /* initialize SWO tracing */
-      } else if (state->ctf.initvars) {
+      } else if (state->ctf.initvars == 1) {
         RESETSTATE(state, STATE_CTF_GETSTREAMS);/* get trace filter variables from the target */
+      } else if (state->ctf.initvars == 2) {
+        RESETSTATE(state, STATE_CTF_SETSTREAMS);/* set the target's trace filter variables */
       } else if (state->refreshflags & REFRESH_BREAKPOINTS) {
         RESETSTATE(state, STATE_LIST_BREAKPOINTS);
       } else if (state->refreshflags & REFRESH_LOCALS) {
@@ -8770,6 +8825,7 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
       break;
     case STATE_CTF_SETSTREAMS:
     case STATE_CTF_SETSEVERITY:
+      state->ctf.initvars = 0;
       if (state->curstate == STATE_CTF_SETSTREAMS && state->ctf.streammask_addr == 0)
         MOVESTATE(state, STATE_CTF_SETSEVERITY);
       if (state->curstate == STATE_CTF_SETSEVERITY && state->ctf.severity_addr == 0)
@@ -8778,8 +8834,10 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
         break;
       if (STATESWITCH(state)) {
         if (state->curstate == STATE_CTF_SETSTREAMS) {
-          snprintf(state->cmdline, CMD_BUFSIZE, "-data-write-memory-bytes 0x%lX %08lX 4\n",
-                   state->ctf.streammask_addr, state->ctf.streammask);
+          snprintf(state->cmdline, CMD_BUFSIZE, "-data-write-memory-bytes 0x%lX ", state->ctf.streammask_addr);
+          size_t len = strlen(state->cmdline);
+          makebytestream(state->cmdline + len, (const unsigned char*)&state->ctf.streammask, 4);
+          strcpy(state->cmdline + len + 8, " 4\n");
         } else
           snprintf(state->cmdline, CMD_BUFSIZE, "-data-write-memory-bytes 0x%lX %02X 1\n",
                    state->ctf.severity_addr, state->ctf.severity);
@@ -8800,7 +8858,7 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
       break;
     case STATE_CTF_GETSTREAMS:
     case STATE_CTF_GETSEVERITY:
-      state->ctf.initvars = false;
+      state->ctf.initvars = 0;
       if (state->curstate == STATE_CTF_GETSTREAMS && state->ctf.streammask_addr == 0)
         MOVESTATE(state, STATE_CTF_GETSEVERITY);
       if (state->curstate == STATE_CTF_GETSEVERITY && state->ctf.severity_addr == 0)
@@ -8826,7 +8884,7 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
             if (*data == '"')
               data += 1;
             if (state->curstate == STATE_CTF_GETSTREAMS)
-              state->ctf.streammask = strtoul(data, NULL, 16);
+              getbytestream((unsigned char*)&state->ctf.streammask, data, 8);
             else
               state->ctf.severity = (unsigned char)strtoul(data,NULL,16);
           }

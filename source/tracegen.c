@@ -687,7 +687,7 @@ int main(int argc, char *argv[])
           }
         } else {
           opt = skip_opt(opt, 0);
-          if (strcmp(opt, "stream") == 0) {
+          if (strncmp(opt, "stream", 5) == 0) {
             opt_flags |= FLAG_STREAM_MASK;
             opt = skip_opt(opt, 6);
             collect_streams(opt);
@@ -789,10 +789,10 @@ int main(int argc, char *argv[])
     unsigned long stream_mask = ~0;
     if (opt_flags & FLAG_STREAM_MASK) {
       stream_mask = 0;
-      for (int idx = 0; idx < sizearray(enabled_streams); idx++) {
+      for (int idx = 0; idx < sizearray(enabled_streams) && enabled_streams[idx] != NULL; idx++) {
         const CTF_STREAM *stream = stream_by_name(enabled_streams[idx]);
         if (stream != NULL)
-          stream_mask |= stream->stream_id;
+          stream_mask |= (1 << stream->stream_id);
       }
     }
 

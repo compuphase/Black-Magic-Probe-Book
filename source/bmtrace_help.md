@@ -176,7 +176,7 @@ contains the following settings:
 ---
 See also:
 > [Status]
-> [Common Trace Format]
+> [The Common Trace Format]
 
 # Status
 

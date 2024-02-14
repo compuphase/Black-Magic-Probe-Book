@@ -246,6 +246,7 @@ static int recent_error = -1;
 
 static const char *skippath(const char *filename)
 {
+  assert(filename != NULL);
   const char *result = filename;
   const char *ptr = strrchr(result, '/');
   if (ptr != NULL)
@@ -380,6 +381,8 @@ static int readline_next(void)
 
 static CTF_TYPE *type_init(CTF_TYPE *root, const char *name, int typeclass, int size, int flags)
 {
+  assert(root != NULL);
+  assert(name != NULL);
   CTF_TYPE *item = (CTF_TYPE*)malloc(sizeof(CTF_TYPE));
   if (item != NULL) {
     memset(item, 0, sizeof(CTF_TYPE));
@@ -480,9 +483,9 @@ static void type_duplicate(CTF_TYPE *tgt, const CTF_TYPE *src)
 
 static CTF_TYPE *type_lookup(CTF_TYPE *root, const char *name)
 {
-  CTF_TYPE *item;
   assert(root != NULL);
   assert(name != NULL);
+  CTF_TYPE *item;
   for (item = root->next; item != NULL; item = item->next)
     if (item->name != NULL && strcmp(item->name, name) == 0)
       return item;
@@ -780,6 +783,7 @@ static void clock_cleanup(void)
 
 const CTF_CLOCK *clock_by_name(const char *name)
 {
+  assert(name != NULL);
   CTF_CLOCK *clock;
   for (clock = ctf_clock_root.next; clock != NULL; clock = clock->next)
     if (strcmp(clock->name, name) == 0)
@@ -820,6 +824,7 @@ int stream_count(void)
 
 const CTF_STREAM *stream_by_name(const char *name)
 {
+  assert(name != NULL);
   CTF_STREAM *stream;
   for (stream = ctf_stream_root.next; stream != NULL; stream = stream->next)
     if (strcmp(stream->name, name) == 0)

@@ -16795,9 +16795,13 @@ nk_layout_row_template_end(struct nk_context *ctx)
 NK_API void
 nk_layout_row_background(struct nk_context *ctx, struct nk_color bkgnd)
 {
-    struct nk_window *win = ctx->current;
     struct nk_rect bounds = nk_layout_widget_bounds(ctx);
-    nk_fill_rect(&win->buffer, bounds, 0, bkgnd);
+    struct nk_window *win = ctx->current;
+    bounds.x -= *win->layout->offset_x;
+    bounds.y -= *win->layout->offset_y;
+    bounds.h -= ctx->style.window.spacing.y;
+    struct nk_command_buffer *canvas = nk_window_get_canvas(ctx);
+    nk_fill_rect(canvas, bounds, 0, bkgnd);
 }
 NK_API void
 nk_layout_space_begin(struct nk_context *ctx, enum nk_layout_format fmt,

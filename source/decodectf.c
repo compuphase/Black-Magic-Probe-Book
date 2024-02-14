@@ -796,9 +796,9 @@ restart:
       if (event->severity >= ctf_severity && check_stream((uint16_t)event->stream_id)) {
         msgbuffer_append("", 1);  /* force zero-terminate msgbuffer */
         msgstack_push((uint16_t)event->stream_id, (uint16_t)event->id, (uint8_t)event->severity, timestamp, msgbuffer);
-        msgbuffer_reset();
         result += 1;  /* flag: one more trace message completed */
       }
+      msgbuffer_reset();
       state = STATE_SCAN_MAGIC;
     }
     goto restart;
