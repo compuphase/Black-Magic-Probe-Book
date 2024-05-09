@@ -18774,13 +18774,19 @@ nk_draw_symbol(struct nk_command_buffer *out, enum nk_symbol_type type,
     case NK_SYMBOL_TRIANGLE_DOWN:
     case NK_SYMBOL_TRIANGLE_LEFT:
     case NK_SYMBOL_TRIANGLE_RIGHT:
-    case NK_SYMBOL_TRIANGLE_DOWN_SMALL: {
+    case NK_SYMBOL_TRIANGLE_DOWN_SMALL:
+    case NK_SYMBOL_TRIANGLE_RIGHT_SMALL: {
         enum nk_heading heading;
         struct nk_vec2 points[3];
-        heading = (type == NK_SYMBOL_TRIANGLE_RIGHT) ? NK_RIGHT :
-            (type == NK_SYMBOL_TRIANGLE_LEFT) ? NK_LEFT:
-            (type == NK_SYMBOL_TRIANGLE_UP) ? NK_UP: NK_DOWN;
-        if (type == NK_SYMBOL_TRIANGLE_DOWN_SMALL) {
+        switch (type) {
+        case NK_SYMBOL_TRIANGLE_UP:          heading = NK_UP;       break;
+        case NK_SYMBOL_TRIANGLE_DOWN:        heading = NK_DOWN;     break;
+        case NK_SYMBOL_TRIANGLE_LEFT:        heading = NK_LEFT;     break;
+        case NK_SYMBOL_TRIANGLE_RIGHT:       heading = NK_RIGHT;    break;
+        case NK_SYMBOL_TRIANGLE_DOWN_SMALL:  heading = NK_DOWN;     break;
+        case NK_SYMBOL_TRIANGLE_RIGHT_SMALL: heading = NK_RIGHT;    break;
+        }
+        if (type == NK_SYMBOL_TRIANGLE_DOWN_SMALL || type == NK_SYMBOL_TRIANGLE_RIGHT_SMALL) {
             float sz = NK_MIN(content.w, content.h);
             nk_triangle_from_direction(points, content, sz * 0.1f, sz * 0.1f, heading);
         } else {

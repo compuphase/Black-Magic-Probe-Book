@@ -119,7 +119,8 @@ static void usage(const char *invalid_option)
   printf("Usage: bmserial [options]\n\n"
          "Options:\n"
          "-f=value  Font size to use (value must be 8 or larger).\n"
-         "-h        This help.\n\n"
+         "-h        This help.\n"
+         "-p=port   Open the specified port (if available).\n"
          "-v        Show version information.\n");
   //??? command line options to select the port & frame format
 }
@@ -214,10 +215,13 @@ static DATALIST *datalist_append(const unsigned char *buffer, size_t size, bool 
   bool append;
   if (flags & DFLAG_APPEND) {
     append = true;
+  } else if (flags & DFLAG_SCRIPT) {
+    /* append to the previous data if that previous data is also "script" type */
+    append = (last->flags & DFLAG_SCRIPT);
   } else {
     /* never append a local echo, and obviously don't append if the list is empty,
        but also don't append *to* a local echo */
-    append = (flags == 0 && datalist_root.next != NULL && !datalist_root.next->flags == 0);
+    append = (!(flags & DFLAG_LOCAL) && datalist_root.next != NULL && !(last->flags & DFLAG_LOCAL));
     if (append) {
       /* if there is significant delay between the reception of the two blocks,
          assume separate receptions; but "significant" is different for blocks
@@ -370,6 +374,11 @@ static struct nk_color filter_defcolour(FILTER *root)
 }
 
 
+typedef struct tagSTRINGLIST {
+  struct tagSTRINGLIST *next;
+  char *text;
+} STRINGLIST;
+
 enum {
   TAB_PORTCONFIG,
   TAB_LINESTATUS,
@@ -407,6 +416,8 @@ typedef struct tagAPPSTATE {
   char console_edit[256];       /**< text to transmit */
   int console_activate;         /**< whether the edit line should get the focus (and whether to move the cursor to the end) */
   bool console_isactive;        /**< whether the console is currently active (for history) */
+  STRINGLIST consoleedit_root;  /**< edit history */
+  const STRINGLIST *consoleedit_next; /**< start point in history to search backward from */
   HCOM *hCom;                   /**< handle of the open port */
   unsigned baudrate;            /**< active bitrate */
   int databits;                 /**< 5 to 8 */
@@ -625,6 +636,7 @@ static bool tcl_set_recv(APPSTATE *state, const unsigned char *data, size_t size
   }
   /* concatenate the data to the buffer (if there is new data) */
   if (total <= state->script_recv_size && size > 0) {
+    assert(state->script_recv != NULL);
     memcpy(state->script_recv + state->script_recv_length, data, size);
     state->script_recv_length = total;
   }
@@ -634,27 +646,31 @@ static bool tcl_set_recv(APPSTATE *state, const unsigned char *data, size_t size
   return true;
 }
 
-static int tcl_cmd_exec(struct tcl *tcl, struct tcl_value *args, void *arg)
+static int tcl_cmd_exec(struct tcl *tcl, const struct tcl_value *args, const struct tcl_value *user)
 {
-  (void)arg;
   struct tcl_value *cmd = tcl_list_item(args, 1);
   int retcode = system(tcl_data(cmd));
   tcl_free(cmd);
-  return tcl_result(tcl, (retcode >= 0), tcl_value("", 0));
+  return tcl_result(tcl, (retcode < 0), tcl_value("", 0));
 }
 
-static int tcl_cmd_puts(struct tcl *tcl, struct tcl_value *args, void *arg)
+static int tcl_cmd_puts(struct tcl *tcl, const struct tcl_value *args, const struct tcl_value *user)
 {
-  APPSTATE *state = (APPSTATE*)arg;
+  APPSTATE *state = (APPSTATE*)tcl->user;
   assert(state != NULL);
-  struct tcl_value *text = tcl_list_item(args, 1);
-  tcl_add_message(state, tcl_data(text), tcl_length(text), false);
-  return tcl_result(tcl, true, text);
+  char msg[512] = "";
+  struct tcl_value *text = tcl_list_item(args, tcl_list_length(args) - 1);
+  strlcpy(msg, tcl_data(text), sizearray(msg));
+  if (tcl_list_find(user, "-nonewline") < 0)
+    strlcat(msg, "\n", sizearray(msg));
+  tcl_free(text);
+  tcl_add_message(state, msg, strlen(msg), false);
+  return tcl_result(tcl, 0, tcl_value("", 0));
 }
 
-static int tcl_cmd_wait(struct tcl *tcl, struct tcl_value *args, void *arg)
+static int tcl_cmd_wait(struct tcl *tcl, const struct tcl_value *args, const struct tcl_value *user)
 {
-  APPSTATE *state = (APPSTATE*)arg;
+  APPSTATE *state = (APPSTATE*)tcl->user;
   assert(state != NULL);
   assert(tcl == &state->tcl);
   int nargs = tcl_list_length(args);
@@ -706,7 +722,7 @@ static int tcl_cmd_wait(struct tcl *tcl, struct tcl_value *args, void *arg)
   if (arg2 != NULL)
     tcl_free(arg2);
   /* check whether to run the block on timeout */
-  long result;
+  int result;
   if (timeout && body_arg > 0) {
     struct tcl_value *body = tcl_list_item(args, body_arg);
     result = tcl_eval(tcl, tcl_data(body), tcl_length(body) + 1);
@@ -718,10 +734,9 @@ static int tcl_cmd_wait(struct tcl *tcl, struct tcl_value *args, void *arg)
   return result;
 }
 
-static int tcl_cmd_serial(struct tcl *tcl, struct tcl_value *args, void *arg)
+static int tcl_cmd_serial(struct tcl *tcl, const struct tcl_value *args, const struct tcl_value *user)
 {
-  (void)arg;
-  APPSTATE *state = (APPSTATE*)arg;
+  APPSTATE *state = (APPSTATE*)tcl->user;
   assert(state);
   int nargs = tcl_list_length(args);
   struct tcl_value *subcmd = tcl_list_item(args, 1);
@@ -737,6 +752,7 @@ static int tcl_cmd_serial(struct tcl *tcl, struct tcl_value *args, void *arg)
       tcl_free(v_gobble);
     }
     if (gobble > 0 && gobble < state->script_recv_length) {
+      assert(state->script_recv != NULL);
       state->script_recv_length -= gobble;
       memmove(state->script_recv, state->script_recv + gobble, state->script_recv_length);
     } else if (gobble != 0) {
@@ -805,15 +821,12 @@ static bool tcl_runscript(APPSTATE *state, const unsigned char *data, size_t siz
     return false;
   /* now run it */
   state->script_cache = false;
-  bool ok = tcl_eval(&state->tcl, state->script, strlen(state->script) + 1);
-  if (!ok) {
+  int result = tcl_eval(&state->tcl, state->script, strlen(state->script) + 1);
+  if (result == 1) {
     int line;
-    char symbol[64];
-    const char *err = tcl_errorinfo(&state->tcl, NULL, &line, symbol, sizearray(symbol));
+    const char *err = tcl_errorinfo(&state->tcl, &line);
     char msg[256];
-    sprintf(msg, "Tcl script error: %s, on or after line %d", err, line);
-    if (strlen(symbol) > 0)
-      sprintf(msg + strlen(msg), ": %s", symbol);
+    snprintf(msg, sizearray(msg), "Tcl script error on or after line %d: %s", line, err);
     tcl_add_message(state, msg, strlen(msg), false);
     state->script_block_run = true; /* block the script from running, until it is reloaded */
   }
@@ -823,9 +836,10 @@ static bool tcl_runscript(APPSTATE *state, const unsigned char *data, size_t siz
     free((void*)state->script_recv);
     state->script_recv = NULL;
     state->script_recv_length = 0;
+    state->script_recv_size = 0;
     state->script_cache = false;
   }
-  return ok;
+  return result == 0;
 }
 
 static char *format_time(char *buffer, size_t size, unsigned long timestamp, time_t basetime, int format)
@@ -1131,6 +1145,144 @@ static void collect_portlist(APPSTATE *state)
   }
 }
 
+
+/** stringlist_append() adds a string to the tail of the list. */
+static STRINGLIST *stringlist_append(STRINGLIST *root, const char *text)
+{
+  STRINGLIST *item = (STRINGLIST*)malloc(sizeof(STRINGLIST));
+  if (item == NULL)
+    return NULL;
+  memset(item, 0, sizeof(STRINGLIST));
+  item->text = strdup(text);
+  if (item->text == NULL) {
+    free((void*)item);
+    return NULL;
+  }
+
+  assert(root != NULL);
+  STRINGLIST *tail;
+  for (tail = root; tail->next != NULL; tail = tail->next)
+    {}
+  tail->next = item;
+  return item;
+}
+
+/** stringlist_insert() inserts a string after the passed-in pointer. Pass
+ *  in "root" to insert a string at ad the head of the list.
+ */
+static STRINGLIST *stringlist_insert(STRINGLIST *listpos, const char *text)
+{
+  STRINGLIST *item = (STRINGLIST*)malloc(sizeof(STRINGLIST));
+  if (item == NULL)
+    return NULL;
+  memset(item, 0, sizeof(STRINGLIST));
+  item->text = strdup(text);
+  if (item->text == NULL) {
+    free((void*)item);
+    return NULL;
+  }
+
+  assert(listpos != NULL);
+  item->next = listpos->next;
+  listpos->next = item;
+  return item;
+}
+
+static void stringlist_clear(STRINGLIST *root)
+{
+  assert(root != NULL);
+  while (root->next != NULL) {
+    STRINGLIST *item = root->next;
+    root->next = item->next;
+    assert(item->text != NULL);
+    free((void*)item->text);
+    free((void*)item);
+  }
+}
+
+static void console_history_add(STRINGLIST *root, char *text, bool tail)
+{
+  assert(root != NULL);
+  assert(text != NULL);
+  text[strcspn(text, "\n")] = '\0'; // remove EOL from command
+
+  // If the command history is empty (for example after a new install of
+  // bmdebug), then store the first command
+  if (root->next == NULL) {
+    stringlist_append(root, text);
+    return;
+  }
+
+  // If the current command = most recent command then do not store it again
+  if (strcmp(root->next->text, text) == 0)
+    return;
+
+  // Store the command
+  if (tail)
+    stringlist_append(root, text);
+  else
+    stringlist_insert(root, text);
+}
+
+static const STRINGLIST *console_history_step(const STRINGLIST *root, const STRINGLIST *mark, int forward)
+{
+  assert(root != NULL);
+  if (root->next == NULL)
+    return NULL;
+
+  if (forward) {
+    const STRINGLIST *sentinel = (mark == NULL || mark == root->next) ? root->next : mark;
+    for (mark = root->next; mark->next != NULL && mark->next != sentinel; mark = mark->next)
+      {}
+  } else {
+    mark = (mark == NULL || mark->next == NULL) ? root->next : mark->next;
+  }
+  return mark;
+}
+
+static const STRINGLIST *console_history_match(const STRINGLIST *root, const STRINGLIST *mark,
+                                               char *text, size_t textsize)
+{
+  static char *cache_text = NULL;
+  static int cache_cutoff = 0;
+  /* special case, for clean-up */
+  if (root == NULL && mark == NULL && text == NULL) {
+    if (cache_text != NULL) {
+      free((void*)cache_text);
+      cache_text = NULL;
+    }
+    return NULL;
+  }
+
+  assert(text != NULL);
+
+  /* first check whether the text is unmodified from the last cached string */
+  if (cache_text != NULL && strcmp(text, cache_text) == 0) {
+    assert(cache_cutoff >= 0 && (size_t)cache_cutoff < textsize);
+    text[cache_cutoff] = '\0';
+  } else {
+    cache_cutoff = strlen(text);
+  }
+
+  /* find a string in the history that matches the given text */
+  const STRINGLIST *item = mark;
+  while ((item = console_history_step(root, item, 0)) != NULL && item != mark) {
+    assert(item->text != NULL);
+    if ((int)strlen(item->text) > cache_cutoff && strncmp(item->text, text, cache_cutoff) == 0)
+      break;  /* match found */
+  }
+
+  /* update cache */
+  if (cache_text != NULL) {
+    free((void*)cache_text);
+    cache_text = NULL;
+  }
+  if (item != NULL && item != mark)
+    cache_text = strdup(item->text);
+
+  return item;
+}
+
 static int value_listindex(long value, const char **list, int entries)
 {
   assert(list != NULL);
@@ -1320,6 +1472,9 @@ static void widget_lineinput(struct nk_context *ctx, APPSTATE *state)
         }
         free((void*)buffer);
       }
+      /* save most recent keyboard command in the command history list list */
+      console_history_add(&state->consoleedit_root, state->console_edit, false);
+      state->consoleedit_next = NULL;
       state->console_edit[0] = '\0';
     }
   }
@@ -1940,6 +2095,28 @@ static void button_bar(struct nk_context *ctx, APPSTATE *state)
     state->help_popup = true;
 }
 
+static void handle_kbdinput_main(struct nk_context *ctx, APPSTATE *state)
+{
+  if (state->console_isactive & nk_input_is_key_pressed(&ctx->input, NK_KEY_PAR_UP)) {
+    state->consoleedit_next = console_history_step(&state->consoleedit_root, state->consoleedit_next, 0);
+    if (state->consoleedit_next != NULL)
+      strlcpy(state->console_edit, state->consoleedit_next->text, sizearray(state->console_edit));
+  } else if (state->console_isactive & nk_input_is_key_pressed(&ctx->input, NK_KEY_PAR_DOWN)) {
+    state->consoleedit_next = console_history_step(&state->consoleedit_root, state->consoleedit_next, 1);
+    if (state->consoleedit_next != NULL)
+      strlcpy(state->console_edit, state->consoleedit_next->text, sizearray(state->console_edit));
+  } else if (nk_input_is_key_pressed(&ctx->input, NK_KEY_REFRESH)) {
+    state->consoleedit_next = console_history_match(&state->consoleedit_root, state->consoleedit_next, state->console_edit, sizearray(state->console_edit));
+    if (state->consoleedit_next != NULL) {
+      strlcpy(state->console_edit, state->consoleedit_next->text, sizearray(state->console_edit));
+      state->console_activate = 2;
+    }
+  } else if (nk_input_is_key_pressed(&ctx->input, NK_KEY_ESCAPE)) {
+    state->console_edit[0] = '\0';
+    state->console_activate = 2;
+  }
+}
+
 static void handle_stateaction(APPSTATE *state)
 {
   if (state->reconnect) {
@@ -1978,6 +2155,15 @@ int main(int argc, char *argv[])
   enum nk_collapse_states tab_states[TAB_COUNT];
   SPLITTERBAR splitter_hor;
   load_settings(txtConfigFile, &appstate, tab_states, &splitter_hor);
+  /* read saved recent commands */
+  for (int idx = 1; ; idx++) {
+    char key[32];
+    snprintf(key, sizearray(key), "cmd%d", idx);
+    ini_gets("Commands", key, "", appstate.console_edit, sizearray(appstate.console_edit), txtConfigFile);
+    if (strlen(appstate.console_edit) == 0)
+      break;
+    console_history_add(&appstate.consoleedit_root, appstate.console_edit, true);
+  }
   /* other configuration */
   opt_fontsize = ini_getf("Settings", "fontsize", FONT_HEIGHT, txtConfigFile);
   char opt_fontstd[64] = "", opt_fontmono[64] = "";
@@ -2023,6 +2209,15 @@ int main(int argc, char *argv[])
             strlcpy(opt_fontmono, mono, sizearray(opt_fontmono));
         }
         break;
+      case 'p':
+        ptr = &argv[idx][2];
+        if (*ptr == '=' || *ptr == ':')
+          ptr++;
+        for (int i = 0; i < appstate.numports; i++) {
+          if (stricmp(appstate.portlist[i], ptr) == 0)
+            appstate.curport = i;
+        }
+        break;
       case 'v':
         version();
         return EXIT_SUCCESS;
@@ -2033,11 +2228,11 @@ int main(int argc, char *argv[])
     }
   }
 
-  tcl_init(&appstate.tcl);
-  tcl_register(&appstate.tcl, "exec", tcl_cmd_exec, 2, 2, &appstate);
-  tcl_register(&appstate.tcl, "puts", tcl_cmd_puts, 2, 2, &appstate);
-  tcl_register(&appstate.tcl, "serial", tcl_cmd_serial, 2, 3, &appstate);
-  tcl_register(&appstate.tcl, "wait", tcl_cmd_wait, 2, 4, &appstate);
+  tcl_init(&appstate.tcl, &appstate);
+  tcl_register(&appstate.tcl, "exec", tcl_cmd_exec, 0, 1, 1, NULL);
+  tcl_register(&appstate.tcl, "puts", tcl_cmd_puts, 0, 1, 2, tcl_value("-nonewline", -1));
+  tcl_register(&appstate.tcl, "serial", tcl_cmd_serial, 1, 0, 1, NULL);
+  tcl_register(&appstate.tcl, "wait", tcl_cmd_wait, 0, 1, 3, NULL);
 
   struct nk_context *ctx = guidriver_init("BlackMagic Serial Monitor", canvas_width, canvas_height,
                                           GUIDRV_RESIZEABLE | GUIDRV_TIMER,
@@ -2111,10 +2306,8 @@ int main(int argc, char *argv[])
       help_popup(ctx, &appstate, (float)canvas_width, (float)canvas_height);
 
       /* keyboard input (hotkeys) */
-      if (nk_input_is_key_pressed(&ctx->input, NK_KEY_ESCAPE)) {
-        appstate.console_edit[0] = '\0';
-        appstate.console_activate = 2;
-      }
+      if (!appstate.help_popup)
+        handle_kbdinput_main(ctx, &appstate);
 
       /* mouse cursor shape */
       if (nk_is_popup_open(ctx))
@@ -2136,6 +2329,17 @@ int main(int argc, char *argv[])
   save_settings(txtConfigFile, &appstate, tab_states, &splitter_hor);
   sprintf(valstr, "%d %d", canvas_width, canvas_height);
   ini_puts("Settings", "size", valstr, txtConfigFile);
+  /* save history of commands */
+  ini_puts("Commands", NULL, NULL, txtConfigFile);  /* erase section first */
+  int idx = 1;
+  for (appstate.consoleedit_next = appstate.consoleedit_root.next; appstate.consoleedit_next != NULL; appstate.consoleedit_next = appstate.consoleedit_next->next) {
+    char key[32];
+    snprintf(key, sizearray(key), "cmd%d", idx);
+    ini_puts("Commands", key, appstate.consoleedit_next->text, txtConfigFile);
+    if (idx++ > 50)
+      break;  /* limit the number of memorized commands */
+  }
+  console_history_match(NULL, NULL, NULL, 0); /* clear history cache */
 
   tcl_destroy(&appstate.tcl);
   if (appstate.script != NULL)
@@ -2143,6 +2347,7 @@ int main(int argc, char *argv[])
   if (appstate.script_recv != NULL)
     free((void*)appstate.script_recv);
   filter_clear(&appstate.filter_root);
+  stringlist_clear(&appstate.consoleedit_root);
   datalist_clear();
   free_portlist(&appstate);
   guidriver_close();

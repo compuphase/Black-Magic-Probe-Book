@@ -63,6 +63,11 @@ of digits. When typing \`7B32, two bytes are sent (with decimal values 123 and 5
 respectively), and in that order. The hexadecimal digits may be specified in
 upper case or lower case.
 
+The input field keeps a history of recently transmitted commands. Use the key
+combinations Ctrl+ArrowUp and Ctrl+ArrowDown to browse through the history.
+The key combination Ctrl+R matches the characters already typed into the edit
+field with a command in the history; thus, Ctrl+R completes the command.
+
 ---
 See also:
 > [Display options]

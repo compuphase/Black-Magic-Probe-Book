@@ -972,38 +972,39 @@ enum {
              (app).curstate = (state); \
         } while (0)
 
-static int tcl_cmd_exec(struct tcl *tcl, struct tcl_value *args, void *arg)
+static int tcl_cmd_exec(struct tcl *tcl, const struct tcl_value *args, const struct tcl_value *user)
 {
-  (void)arg;
+  (void)user;
   struct tcl_value *cmd = tcl_list_item(args, 1);
   int retcode = system(tcl_data(cmd));
   tcl_free(cmd);
-  return tcl_result(tcl, (retcode >= 0), tcl_value("", 0));
+  return tcl_result(tcl, (retcode < 0), tcl_value("", 0));
 }
 
-static int tcl_cmd_syscmd(struct tcl *tcl, struct tcl_value *args, void *arg)
+static int tcl_cmd_syscmd(struct tcl *tcl, const struct tcl_value *args, const struct tcl_value *user)
 {
-  (void)arg;
+  (void)user;
   struct tcl_value *cmd = tcl_list_item(args, 1);
   int result = gdbrsp_xmit(tcl_data(cmd), tcl_length(cmd));
   tcl_free(cmd);
-  return tcl_result(tcl, (result >= 0), tcl_value("", 0));
+  return tcl_result(tcl, (result < 0), tcl_value("", 0));
 }
 
-static int tcl_cmd_puts(struct tcl *tcl, struct tcl_value *args, void *arg)
+static int tcl_cmd_puts(struct tcl *tcl, const struct tcl_value *args, const struct tcl_value *user)
 {
-  (void)arg;
-  struct tcl_value *text = tcl_list_item(args, 1);
   char msg[512] = "";
+  struct tcl_value *text = tcl_list_item(args, tcl_list_length(args) - 1);
   strlcpy(msg, tcl_data(text), sizearray(msg));
-  strlcat(msg, "\n", sizearray(msg));
+  if (tcl_list_find(user, "-nonewline") < 0)
+    strlcat(msg, "\n", sizearray(msg));
+  tcl_free(text);
   log_addstring(msg);
-  return tcl_result(tcl, true, text);
+  return tcl_result(tcl, 0, tcl_value("", 0));
 }
 
-static int tcl_cmd_wait(struct tcl *tcl, struct tcl_value *args, void *arg)
+static int tcl_cmd_wait(struct tcl *tcl, const struct tcl_value *args, const struct tcl_value *user)
 {
-  volatile APPSTATE *state = (APPSTATE*)arg;
+  volatile APPSTATE *state = (APPSTATE*)tcl->user;
   assert(state != NULL);
   int nargs = tcl_list_length(args);
   struct tcl_value *arg1 = tcl_list_item(args, 1);
@@ -1048,13 +1049,13 @@ static int tcl_cmd_wait(struct tcl *tcl, struct tcl_value *args, void *arg)
     free((void*)varname);
   /* check whether to run the block on timeout */
   bool is_timeout = (tstamp - tstamp_start >= timeout_ms);
-  long result;
+  int result;
   if (is_timeout && body_arg > 0 && state->isrunning_tcl == THRD_RUNNING) {
     struct tcl_value *body = tcl_list_item(args, body_arg);
     result = tcl_eval(tcl, tcl_data(body), tcl_length(body) + 1);
     tcl_free(body);
   } else {
-    result = tcl_result(tcl, state->isrunning_tcl == THRD_RUNNING, tcl_value(is_timeout ? "0" : "1", 1));
+    result = tcl_result(tcl, state->isrunning_tcl != THRD_RUNNING, tcl_value(is_timeout ? "0" : "1", 1));
   }
   return result;
 }
@@ -1065,16 +1066,12 @@ static int tcl_thread(void *arg)
   APPSTATE *state = (APPSTATE*)arg;
   assert(state != NULL);
   assert(state->tcl_script != NULL);
-  int ok = tcl_eval(&state->tcl, state->tcl_script, strlen(state->tcl_script) + 1);
-  if (!ok) {
+  int result = tcl_eval(&state->tcl, state->tcl_script, strlen(state->tcl_script) + 1);
+  if (result == 1) {
     int line;
-    char symbol[64];
-    const char *err = tcl_errorinfo(&state->tcl, NULL, &line, symbol, sizearray(symbol));
+    const char *err = tcl_errorinfo(&state->tcl, &line);
     char msg[256];
-    sprintf(msg, "^1Tcl script error: %s, on or after line %d", err, line);
-    if (strlen(symbol) > 0)
-      sprintf(msg + strlen(msg), ": %s", symbol);
-    strcat(msg, "\n");
+    snprintf(msg, sizearray(msg), "^1Tcl script error on or after line %d: %s\n", line, err);
     log_addstring(msg);
   }
   free(state->tcl_script);
@@ -1082,7 +1079,7 @@ static int tcl_thread(void *arg)
   pointer_setstyle(CURSOR_NORMAL);
   if (state->isrunning_tcl != THRD_ABORT)
     state->isrunning_tcl = THRD_COMPLETED;
-  return ok;
+  return result == 0;
 }
 
 static bool tcl_preparescript(APPSTATE *state)
@@ -2218,11 +2215,11 @@ int main(int argc, char *argv[])
   if (strlen(appstate.ParamFile) > 0)
     strlcat(appstate.ParamFile, ".bmcfg", sizearray(appstate.ParamFile));
 
-  tcl_init(&appstate.tcl);
-  tcl_register(&appstate.tcl, "exec", tcl_cmd_exec, 2, 2, NULL);
-  tcl_register(&appstate.tcl, "puts", tcl_cmd_puts, 2, 2, NULL);
-  tcl_register(&appstate.tcl, "syscmd", tcl_cmd_syscmd, 2, 2, NULL);
-  tcl_register(&appstate.tcl, "wait", tcl_cmd_wait, 2, 4, &appstate);
+  tcl_init(&appstate.tcl, &appstate);
+  tcl_register(&appstate.tcl, "exec", tcl_cmd_exec, 0, 1, 1, NULL);
+  tcl_register(&appstate.tcl, "puts", tcl_cmd_puts, 0, 1, 2, tcl_value("-nonewline", -1));
+  tcl_register(&appstate.tcl, "syscmd", tcl_cmd_syscmd, 0, 1, 1, NULL);
+  tcl_register(&appstate.tcl, "wait", tcl_cmd_wait, 0, 1, 3, NULL);
   rspreply_init();
 
   struct nk_context *ctx = guidriver_init("BlackMagic Flash Programmer",

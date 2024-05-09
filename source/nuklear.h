@@ -534,6 +534,7 @@ enum nk_symbol_type {
     NK_SYMBOL_MINUS,
     NK_SYMBOL_TRIPLE_DOT,
     NK_SYMBOL_TRIANGLE_DOWN_SMALL,  /* 20% smaller (10% margin around symbol) */
+    NK_SYMBOL_TRIANGLE_RIGHT_SMALL,
     NK_SYMBOL_CIRCLE_SOLID_SMALL,   /* 60% smaller */
     NK_SYMBOL_CIRCLE_OUTLINE_SMALL, /* 60% smaller */
     NK_SYMBOL_LINK,

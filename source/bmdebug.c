@@ -898,7 +898,7 @@ static bool console_autocomplete(char *text, size_t textsize, const DWARF_SYMBOL
                     "running serial stack status support svd trace user-defined" },
     { "info", NULL, "args breakpoints frame functions locals scope set serial "
                     "sources stack svd trace variables vtbl %var" },
-    { "list", NULL, "%func %var %source" },
+    { "list", "l", "%func %var %source" },
     { "load", NULL, NULL },
     { "monitor", "mon", "auto_scan connect_srst frequency halt_timeout hard_srst "
                         "heapinfo jtag_scan morse option swdp_scan reset rtt targets "
@@ -1292,7 +1292,8 @@ static void console_history_add(STRINGLIST *root, char *text, bool tail)
   assert(text != NULL);
   text[strcspn(text, "\n")] = '\0'; // remove EOL from command
 
-  // If the command history is empty (ex new install of bmdebug) then store the first command
+  // If the command history is empty (for example after a new install of
+  // bmdebug), then store the first command
   if (root->next == NULL) {
     stringlist_append(root, text, 0);
     return;
@@ -3037,21 +3038,23 @@ static char *enquote(char *dest, const char *source, size_t dest_size)
   return dest;
 }
 
-
-static int check_stopped(int *filenr, int *linenr, uint32_t *address)
+/** check_stopped() checks for a "stop" status in the GDB reply; parameters
+ *  `filenr`, `linenr` and `address` are unchanged when not stopped.
+ */
+static bool check_stopped(int *filenr, int *linenr, uint32_t *address)
 {
-  STRINGLIST *item;
-  int lastfound = 0;
-  int last_is_stopped = 0;
+  bool lastfound = false;
+  bool last_is_stopped = false;
 
+  STRINGLIST *item;
   while ((item = stringlist_getlast(&consolestring_root, STRFLG_EXEC, STRFLG_HANDLED)) != NULL) {
     assert(item->text != NULL);
     item->flags |= STRFLG_HANDLED;
     if (!lastfound) {
-      lastfound = 1;
+      lastfound = true;
       if (strncmp(item->text, "stopped", 7) == 0) {
         const char *head, *tail;
-        last_is_stopped = 1;
+        last_is_stopped = true;
         if ((head = strstr(item->text, "file=")) != NULL) {
           char filename[_MAX_PATH];
           unsigned len;
@@ -4645,8 +4648,9 @@ static bool handle_list_cmd(const char *command, const DWARF_SYMBOLLIST *symbolt
                             const DWARF_PATHLIST *filetable)
 {
   command = skipwhite(command);
-  if (TOKEN_EQU(command, "list", 4)) {
-    const char *p1 = skipwhite(command + 4);
+  if (TOKEN_EQU(command, "list", 4) || TOKEN_EQU(command, "l", 1)) {
+    int len = TOKEN_EQU(command, "list", 4) ? 4 : 1;
+    const char *p1 = skipwhite(command + len);
     if (*p1 == '+' || *p1 == '\0') {
       int linecount = source_linecount(source_cursorfile);
       source_cursorline += source_vp_rows;      /* "list" & "list +" */
@@ -4665,9 +4669,10 @@ static bool handle_list_cmd(const char *command, const DWARF_SYMBOLLIST *symbolt
         return true;
       }
     } else {
-      const DWARF_SYMBOLLIST *sym;              /* "list filename", "list filename:#" or "list function" */
-      unsigned line = 0, idx = UINT_MAX;
-      sym = dwarf_sym_from_name(symboltable, p1, source_cursorfile, source_cursorline);
+      unsigned line = 0, idx = UINT_MAX;        /* "list filename", "list filename:#" or "list function" */
+      const DWARF_SYMBOLLIST *sym = dwarf_sym_from_name(symboltable, p1, source_cursorfile, source_cursorline);
+      if (sym == NULL)
+        sym = dwarf_sym_from_name(symboltable, p1, -1, -1);
       if (sym != NULL) {
         const char *path = dwarf_path_from_fileindex(filetable, sym->fileindex);
         if (path != NULL)
@@ -4678,6 +4683,7 @@ static bool handle_list_cmd(const char *command, const DWARF_SYMBOLLIST *symbolt
         if (p2 != NULL) {
           *p2++ = '\0';
           line = (int)strtol(p2, NULL, 10);
+          striptrailing((char*)p1);
         } else {
           line = 1;
         }
@@ -5819,6 +5825,7 @@ static void usage(const char *invalid_option)
          "Options:\n"
          "-f=value  Font size to use (value must be 8 or larger).\n"
          "-g=path   Path to the GDB executable to use.\n"
+         "-mi=value Set the version of GDB/MI to use.\n"
          "-t=value  Target to attach to, for systems with multiple targets\n"
          "-h        This help.\n"
          "-v        Show version information.\n");
@@ -5929,6 +5936,7 @@ typedef struct tagAPPSTATE {
   const char *monitor_cmds;     /**< list of "monitor" commands (target & probe dependent) */
   char GDBpath[_MAX_PATH];      /**< path to GDB executable */
   TASK gdb_task;                /**< GDB process */
+  int gdbmi_version;            /**< version of the GDB/MI interface to use (1..4) */
   char *cmdline;                /**< command & response buffer (for GDB task) */
   int trace_status;             /**< status of TRACESWO */
   unsigned char trace_endpoint; /**< USB endpoint for TRACESWO */
@@ -6653,7 +6661,7 @@ static void console_view(struct nk_context *ctx, APPSTATE *state,
             TOKEN_EQU(state->console_edit, "dprintf", 7))
           state->refreshflags |= REFRESH_BREAKPOINTS | IGNORE_DOUBLE_DONE;
 
-        // save most recent keyboard command in the command history list list
+        /* save most recent keyboard command in the command history list list */
         console_history_add(&state->consoleedit_root, state->console_edit, false);
         state->consoleedit_next = NULL;
         state->console_edit[0] = '\0';
@@ -6964,7 +6972,7 @@ static void panel_configuration(struct nk_context *ctx, APPSTATE *state,
 }
 
 static void panel_breakpoints(struct nk_context *ctx, APPSTATE *state,
-                              enum nk_collapse_states *tab_state)
+                              enum nk_collapse_states *tab_state, float rowheight)
 {
   assert(ctx != NULL);
   assert(state != NULL);
@@ -6994,11 +7002,11 @@ static void panel_breakpoints(struct nk_context *ctx, APPSTATE *state,
     if (nk_group_begin(ctx, "breakpoints", 0)) {
       for (BREAKPOINT *bp = breakpoint_root.next; bp != NULL; bp = bp->next) {
         int en;
-        nk_layout_row_begin(ctx, NK_STATIC, ROW_HEIGHT, 3);
+        nk_layout_row_begin(ctx, NK_STATIC, rowheight, 4);
         nk_layout_row_push(ctx, LABEL_WIDTH);
         snprintf(label, sizearray(label), "%d", bp->number);
         en = bp->enabled;
-        if (nk_checkbox_label(ctx, label, &en, NK_TEXT_LEFT)) {
+        if (checkbox_tooltip(ctx, label, &en, NK_TEXT_LEFT, "Enable / disable breakpoint")) {
           RESETSTATE(state, STATE_BREAK_TOGGLE);
           state->stateparam[0] = (en == 0) ? STATEPARAM_BP_DISABLE : STATEPARAM_BP_ENABLE;
           state->stateparam[1] = bp->number;
@@ -7013,11 +7021,17 @@ static void panel_breakpoints(struct nk_context *ctx, APPSTATE *state,
           strlcpy(label, "??", sizearray(label));
         }
         nk_label(ctx, label, NK_TEXT_LEFT);
-        nk_layout_row_push(ctx, ROW_HEIGHT);
-        if (nk_button_symbol(ctx, NK_SYMBOL_X)) {
+        nk_layout_row_push(ctx, rowheight);
+        if (button_symbol_tooltip(ctx, NK_SYMBOL_X, NK_KEY_NONE, TRUE, "Delete breakpoint")) {
           RESETSTATE(state, STATE_BREAK_TOGGLE);
           state->stateparam[0] = STATEPARAM_BP_DELETE;
           state->stateparam[1] = bp->number;
+        }
+        nk_layout_row_push(ctx, rowheight);
+        if (button_symbol_tooltip(ctx, NK_SYMBOL_TRIANGLE_RIGHT_SMALL, NK_KEY_NONE, TRUE, "Go to breakpoint location")) {
+          char cmd[sizeof(label) + 10];
+          sprintf(cmd, "list %s", label);
+          handle_list_cmd(cmd, &dwarf_symboltable, &dwarf_filetable);
         }
       }
       if (breakpoint_root.next == NULL) {
@@ -7218,8 +7232,8 @@ static void panel_watches(struct nk_context *ctx, APPSTATE *state,
         } else {
           nk_label(ctx, "?", NK_TEXT_LEFT);
         }
-        nk_layout_row_push(ctx, ROW_HEIGHT);
-        if (nk_button_symbol(ctx, NK_SYMBOL_X)) {
+        nk_layout_row_push(ctx, rowheight);
+        if (button_symbol_tooltip(ctx, NK_SYMBOL_X, NK_KEY_NONE, TRUE, "Delete watch")) {
           RESETSTATE(state, STATE_WATCH_TOGGLE);
           state->stateparam[0] = STATEPARAM_WATCH_DEL;
           state->stateparam[1] = watch->seqnr;
@@ -7243,7 +7257,7 @@ static void panel_watches(struct nk_context *ctx, APPSTATE *state,
                                             state->watch_edit, sizearray(state->watch_edit),
                                             nk_filter_ascii);
     nk_layout_row_push(ctx, ROW_HEIGHT);
-    if ((nk_button_symbol(ctx, NK_SYMBOL_PLUS) || (result & NK_EDIT_COMMITED))
+    if ((button_symbol_tooltip(ctx, NK_SYMBOL_PLUS, NK_KEY_NONE, TRUE, "Add watch") || (result & NK_EDIT_COMMITED))
         && state->curstate == STATE_STOPPED && strlen(state->watch_edit) > 0) {
       RESETSTATE(state, STATE_WATCH_TOGGLE);
       state->stateparam[0] = STATEPARAM_WATCH_SET;
@@ -7618,17 +7632,24 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
             pathsearch(state->GDBpath, sizearray(state->GDBpath), "gdb-multiarch");
 #       endif
       }
-      if (strlen(state->GDBpath) > 0 && task_launch(state->GDBpath, "--interpreter=mi2", &state->gdb_task)) {
-        RESETSTATE(state, STATE_SCAN_BMP); /* GDB started, now find Black Magic Probe */
-      } else {
-        if (STATESWITCH(state)) {
-          if (strlen(state->GDBpath) == 0)
-            console_add("Path to GDB is not set, check the configuration\n", STRFLG_ERROR);
-          else
-            console_add("GDB failed to launch, check the configuration\n", STRFLG_ERROR);
-        }
+      if (strlen(state->GDBpath) ==0) {
+        if (STATESWITCH(state))
+          console_add("Path to GDB is not set, check the configuration\n", STRFLG_ERROR);
         MARKSTATE(state);
         set_idle_time(1000); /* repeat scan on timeout (but don't sleep the GUI thread) */
+      } else {
+        char str[100];
+        sprintf(state->cmdline, "Launching GDB, using GDB/MI version %d\n", state->gdbmi_version);
+        console_add(str, STRFLG_STATUS);
+        sprintf(str, "--interpreter=mi%d", state->gdbmi_version);
+        if (strlen(state->GDBpath) > 0 && task_launch(state->GDBpath, str, &state->gdb_task)) {
+          RESETSTATE(state, STATE_SCAN_BMP); /* GDB started, now find Black Magic Probe */
+        } else {
+          if (STATESWITCH(state))
+            console_add("GDB failed to launch, check the configuration\n", STRFLG_ERROR);
+          MARKSTATE(state);
+          set_idle_time(1000); /* repeat scan on timeout (but don't sleep the GUI thread) */
+        }
       }
       break;
     case STATE_SCAN_BMP:
@@ -8259,6 +8280,8 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
       if (STATESWITCH(state)) {
         const DWARF_SYMBOLLIST *entry = dwarf_sym_from_name(&dwarf_symboltable, state->EntryPoint, -1, -1);
         if (entry != NULL && entry->code_range != 0) {
+          source_cursorfile = source_execfile = entry->fileindex;
+          source_cursorline = entry->line;
           MOVESTATE(state, STATE_START);  /* main() found, restart program at main */
           break;
         }
@@ -8266,7 +8289,7 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
       if (!state->atprompt)
         break;
       if (STATESWITCH(state)) {
-        /* check whether the there is a function "main" */
+        /* check whether the there is a function "main" through GDB */
         assert(strlen(state->EntryPoint) != 0);
         snprintf(state->cmdline, CMD_BUFSIZE, "info functions ^%s$\n", state->EntryPoint);
         task_stdin(&state->gdb_task, state->cmdline);
@@ -8282,12 +8305,13 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
         if (ptr != NULL && (ptr == item->text || *(ptr - 1) == ' ')) {
           MOVESTATE(state, STATE_START);    /* main() found, restart program at main */
         } else {
-          check_stopped(&source_execfile, &source_execline, &exec_address);
-          source_cursorfile = source_execfile;
-          if (state->disassemble_mode)
-            source_cursorline = line_addr2phys(source_execfile, exec_address);
-          else
-            source_cursorline = line_source2phys(source_execfile, source_execline);
+          if (check_stopped(&source_execfile, &source_execline, &exec_address)) {
+            source_cursorfile = source_execfile;
+            if (state->disassemble_mode)
+              source_cursorline = line_addr2phys(source_execfile, exec_address);
+            else
+              source_cursorline = line_source2phys(source_execfile, source_execline);
+          }
           MOVESTATE(state, STATE_STOPPED);  /* main() not found, stay stopped */
           state->cont_is_run = true;        /* but when "Cont" is pressed, "run" is performed */
         }
@@ -8982,6 +9006,7 @@ int main(int argc, char *argv[])
   get_configfile(txtConfigFile, sizearray(txtConfigFile), "bmdebug.ini");
 
   ini_gets("Settings", "gdb", "", appstate.GDBpath, sizearray(appstate.GDBpath), txtConfigFile);
+  appstate.gdbmi_version = ini_getl("Settings", "gdb/mi", 3, txtConfigFile);
   ini_gets("Settings", "size", "", valstr, sizearray(valstr), txtConfigFile);
   if (sscanf(valstr, "%d %d", &canvas_width, &canvas_height) != 2 || canvas_width < 100 || canvas_height < 50) {
     canvas_width = WINDOW_WIDTH;
@@ -9073,6 +9098,13 @@ int main(int argc, char *argv[])
         if (*ptr == '=' || *ptr == ':')
           ptr++;
         strlcpy(appstate.GDBpath, ptr, sizearray(appstate.GDBpath));
+        break;
+      case 'm':
+        if (argv[idx][2] == 'i') {
+          if (*ptr == '=' || *ptr == ':')
+            ptr++;
+          appstate.gdbmi_version = strtol(ptr, NULL, 10);
+        }
         break;
       case 't':
         ptr = &argv[idx][2];
@@ -9242,7 +9274,7 @@ int main(int argc, char *argv[])
       /* right column */
       if (nk_group_begin(ctx, "right", NK_WINDOW_BORDER)) {
         panel_configuration(ctx, &appstate, &tab_states[TAB_CONFIGURATION]);
-        panel_breakpoints(ctx, &appstate, &tab_states[TAB_BREAKPOINTS]);
+        panel_breakpoints(ctx, &appstate, &tab_states[TAB_BREAKPOINTS], opt_fontsize);
         panel_locals(ctx, &appstate, &tab_states[TAB_LOCALS], opt_fontsize);
         panel_watches(ctx, &appstate, &tab_states[TAB_WATCHES], opt_fontsize);
         panel_registers(ctx, &appstate, &tab_states[TAB_REGISTERS], opt_fontsize);
@@ -9291,6 +9323,7 @@ int main(int argc, char *argv[])
 
   /* save settings */
   ini_puts("Settings", "gdb", appstate.GDBpath, txtConfigFile);
+  ini_putl("Settings", "gdb/mi", appstate.gdbmi_version, txtConfigFile);
   snprintf(valstr, sizearray(valstr), "%d %d", canvas_width, canvas_height);
   ini_puts("Settings", "size", valstr, txtConfigFile);
   snprintf(valstr, sizearray(valstr), "%.2f %.2f", splitter_hor.ratio, splitter_ver.ratio);

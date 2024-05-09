@@ -169,7 +169,7 @@ int main(int argc, char *argv[])
   TCHAR *ptr;
   int argbase = 1;
   long seqnr = 0;
-  int print_all = 1;
+  bool print_all = true;
 
   if (argc >= 2 && (argv[1][0] == '-' || argv[1][0] == '/' || argv[1][0] == '?')) {
     printf("BMScan detects which ports a Black Magic Probe is connected to. If multiple\n"
@@ -204,7 +204,7 @@ int main(int argc, char *argv[])
       strcpy(serial, argv[1]);
     else
       seqnr -= 1;
-    print_all = 0;
+    print_all = false;
     argbase = 2;
   } else {
     seqnr = 0;

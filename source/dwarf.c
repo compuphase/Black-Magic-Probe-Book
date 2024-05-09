@@ -778,7 +778,7 @@ static void line_deletetable(DWARF_LINETABLE *root)
 static DWARF_SYMBOLLIST *symname_insert(DWARF_SYMBOLLIST *root,const char *name,
                                         unsigned code_addr,unsigned code_range,
                                         unsigned data_addr,int fileindex,int line,
-                                        int external)
+                                        int external,int is_inline)
 {
   DWARF_SYMBOLLIST *cur,*pred;
   char demangled[256];
@@ -804,12 +804,15 @@ static DWARF_SYMBOLLIST *symname_insert(DWARF_SYMBOLLIST *root,const char *name,
   cur->fileindex=fileindex;
   cur->line=line;
   cur->line_limit=0;  /* updated later */
+  cur->flags=0;
   if (external)
     cur->scope=SCOPE_EXTERNAL;
-  else if (code_range>0)
+  else if (code_range>0 || is_inline)
     cur->scope=SCOPE_UNIT;
   else
     cur->scope=SCOPE_UNKNOWN;
+  if (is_inline)
+    cur->flags|=DWARF_FLAG_INLINE;
   /* insert sorted on name */
   for (pred=root; pred->next!=NULL && strcmp(name,pred->next->name)>0; pred=pred->next)
     {}
@@ -1568,6 +1571,7 @@ static bool dwarf_infotable(FILE *fp,const DWARFTABLE tables[],
     uint32_t code_addr=0, code_addr_end=0;
     uint32_t data_addr=0;
     int external=0;
+    int is_inline=0;
     int declaration=0;
     int level=0;
     int hdrsize;
@@ -1678,6 +1682,9 @@ static bool dwarf_infotable(FILE *fp,const DWARFTABLE tables[],
             if (abbrev->tag==DW_TAG_variable)
               external=(int)value;
             break;
+          case DW_AT_inline:
+            is_inline=(int)value;
+            break;
           case DW_AT_declaration:
             declaration=(int)value;
             break;
@@ -1695,11 +1702,12 @@ static bool dwarf_infotable(FILE *fp,const DWARFTABLE tables[],
         assert(code_addr_end>=code_addr);
         if (name[0]!='\0' && file>=0)
           symname_insert(symboltable,name,code_addr,code_addr_end-code_addr,
-                         data_addr,file,line,external);
+                         data_addr,file,line,external,is_inline);
         name[0]='\0';
         code_addr=code_addr_end=0;
         data_addr=0;
         external=0;
+        is_inline=0;
         declaration=0;
         file=-1;
       }
@@ -1848,6 +1856,16 @@ const DWARF_SYMBOLLIST *dwarf_sym_from_name(const DWARF_SYMBOLLIST *symboltable,
     if (sym->scope==SCOPE_EXTERNAL
         && strcmp(sym->name,name)==0)
       return sym;
+  }
+  /* check again for static globals, but now ignoring the file index (so find
+     a static symbol in a different file) */
+  if (fileindex<0) {
+    for (sym=symboltable->next; sym!=NULL; sym=sym->next) {
+      assert(sym->name!=NULL);
+      if (sym->scope==SCOPE_UNIT
+          && strcmp(sym->name,name)==0)
+        return sym;
+    }
   }
   return NULL;
 }

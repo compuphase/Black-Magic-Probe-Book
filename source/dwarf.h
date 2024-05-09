@@ -35,6 +35,8 @@ enum {
   SCOPE_FUNCTION,       /* local variable (including static locals & function arguments) */
 };
 
+#define DWARF_FLAG_INLINE 0x0001
+
 typedef struct tagDWARF_SYMBOLLIST {
   struct tagDWARF_SYMBOLLIST *next;
   char *name;
@@ -42,9 +44,10 @@ typedef struct tagDWARF_SYMBOLLIST {
   unsigned code_range;  /* size of the code (functions only, 0 for variables) */
   unsigned data_addr;   /* variable address (globals & statics only), 0 for a function or a local variable */
   int line;             /* line number of the declaration/definition */
-  int line_limit;       /* last line of the definition takes (functions) or line at which the scope ends (variables) */
+  int line_limit;       /* last line of the definition (functions) or line at which the scope ends (variables) */
   short fileindex;      /* file where the declaration/definition appears in */
   short scope;
+  unsigned flags;
 } DWARF_SYMBOLLIST;
 
 typedef struct tagDWARF_LINEENTRY {
@@ -60,8 +63,8 @@ typedef struct tagDWARF_LINETABLE {
   unsigned size;        /* number of allocated entries */
 } DWARF_LINETABLE;
 
-#define DWARF_IS_FUNCTION(sym)  ((sym)->code_range>0)
-#define DWARF_IS_VARIABLE(sym)  ((sym)->code_range==0)
+#define DWARF_IS_FUNCTION(sym)  ((sym)->code_range>0 || ((sym)->flags & DWARF_FLAG_INLINE) != 0)
+#define DWARF_IS_VARIABLE(sym)  ((sym)->code_range==0 && ((sym)->flags & DWARF_FLAG_INLINE) == 0)
 
 enum {
   DWARF_SORT_NAME,

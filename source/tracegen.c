@@ -783,8 +783,6 @@ int main(int argc, char *argv[])
   if (!ctf_parse_init(infile))
     return EXIT_FAILURE;  /* error message already issued via ctf_error_notify() */
   if (ctf_parse_run()) {
-    bool ok = true;       /* toggled to false when an error message is printed */
-
     /* create mask from streams */
     unsigned long stream_mask = ~0;
     if (opt_flags & FLAG_STREAM_MASK) {
@@ -796,6 +794,7 @@ int main(int argc, char *argv[])
       }
     }
 
+    bool ok = true;       /* toggled to false when an error message is printed */
     strlcat(outfile, ".h", sizearray(outfile));
     FILE *fp = fopen(outfile, "wt");
     if (fp != NULL) {
