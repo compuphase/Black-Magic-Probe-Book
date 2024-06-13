@@ -26,8 +26,8 @@
 #endif
 
 #define BMP_VID           0x1d50
-#define BMP_PID_DFU       0x6017/* legacy versions, current version has DFU as an interface */
 #define BMP_PID           0x6018
+#define BMP_PID_DFU       0x6017/* legacy versions, current version has DFU as an interface */
 #define BMP_IF_GDB        0     /* interface 0 -> GDB server */
 #define BMP_IF_UART       2     /* interface 2 -> 3.3V TTL UART */
 #define BMP_IF_DFU        4
