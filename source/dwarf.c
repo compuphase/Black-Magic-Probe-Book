@@ -3,7 +3,7 @@
  * variable symbols are stored.
  * For the moment, only 32-bit Little-Endian executables are supported.
  *
- * Copyright (c) 2015,2019-2023 CompuPhase
+ * Copyright (c) 2015,2019-2024 CompuPhase
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -91,11 +91,11 @@ typedef struct tagUNIT_HDR64 {
   /* more fields may follow, depending on unit_type */
 } PACKED UNIT_HDR64;
 
-typedef struct tagDWARF_PROLOGUE32 {  /* fixed part of the header */
+typedef struct tagDWARF_PROLOGUE32 {  /* fixed part of the header (line number table) */
   uint32_t total_length;    /* length of the line number table, minus the 4 bytes for this total_length field */
   uint16_t version;         /* prologue format version */
   uint8_t  address_size;    /* DWARF 5+, size in bytes of an address */
-  uint8_t  segment_sel_size;/* DWARF 5+, size in bytes of a segment selector on the target system */
+  uint8_t  segment_sel_size;/* DWARF 5, size in bytes of a segment selector on the target system (reserved in DWARF 6) */
   uint32_t prologue_length; /* offset to the first opcode of the line number program (relative to this prologue_length field) */
   uint8_t  min_instruction_size;
   uint8_t  max_oper_per_instruction;  /* DWARF 4+, for VLIW architectures */
@@ -109,12 +109,12 @@ typedef struct tagDWARF_PROLOGUE32 {  /* fixed part of the header */
                  the sequence itself ends with a zero-byte) */
   /* DWARF 2..4, file names: base name, location, modification date, size */
 
-  /* DWARF 5+, directory entry formats (length-prefixed array of ULEB128 pairs) */
-  /* DWARF 5+, include directories, a length-prefixed sequence of entries in a
-               format described in the earier table */
-  /* DWARF 5+, filename entry formats (length-prefixed array of ULEB128 pairs) */
-  /* DWARF 5+, filenames, a length-prefixed sequence of entries in a format
-               described in the earier table */
+  /* DWARF 5+, include directories as a sequence of two lists, and each list
+               prefixed by a count of entries; the first list describes the
+               fields and formats of the second list */
+  /* DWARF 5+, filenames as a sequence of two lists, and each list prefixed by
+               a count of entries; the first list describes the fields and
+               formats of the second list */
 } PACKED DWARF_PROLOGUE32;
 
 typedef struct tagSTATE {
@@ -123,11 +123,11 @@ typedef struct tagSTATE {
   int line;
   int column;
   int view;
-  int is_stmt;          /* whether the address is the start of a statement */
-  int basic_block;      /* whether the address is the start of a basic block */
-  int end_seq;
-  int prologue_end;     /* DWARF 3+, function prologue end */
-  int epiloge_begin;    /* DWARF 3+, function epilogue start */
+  bool is_stmt;         /* whether the address is the start of a statement */
+  bool basic_block;     /* whether the address is the start of a basic block */
+  bool end_seq;
+  bool prologue_end;    /* DWARF 3+, function prologue end */
+  bool epiloge_begin;   /* DWARF 3+, function epilogue start */
   int isa;              /* DWARF 3+, instruction set architecture */
   unsigned op_index;    /* DWARF 4+, index within a "Very-Long-Instruction-Word" (VLIW) */
   int discriminator;    /* DWARF 4+, compiler-assigned id for a "block" to which the instruction belongs */
@@ -494,6 +494,14 @@ typedef struct tagPUBNAME_HDR32 {
 #define DW_OP_lo_user                 0xe0
 #define DW_OP_hi_user                 0xff
 
+/* content descriptions, DWARF 5+ */
+#define DW_LNCT_path                  1     /* a path (directory or filename) */
+#define DW_LNCT_directory_index       2     /* a reference to a directory in the earlier loaded table (to be prefixed to the filename) */
+#define DW_LNCT_timestamp             3     /* modification timestamp (of a file) */
+#define DW_LNCT_size                  4     /* file size */
+#define DW_LNCT_MD5                   5     /* 16-byte MD5 checksum for the file */
+
+
 #if defined __LINUX__ || defined __FreeBSD__ || defined __APPLE__
 # pragma pack()      /* reset default packing */
 #elif defined MACOS && defined __MWERKS__
@@ -849,7 +857,7 @@ static char *strins(char *string,const char *sub)
   return string;
 }
 
-static long read_leb128(FILE *fp,int sign,int *size)
+static long read_leb128(FILE *fp,bool sign,int *size)
 {
   long value=0;
   int shift=0;
@@ -908,11 +916,6 @@ static int64_t read_value(FILE *fp,int format,int *size)
     fread(&value,8,1,fp);
     sz=8;
     break;
-  case DW_FORM_data16:            /* constant, 16 bytes */
-    fread(&value,8,1,fp);
-    fread(&value,8,1,fp);
-    sz=16;
-    break;
   case DW_FORM_ref_sup4:          /* reference relative to .debug_info of a supplementaty object file, 4 bytes */
     fread(&value,4,1,fp);
     sz=4;
@@ -922,14 +925,14 @@ static int64_t read_value(FILE *fp,int format,int *size)
     sz=8;
     break;
   case DW_FORM_sdata:             /* constant, signed LEB128 */
-    value=read_leb128(fp,1,&sz);
+    value=read_leb128(fp,true,&sz);
     break;
   case DW_FORM_udata:             /* constant, unsigned LEB128 */
   case DW_FORM_ref_udata:         /* reference, unsigned LEB128 */
-    value=read_leb128(fp,0,&sz);
+    value=read_leb128(fp,false,&sz);
     break;
   case DW_FORM_exprloc: {         /* block, unsigned LEB128-encoded length + data bytes */
-    int datasz=(int)read_leb128(fp,0,&sz);
+    int datasz=(int)read_leb128(fp,false,&sz);
     int opc=0;
     sz+=datasz;
     if (datasz>=1) {
@@ -953,18 +956,18 @@ static int64_t read_value(FILE *fp,int format,int *size)
   return value;
 }
 
-static void read_string(FILE *fp,int format,int stringtable,char *string,int max,int *size)
+/* read_string() reads a string (or byte array). The `size` parameter optionally
+   returns the data read from the current position (so the size of a file offset
+   in the case of an indirect string). */
+static void read_string(FILE *fp,int format,const DWARFTABLE tables[],char *string,int max,int *size)
 {
-  int sz=0;
-  int idx,count,byte;
-  int32_t offs;
-  long pos;
-
   assert(fp!=NULL);
   assert(string!=NULL);
   assert(max>0);
 
-  idx=0;
+  int byte;
+  int sz=0;
+  int idx=0;
   switch (format) {
   case DW_FORM_string:            /* string, zero-terminated */
     while ((byte=fgetc(fp))!=EOF) {
@@ -978,13 +981,15 @@ static void read_string(FILE *fp,int format,int stringtable,char *string,int max
     break;
   case DW_FORM_strp:              /* string, 4-byte offset into the .debug_str section */
   case DW_FORM_strp_sup:          /* string, 4-byte offset into the .debug_str section of a supplementary object file */
-  case DW_FORM_line_strp:         /* string, 4-byte offset into the .debug_line_str section */
+  case DW_FORM_line_strp: {       /* string, 4-byte offset into the .debug_line_str section */
+    const DWARFTABLE *stringtbl= (format==DW_FORM_line_strp) ? &tables[TABLE_LINE_STR] : &tables[TABLE_STR];
+    int32_t offs;
     fread(&offs,4,1,fp);
     sz=4;
     /* look up the string */
-    assert(stringtable!=0);
-    pos=ftell(fp);
-    fseek(fp,stringtable+offs,SEEK_SET);
+    assert(stringtbl!=NULL && stringtbl->offset!=0);
+    long pos=ftell(fp);
+    fseek(fp,stringtbl->offset+offs,SEEK_SET);
     while ((byte=fgetc(fp))!=EOF) {
       if (idx<max)
         string[idx]=(char)byte;
@@ -994,14 +999,15 @@ static void read_string(FILE *fp,int format,int stringtable,char *string,int max
     }
     fseek(fp,pos,SEEK_SET);
     break;
+  } /* case */
   case DW_FORM_block:             /* block, unsigned LEB128-encoded length + data bytes */
   case DW_FORM_block1:            /* block, 1-byte length + up to 255 data bytes */
   case DW_FORM_block2:            /* block, 2-byte length + up to 64K data bytes */
-  case DW_FORM_block4:            /* block, 4-byte length + up to 4G data bytes */
-    count=0;
+  case DW_FORM_block4: {          /* block, 4-byte length + up to 4G data bytes */
+    int count=0;
     switch (format) {
     case DW_FORM_block:
-      count=read_leb128(fp,0,&sz);
+      count=read_leb128(fp,false,&sz);
       break;
     case DW_FORM_block1:
       fread(&count,1,1,fp);
@@ -1023,10 +1029,20 @@ static void read_string(FILE *fp,int format,int stringtable,char *string,int max
       idx++;
     }
     break;
+  } /* case */
+  case DW_FORM_data16:            /* constant, 16 bytes; used for MD5, so read as a string */
+    while (idx<16 && (byte=fgetc(fp))!=EOF) {
+      if (idx<max)
+        string[idx]=(char)byte;
+      idx++;
+    }
+    sz=16;
+    break;
   default:
     assert(0);
   }
-  string[max-1]='\0'; /* force the string to be zero-terminated */
+  if (format!=DW_FORM_data16)
+    string[max-1]='\0'; /* force the string to be zero-terminated (but make an exception for MD5 blocks) */
   if (size!=NULL)
     *size=sz;
 }
@@ -1052,14 +1068,14 @@ static void dwarf_abbrev(FILE *fp,const DWARFTABLE tables[],ABBREVLIST *abbrevli
   unit=0;
   while (tablesize > 0) {
     /* get and check the abbreviation id (a sequence number relative to its unit) */
-    int idx=(int)read_leb128(fp,0,&size);
+    int idx=(int)read_leb128(fp,false,&size);
     tablesize-=size;
     if (idx==0) {
       unit+=1;  /* an id that is zero, indicates the end of a unit */
       continue;
     }
     /* get the tag and the "has-children" flag */
-    tag=(int)read_leb128(fp,0,&size);
+    tag=(int)read_leb128(fp,false,&size);
     tablesize-=size;
     fread(&flag,1,1,fp);
     tablesize-=1;
@@ -1067,14 +1083,14 @@ static void dwarf_abbrev(FILE *fp,const DWARFTABLE tables[],ABBREVLIST *abbrevli
     count=0;
     for ( ;; ) {
       long value=0;
-      attrib=(int)read_leb128(fp,0,&size);
+      attrib=(int)read_leb128(fp,false,&size);
       tablesize-=size;
-      format=(int)read_leb128(fp,0,&size);
+      format=(int)read_leb128(fp,false,&size);
       tablesize-=size;
       if (attrib==0 && format==0)
         break;
       if (format==DW_FORM_implicit_const) {
-        value=read_leb128(fp,0,&size);
+        value=read_leb128(fp,false,&size);
         tablesize-=size;
       }
       assert(count<MAX_ATTRIBUTES);
@@ -1166,7 +1182,7 @@ static int read_prologue(FILE *fp,DWARF_PROLOGUE32 *prologue,int *size)
     memcpy(&prologue->line_base,hdr+12,1);
     memcpy(&prologue->line_range,hdr+13,1);
     memcpy(&prologue->opcode_base,hdr+14,1);
-    prologue->address_size=4; /* assume 32-bit, 64-bit not yet supported */
+    prologue->address_size=0;   /* updated later */
     prologue->segment_sel_size=0;
     prologue->max_oper_per_instruction=1;
     *size=HDRSIZE;
@@ -1200,7 +1216,7 @@ static int read_prologue(FILE *fp,DWARF_PROLOGUE32 *prologue,int *size)
     memcpy(&prologue->line_base,hdr+13,1);
     memcpy(&prologue->line_range,hdr+14,1);
     memcpy(&prologue->opcode_base,hdr+15,1);
-    prologue->address_size=4; /* assume 32-bit, 64-bit not yet supported */
+    prologue->address_size=0;   /* updated later */
     prologue->segment_sel_size=0;
     *size=HDRSIZE;
 #   undef HDRSIZE
@@ -1212,23 +1228,149 @@ static int read_prologue(FILE *fp,DWARF_PROLOGUE32 *prologue,int *size)
   return 1;
 }
 
-static void clear_state(STATE *state,int default_is_stmt)
+static void clear_state(STATE *state,bool default_is_stmt)
 {
   /* set default state (see DWARF documentation, DWARF 5 pp. 150) */
   state->address=0;
   state->op_index=0;
-  state->file=1;
+  state->file=1;  //??? changes to 0 for DWARF 6
   state->line=1;
   state->column=0;
   state->view=0;
   state->is_stmt=default_is_stmt;
-  state->basic_block=0;
-  state->end_seq=0;
-  state->prologue_end=0;
-  state->epiloge_begin=0;
+  state->basic_block=false;
+  state->end_seq=false;
+  state->prologue_end=false;
+  state->epiloge_begin=false;
   state->isa=0;
   state->discriminator=0;
   state->dirty=0;
+}
+
+static bool read_prologue_paths_v2(FILE *fp,DWARF_PATHLIST *file_list,DWARF_PATHLIST *include_list)
+{
+  int byte;
+  while ((byte=fgetc(fp))!=EOF && byte!='\0') {
+    int idx;
+    char path[_MAX_PATH];
+    for (idx=0; byte!=EOF && byte!='\0'; idx++) {
+      path[idx]=(char)byte;
+      byte=fgetc(fp);
+    }
+    path[idx]='\0';
+    path_insert(include_list,path);
+  }
+  /* read the filenames table */
+  while ((byte=fgetc(fp))!=EOF && byte!='\0') {
+    char path[_MAX_PATH];
+    int idx;
+    for (idx=0; byte!=EOF && byte!='\0'; idx++) {
+      path[idx]=(char)byte;
+      byte=fgetc(fp);
+    }
+    path[idx]='\0';
+    int64_t dirpos=read_leb128(fp,false,NULL);  /* read directory index */
+    read_leb128(fp,false,NULL);                 /* skip modification time (GCC sets this to 0) */
+    read_leb128(fp,false,NULL);                 /* skip source file size (GCC sets this to 0) */
+    if (dirpos>0 && strpbrk(path,"\\/")==NULL) {
+      char *dir=path_get(include_list,dirpos-1);
+      if (dir) {
+        strins(path,"/");
+        strins(path,dir);
+      }
+    }
+    path_insert(file_list,path);
+  }
+  return true;
+}
+
+static bool read_prologue_paths_v5(FILE *fp,const DWARFTABLE tables[],
+                                   DWARF_PATHLIST *file_list,DWARF_PATHLIST *include_list)
+{
+  /* read "format entry" table for the include paths;
+     there is a count byte in front of the table, for the number of entries that
+     follow; each entry consists of two values: a "content" that descibes the
+     function of the field and a "format" that says whether the field is a
+     direct or indirect string (or a value) */
+  int dirfmt_count=fgetc(fp);
+  assert(dirfmt_count>=0);
+  if (dirfmt_count==0)
+    return false;
+  struct dirfmt { long content,format; } *dirfmt=malloc(dirfmt_count*sizeof(struct dirfmt));
+  if (!dirfmt)
+    return false;
+  for (int fi=0; fi<dirfmt_count; fi++) {
+    dirfmt[fi].content=read_leb128(fp,false,NULL);
+    dirfmt[fi].format=read_leb128(fp,false,NULL);
+  }
+  /* read directories table (a "count" numeric field prfixes the table);
+     each entry in the table consists of the fields described in the preceding
+     "format" table; in the case of the include-paths table, there is typically
+     only a single field, which is a string (direct or indirect) */
+  long dir_count=read_leb128(fp,false,NULL);
+  assert(dir_count>=0);
+  for (int i=0; i<dir_count; i++) {
+    for (int fi=0; fi<dirfmt_count; fi++) {
+      if (dirfmt[fi].content==DW_LNCT_path) {
+        char path[_MAX_PATH];
+        read_string(fp,dirfmt[fi].format,tables,path,sizeof(path),NULL);
+        path_insert(include_list,path);
+      } else {
+        /* ignore other columns (if any) */
+        assert(dirfmt[fi].format==DW_FORM_udata); //??? in practice, only LEB128 fields are supported
+        read_leb128(fp,false,NULL);
+      }
+    }
+  }
+  free(dirfmt);
+
+  /* read "format entry" table for filenames
+     this table has the same structure as the entry format table for directories,
+     but it typically holds 2 to 4 entries (as opposed to a single entry for the
+     directory format) */
+  int filefmt_count=fgetc(fp);
+  assert(filefmt_count>=0);
+  if (filefmt_count==0)
+    return false;
+  struct filefmt { long content,format; } *filefmt=malloc(filefmt_count*sizeof(struct filefmt));
+  if (!filefmt)
+    return false;
+  for (int i=0; i<filefmt_count; i++) {
+    filefmt[i].content=read_leb128(fp,false,NULL);
+    filefmt[i].format=read_leb128(fp,false,NULL);
+  }
+  /* read filenames table */
+  long file_count=read_leb128(fp,false,NULL);
+  assert(file_count>=0);
+  for (int i=0; i<file_count; i++) {
+    char path[_MAX_PATH]="";
+    char *directory=NULL;
+    for (int fi=0; fi<filefmt_count; fi++) {
+      switch (filefmt[fi].content) {
+      case DW_LNCT_path: {
+        read_string(fp,filefmt[fi].format,tables,path,sizeof(path),NULL);
+        break;
+      } /* case */
+      case DW_LNCT_directory_index: {
+        long index=read_leb128(fp,false,NULL);
+        directory=path_get(include_list,index);
+        break;
+      }
+      default:
+        /* ignore other columns (if any) */
+        assert(filefmt[fi].format==DW_FORM_udata); //??? in practice, only LEB128 fields are supported
+        read_leb128(fp,false,NULL);
+      }
+    }
+    if (directory) {
+      strins(path,"/");
+      strins(path,directory);
+    }
+    path_insert(file_list,path);
+  }
+  free(filefmt);
+
+  return true;
 }
 
 /* dwarf_linetable() parses the .debug_line table and retrieves the
@@ -1274,67 +1416,42 @@ static bool dwarf_linetable(FILE *fp,const DWARFTABLE tables[],
   unit=0;
   prologue_size=sizeof(prologue); /* initial assumption */
   while (tablesize>prologue_size) {
-    uint8_t *std_argcnt;  /* array with argument counts for standard opcodes */
-    long count;
-    int byte;
     /* check the prologue */
     read_prologue(fp,&prologue,&prologue_size);
+    if (prologue.address_size==0)
+      prologue.address_size=4;    //??? should copy this from the unit header, but the address size is not used for line table decoding, so it's redundant
     /* read the argument counts for the standard opcodes */
-    std_argcnt=(uint8_t*)malloc(prologue.opcode_base-1*sizeof(uint8_t));
+    uint8_t *std_argcnt=(uint8_t*)malloc(prologue.opcode_base-1*sizeof(uint8_t));
     if (std_argcnt==NULL)
       return false;
     fread(std_argcnt,1,prologue.opcode_base-1,fp);
-    assert(prologue.version<5);
-    //??? ^^^^^ for DWARF 5+, the format for the include-paths and filenames
-    //          tables is different; however, GCC 12 still creates .debug_line
-    //          version 3 even when requesting -gdwarf-5
-    /* read the include-paths table */
-    while ((byte=fgetc(fp))!=EOF && byte!='\0') {
-      for (idx=0; byte!=EOF && byte!='\0'; idx++) {
-        path[idx]=(char)byte;
-        byte=fgetc(fp);
-      }
-      path[idx]='\0';
-      path_insert(&include_list,path);
-    }
-    /* read the filenames table */
-    while ((byte=fgetc(fp))!=EOF && byte!='\0') {
-      for (idx=0; byte!=EOF && byte!='\0'; idx++) {
-        path[idx]=(char)byte;
-        byte=fgetc(fp);
-      }
-      path[idx]='\0';
-      dirpos=read_leb128(fp,0,NULL);  /* read directory index */
-      read_leb128(fp,0,NULL);         /* skip modification time (GCC sets this to 0) */
-      read_leb128(fp,0,NULL);         /* skip source file size (GCC sets this to 0) */
-      if (dirpos>0 && strpbrk(path,"\\/")==NULL) {
-        char *dir=path_get(&include_list,dirpos-1);
-        strins(path,"/");
-        strins(path,dir);
-      }
-      path_insert(&file_list,path);
-    }
-    path_deletetable(&include_list);
-
+    /* read the include-paths table and the filenames table (the include-paths
+       table is temporary, and used to complete the filenames table) */
+    if (prologue.version<5)
+      read_prologue_paths_v2(fp,&file_list,&include_list);
+    else
+      read_prologue_paths_v5(fp,tables,&file_list,&include_list);
     /* jump to the start of the program, then start running */
     clear_state(&state,prologue.default_is_stmt);
-    fseek(fp,tableoffset+prologue.prologue_length+10,SEEK_SET);  /* +10 because the offset is relative to the field position */
-    count=prologue.total_length-prologue.prologue_length-6;
-    while (count>0) {
+    long prologue_len_offs= (prologue.version<5) ? 10 : 12; /* offset of the prologue_length field in the header */
+    long remaining=prologue.total_length-prologue.prologue_length-(prologue_len_offs-4); /* -4 because total_length field excludes the size of the field itself */
+    fseek(fp,tableoffset+prologue.prologue_length+prologue_len_offs,SEEK_SET);
+    while (remaining>0) {
       opcode=fgetc(fp);
-      count--;
+      remaining--;
       if (opcode==EOF)
         break;
       if (opcode<prologue.opcode_base) {
         /* standard (or extended) opcode */
         switch (opcode) {
         case DW_LNS_extended_op:
-          value=read_leb128(fp,0,&lebsize);
-          count-=lebsize+value;
+          value=read_leb128(fp,false,&lebsize);
+          remaining-=lebsize+value;
           opcode=fgetc(fp);
+          int byte;
           switch (opcode) {
           case DW_LNE_end_sequence:
-            state.end_seq=1;
+            state.end_seq=true;
             if (state.dirty)
               line_insert(&line_list,state.line,state.address,state.file-1,state.view);
             clear_state(&state,prologue.default_is_stmt);  /* reset to default values */
@@ -1354,18 +1471,20 @@ static bool dwarf_linetable(FILE *fp,const DWARFTABLE tables[],
               byte=fgetc(fp);
             }
             path[idx]='\0';
-            dirpos=read_leb128(fp,0,NULL);  /* read directory index */
-            read_leb128(fp,0,NULL);         /* skip modification time (GCC sets this to 0) */
-            read_leb128(fp,0,NULL);         /* skip source file size (GCC sets this to 0) */
+            dirpos=read_leb128(fp,false,NULL);  /* read directory index */
+            read_leb128(fp,false,NULL);         /* skip modification time (GCC sets this to 0) */
+            read_leb128(fp,false,NULL);         /* skip source file size (GCC sets this to 0) */
             if (dirpos>0 && strpbrk(path,"\\/")==NULL) {
               char *dir=path_get(&include_list,dirpos-1);
-              strins(path,"/");
-              strins(path,dir);
+              if (dir) {
+                strins(path,"/");
+                strins(path,dir);
+              }
             }
             path_insert(&file_list,path);
             break;
           case DW_LNE_set_discriminator:
-            state.discriminator=read_leb128(fp,0,NULL);
+            state.discriminator=read_leb128(fp,false,NULL);
             break;
           default:
             while (value-->0) /* skip any unrecognized extended opcode */
@@ -1375,15 +1494,15 @@ static bool dwarf_linetable(FILE *fp,const DWARFTABLE tables[],
         case DW_LNS_copy:
           line_insert(&line_list,state.line,state.address,state.file-1,state.view);
           state.discriminator=0;
-          state.basic_block=0;
-          state.prologue_end=0;
-          state.epiloge_begin=0;
+          state.basic_block=false;
+          state.prologue_end=false;
+          state.epiloge_begin=false;
           state.view+=1;
           state.dirty=0;
           break;
         case DW_LNS_advance_pc:
-          oper_advance=read_leb128(fp,0,&lebsize);
-          count-=lebsize;
+          oper_advance=read_leb128(fp,false,&lebsize);
+          remaining-=lebsize;
           if (prologue.max_oper_per_instruction==1) {
             assert(state.op_index==0);  /* see DWARF 5, p. 161*/
             state.address+=oper_advance*prologue.min_instruction_size;
@@ -1399,26 +1518,26 @@ static bool dwarf_linetable(FILE *fp,const DWARFTABLE tables[],
           }
           break;
         case DW_LNS_advance_line:
-          value=read_leb128(fp,1,&lebsize);
-          count-=lebsize;
+          value=read_leb128(fp,true,&lebsize);
+          remaining-=lebsize;
           state.line+=value;
           state.dirty=1;
           break;
         case DW_LNS_set_file:
-          value=read_leb128(fp,0,&lebsize);
-          count-=lebsize;
+          value=read_leb128(fp,false,&lebsize);
+          remaining-=lebsize;
           state.file=value;
           break;
         case DW_LNS_set_column:
-          value=read_leb128(fp,0,&lebsize);
-          count-=lebsize;
+          value=read_leb128(fp,false,&lebsize);
+          remaining-=lebsize;
           state.column=value;
           break;
         case DW_LNS_negate_stmt:
           state.is_stmt=!state.is_stmt;
           break;
         case DW_LNS_set_basic_block:
-          state.basic_block=1;
+          state.basic_block=true;
           break;
         case DW_LNS_const_add_pc:
           opcode=255-prologue.opcode_base;
@@ -1441,25 +1560,25 @@ static bool dwarf_linetable(FILE *fp,const DWARFTABLE tables[],
           value=fgetc(fp);
           value|=fgetc(fp) << 8;
           state.address+=value;
-          count-=2;
+          remaining-=2;
           /* do not reset state.view */
           break;
         case DW_LNS_set_prologue_end:
-          state.prologue_end=1;
+          state.prologue_end=true;
           break;
         case DW_LNS_set_epilogue_begin:
-          state.epiloge_begin=1;
+          state.epiloge_begin=true;
           break;
         case DW_LNS_set_isa:
-          value=read_leb128(fp,0,&lebsize);
-          count-=lebsize;
+          value=read_leb128(fp,false,&lebsize);
+          remaining-=lebsize;
           state.isa=value;
           break;
         default:
           /* skip opcode and any parameters */
           for (idx=0; idx<std_argcnt[opcode-1]; idx++) {
-            read_leb128(fp,0,&lebsize);
-            count-=lebsize;
+            read_leb128(fp,false,&lebsize);
+            remaining-=lebsize;
           }
         }
       } else {
@@ -1481,9 +1600,9 @@ static bool dwarf_linetable(FILE *fp,const DWARFTABLE tables[],
         }
         state.line+=prologue.line_base+opcode%prologue.line_range;
         line_insert(&line_list,state.line,state.address,state.file-1,state.view);
-        state.basic_block=0;
-        state.prologue_end=0;
-        state.epiloge_begin=0;
+        state.basic_block=false;
+        state.prologue_end=false;
+        state.epiloge_begin=false;
         state.discriminator=0;
         state.view+=1;
         state.dirty=0;
@@ -1523,6 +1642,7 @@ static bool dwarf_linetable(FILE *fp,const DWARFTABLE tables[],
       line_insert(linetable,line_list.table[idx].line,line_list.table[idx].address,fileidx,line_list.table[idx].view);
       idx++;
     }
+    path_deletetable(&include_list);
     path_deletetable(&file_list);
     line_deletetable(&line_list);
 
@@ -1585,7 +1705,7 @@ static bool dwarf_infotable(FILE *fp,const DWARFTABLE tables[],
     /* browse through the tags */
     while (unitsize>0) {
       /* read the abbreviation code */
-      idx=(int)read_leb128(fp,0,&size);
+      idx=(int)read_leb128(fp,false,&size);
       unitsize-=size;
       if (idx==0) {
         level-=1;
@@ -1598,7 +1718,7 @@ static bool dwarf_infotable(FILE *fp,const DWARFTABLE tables[],
         int format=abbrev->attributes[idx].format;
         if (format==DW_FORM_indirect) {
           /* format is specified in the .debug_info data (not in the abbreviation) */
-          format=read_leb128(fp,1,&size);
+          format=read_leb128(fp,true,&size);
           unitsize-=size;
         }
         switch (format) {
@@ -1631,14 +1751,13 @@ static bool dwarf_infotable(FILE *fp,const DWARFTABLE tables[],
         case DW_FORM_string:            /* string, zero-terminated */
         case DW_FORM_strp:              /* string, 4-byte offset into the .debug_str section */
         case DW_FORM_strp_sup:
+        case DW_FORM_line_strp:         /* string, 4-byte offset into the .debug_line_str section (DWARF 5+) */
         case DW_FORM_block:             /* block, unsigned LEB128-encoded length + data bytes */
         case DW_FORM_block1:            /* block, 1-byte length + up to 255 data bytes */
         case DW_FORM_block2:            /* block, 2-byte length + up to 64K data bytes */
         case DW_FORM_block4:            /* block, 4-byte length + up to 4G data bytes */
-          read_string(fp,abbrev->attributes[idx].format,tables[TABLE_STR].offset,str,sizeof(str),&size);
-          break;
-        case DW_FORM_line_strp:
-          read_string(fp,abbrev->attributes[idx].format,tables[TABLE_LINE_STR].offset,str,sizeof(str),&size);
+        case DW_FORM_data16:            /* constant, 16-byte length; used for MD5 checksums (DWARF 5+) */
+          read_string(fp,abbrev->attributes[idx].format,tables,str,sizeof(str),&size);
           break;
         case DW_FORM_implicit_const:
           value=abbrev->attributes[idx].value;

@@ -3139,7 +3139,7 @@ int task_launch(const char *program, const char *options, TASK *task)
 
   memset(&secattr, 0, sizeof secattr);
   secattr.nLength = sizeof secattr;
-  secattr.bInheritHandle = TRUE;
+  secattr.bInheritHandle = true;
 
   assert(task != NULL);
   memset(task, -1, sizeof(TASK));
@@ -3173,7 +3173,7 @@ int task_launch(const char *program, const char *options, TASK *task)
   }
 
   assert(program != NULL);
-  if (CreateProcess(program, cmdline, 0, 0, TRUE,
+  if (CreateProcess(program, cmdline, 0, 0, true,
                     NORMAL_PRIORITY_CLASS | DETACHED_PROCESS,
                     0, 0, &startupInfo, &processInformation))
   {
@@ -7022,13 +7022,13 @@ static void panel_breakpoints(struct nk_context *ctx, APPSTATE *state,
         }
         nk_label(ctx, label, NK_TEXT_LEFT);
         nk_layout_row_push(ctx, rowheight);
-        if (button_symbol_tooltip(ctx, NK_SYMBOL_X, NK_KEY_NONE, TRUE, "Delete breakpoint")) {
+        if (button_symbol_tooltip(ctx, NK_SYMBOL_X, NK_KEY_NONE, true, "Delete breakpoint")) {
           RESETSTATE(state, STATE_BREAK_TOGGLE);
           state->stateparam[0] = STATEPARAM_BP_DELETE;
           state->stateparam[1] = bp->number;
         }
         nk_layout_row_push(ctx, rowheight);
-        if (button_symbol_tooltip(ctx, NK_SYMBOL_TRIANGLE_RIGHT_SMALL, NK_KEY_NONE, TRUE, "Go to breakpoint location")) {
+        if (button_symbol_tooltip(ctx, NK_SYMBOL_TRIANGLE_RIGHT_SMALL, NK_KEY_NONE, true, "Go to breakpoint location")) {
           char cmd[sizeof(label) + 10];
           sprintf(cmd, "list %s", label);
           handle_list_cmd(cmd, &dwarf_symboltable, &dwarf_filetable);
@@ -7233,7 +7233,7 @@ static void panel_watches(struct nk_context *ctx, APPSTATE *state,
           nk_label(ctx, "?", NK_TEXT_LEFT);
         }
         nk_layout_row_push(ctx, rowheight);
-        if (button_symbol_tooltip(ctx, NK_SYMBOL_X, NK_KEY_NONE, TRUE, "Delete watch")) {
+        if (button_symbol_tooltip(ctx, NK_SYMBOL_X, NK_KEY_NONE, true, "Delete watch")) {
           RESETSTATE(state, STATE_WATCH_TOGGLE);
           state->stateparam[0] = STATEPARAM_WATCH_DEL;
           state->stateparam[1] = watch->seqnr;
@@ -7257,7 +7257,7 @@ static void panel_watches(struct nk_context *ctx, APPSTATE *state,
                                             state->watch_edit, sizearray(state->watch_edit),
                                             nk_filter_ascii);
     nk_layout_row_push(ctx, ROW_HEIGHT);
-    if ((button_symbol_tooltip(ctx, NK_SYMBOL_PLUS, NK_KEY_NONE, TRUE, "Add watch") || (result & NK_EDIT_COMMITED))
+    if ((button_symbol_tooltip(ctx, NK_SYMBOL_PLUS, NK_KEY_NONE, true, "Add watch") || (result & NK_EDIT_COMMITED))
         && state->curstate == STATE_STOPPED && strlen(state->watch_edit) > 0) {
       RESETSTATE(state, STATE_WATCH_TOGGLE);
       state->stateparam[0] = STATEPARAM_WATCH_SET;

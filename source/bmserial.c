@@ -2032,9 +2032,10 @@ static void panel_script(struct nk_context *ctx, APPSTATE *state,
     bool patherror = (strlen(state->ScriptFile) > 0 && access(state->ScriptFile, 0) != 0);
     if (patherror)
       nk_style_push_color(ctx, &ctx->style.edit.text_normal, COLOUR_FG_RED);
+    const char *tiptext = strlen(state->ScriptFile)>0 ? state->ScriptFile : "Tcl script";
     int result = editctrl_tooltip(ctx, NK_EDIT_FIELD|NK_EDIT_SIG_ENTER,
                                   state->ScriptFile, sizearray(state->ScriptFile),
-                                  nk_filter_ascii, "TCL script");
+                                  nk_filter_ascii, tiptext);
     if (result & (NK_EDIT_COMMITED | NK_EDIT_DEACTIVATED))
       state->script_reload = true;
     if (patherror)
