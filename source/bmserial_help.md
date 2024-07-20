@@ -15,12 +15,14 @@ folded in or out:
 > [Line status]
 > [Display options]
 > [Local options]
+> [Highlight Filters]
+> [Script]
 
 ---
 Miscellaneous information:
 > [The Button Bar]
 > [The Input Field]
-> [Filters]
+> [Saving and Loading Presets]
 > [About BlackMagic Serial Monitor]
 
 # The Button Bar
@@ -201,8 +203,7 @@ contains the following settings:
 See also:
 > [The Input Field]
 
-
-# Filters
+# Highlight Filters
 
 With filters, you can highlight rows in the viewport based on keywords. For each
 filter, you can select a colour and the text to match. The Serial Monitor pre-selects
@@ -218,6 +219,41 @@ that is set for the filter. The entire row is colored, not just the matching tex
 ---
 See also:
 > [Display options]
+
+# Script
+
+A script allows you to process any incoming data. Typical use cases for a script
+are to decode (binary) data into nicely formatted text, and to automatically
+respond to prompts or data sent by the remote device.
+
+A script must be written in the Tcl language. Actually, the BlackMagic Serial Monitor
+supports only a subset of the Tcl language (but with a few extensions that are
+relevant for the serial I/O). See the book "Embedded Debugging with the Black
+Magic Probe" for the language reference.
+
+---
+See also:
+> [About BlackMagic Serial Monitor]
+
+# Saving and Loading Presets
+
+The settings for the serial interface, filters, display options and Tcl script
+file, can be stored into a file. This allows for quick reloading of these settings
+on a next session.
+
+To create a "preset file," set its name in the "Preset" field in the "Configuration"
+TAB panel. The name must be a valid filename. Alternatively, you can use the "browse"
+button (at the right of the "Preset" field) to select a file and path.
+
+Once a "preset file" is set, port settings, display options, filters and an
+optional script are stored in that file. On a next session, you can again enter
+the name of the file in the "Preset" field (or open the file via the "browse"
+button) to restore all settings.
+
+---
+See also:
+> [Configuration]
+> [Script]
 
 # About BlackMagic Serial Monitor
 

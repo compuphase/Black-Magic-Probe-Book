@@ -77,6 +77,7 @@ const char **get_probelist(int *probe, int *netprobe)
 void clear_probelist(const char **probelist, int netprobe)
 {
   if (probelist != NULL) {
+    assert(netprobe >= 0);
     for (int idx = 0; idx < netprobe + 1; idx++)
       free((void*)probelist[idx]);
     free((void*)probelist);

@@ -46,7 +46,6 @@
 #   define strupr(s)         _strupr(s)
 # endif
 #elif defined __linux__
-# include <stdbool.h>
 # include <alloca.h>
 # include <dirent.h>
 # include <poll.h>

@@ -898,8 +898,9 @@ bool bmp_download(void)
 
   unsigned long progress_range = 0;
   for (const MEMBLOCK *rgn = FlashRegions.next; rgn != NULL; rgn = rgn->next) {
-    unsigned long saddr, ssize;
+    assert(rgn->size > 0);
     /* walk through all sections in the target file that fall into this Flash region */
+    unsigned long saddr, ssize;
     unsigned long topaddr = 0;
     for (int segment = 0; filesection_getdata(segment, &saddr, NULL, &ssize, NULL); segment++) {
       if (saddr >= rgn->address && saddr < rgn->address + rgn->size) {
@@ -919,7 +920,8 @@ bool bmp_download(void)
            (unsigned)rgn->address, (unsigned)(flashsectors * rgn->blocksize));
     sprintf(cmd, "vFlashErase:%x,%x", (unsigned)rgn->address, (unsigned)(flashsectors * rgn->blocksize));
     gdbrsp_xmit(cmd, -1);
-    size_t rcvd = gdbrsp_recv(cmd, pktsize, 500);
+    int timeout = (rgn->size + 0x7fff) / 0x8000;  /* erase may take some time, adaptive timeout */
+    size_t rcvd = gdbrsp_recv(cmd, pktsize, 1000 * timeout);
     if (!testreply(cmd, rcvd, "OK")) {
       notice(BMPERR_FLASHERASE, "Flash erase failed");
       free(cmd);
@@ -963,7 +965,7 @@ bool bmp_download(void)
         }
         memmove(cmd + (prefixlen - 4), sdata + pos, numbytes);
         gdbrsp_xmit(cmd, (prefixlen - 4) + numbytes);
-        rcvd = gdbrsp_recv(cmd, pktsize, 500);
+        rcvd = gdbrsp_recv(cmd, pktsize, 1000);
         if (!testreply(cmd, rcvd, "OK")) {
           notice(BMPERR_FLASHWRITE, "Flash write failed");
           free(cmd);
@@ -1032,6 +1034,7 @@ bool bmp_verify(void)
 
 bool bmp_fullerase(unsigned flashsize)
 {
+  bmp_progress_reset(0);
   if (!bmp_isopen()) {
     notice(BMPERR_NOCONNECT, "Not connected to Black Magic Probe");
     return false;
@@ -1047,6 +1050,11 @@ bool bmp_fullerase(unsigned flashsize)
     return false;
   }
 
+  unsigned long progress_range = 0;
+  for (const MEMBLOCK *rgn = FlashRegions.next; rgn != NULL; rgn = rgn->next)
+    progress_range++;
+  bmp_progress_reset(progress_range + 1);
+
   for (const MEMBLOCK *rgn = FlashRegions.next; rgn != NULL; rgn = rgn->next) {
     unsigned size = (unsigned)rgn->size;
     if (size > flashsize)
@@ -1055,7 +1063,8 @@ bool bmp_fullerase(unsigned flashsize)
     do {
       sprintf(cmd, "vFlashErase:%x,%x", (unsigned)rgn->address, size);
       gdbrsp_xmit(cmd, -1);
-      int rcvd = gdbrsp_recv(cmd, pktsize, 5000); /* erase may take some time */
+      int timeout = (rgn->size + 0x7fff) / 0x8000;  /* erase may take some time, adaptive timeout */
+      size_t rcvd = gdbrsp_recv(cmd, pktsize, 1000 * timeout);
       failed = !testreply(cmd, rcvd, "OK");
       if (failed)
         size /= 2;
@@ -1063,12 +1072,14 @@ bool bmp_fullerase(unsigned flashsize)
     if (failed) {
       notice(BMPERR_FLASHERASE, "Flash erase failed");
       free(cmd);
+      bmp_progress_reset(0);
       return false;
     } else {
       sprintf(cmd, "Erased Flash at 0x%08x, size %u KiB",
               (unsigned)rgn->address, (unsigned)size / 1024);
       notice(BMPSTAT_SUCCESS, cmd);
     }
+    bmp_progress_step(1);
   }
 
   gdbrsp_xmit("vFlashDone", -1);
@@ -1076,8 +1087,10 @@ bool bmp_fullerase(unsigned flashsize)
   if (!testreply(cmd, rcvd, "OK")) {
     notice(BMPERR_FLASHDONE, "Flash completion failed");
     free(cmd);
+    bmp_progress_reset(0);
     return false;
   }
+  bmp_progress_step(1);
 
   free(cmd);
   return true;
@@ -1103,6 +1116,7 @@ bool bmp_blankcheck(unsigned flashsize)
 
   bool is_success = true;
   for (const MEMBLOCK *rgn = FlashRegions.next; rgn != NULL && is_success; rgn = rgn->next) {
+    assert(rgn->size > 0);
     bool is_blank = true;
     unsigned size = (unsigned)rgn->size;
     if (size > flashsize)

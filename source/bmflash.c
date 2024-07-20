@@ -914,7 +914,7 @@ typedef struct tagAPPSTATE {
   nk_bool ScriptOnFailures;     /**< whether to execute the post-process script on failed uploads too */
   struct tcl tcl;               /**< Tcl context */
   char *tcl_script;             /**< Tcl script (loaded from file) */
-  thrd_t thrd_download;         /**< thread id for downloading firmware */
+  thrd_t thrd_download;         /**< thread id for downloading/erasing firmware */
   thrd_t thrd_tcl;              /**< thread id for Tcl script */
   int isrunning_tcl;            /**< running state of the Tcl script */
   int isrunning_download;       /**< running state of the download thread */
@@ -1127,6 +1127,9 @@ static bool tcl_preparescript(APPSTATE *state)
   return true;
 }
 
+static bool target_partid(APPSTATE *state);
+static bool target_flashsize(APPSTATE *state, unsigned *size);
+
 static int download_thread(void *arg)
 {
   APPSTATE *state = (APPSTATE*)arg;
@@ -1134,6 +1137,22 @@ static int download_thread(void *arg)
   pointer_setstyle(CURSOR_WAIT);
   bool result = bmp_download();
   state->isrunning_download = THRD_COMPLETED;
+  pointer_setstyle(CURSOR_NORMAL);
+  return result;
+}
+
+static int erase_thread(void *arg)
+{
+  APPSTATE *state = (APPSTATE*)arg;
+  assert(state != NULL);
+  pointer_setstyle(CURSOR_WAIT);
+  if (state->partid == 0)
+    target_partid(state);
+  unsigned flashsize = UINT_MAX;
+  target_flashsize(state, &flashsize);
+  bool result = bmp_fullerase(flashsize);
+  state->isrunning_download = THRD_COMPLETED;
+  pointer_setstyle(CURSOR_NORMAL);
   return result;
 }
 
@@ -1685,16 +1704,25 @@ static void panel_serialize(struct nk_context *ctx, APPSTATE *state,
   }
 }
 
+static void close_tabs(enum nk_collapse_states tab_states[TAB_COUNT])
+{
+  tab_states[TAB_OPTIONS] = NK_MINIMIZED;
+  tab_states[TAB_SERIALIZATION] = NK_MINIMIZED;
+  tab_states[TAB_STATUS] = NK_MAXIMIZED;
+}
+
 static bool handle_stateaction(APPSTATE *state, enum nk_collapse_states tab_states[TAB_COUNT])
 {
   assert(state != NULL);
 
   bool waitidle = true;
+  bool printlist = false;
   int result;
 
   switch (state->curstate) {
   case STATE_INIT:
     /* collect debug probes, connect to the selected one */
+    printlist = (state->probelist != NULL);
     clear_probelist(state->probelist, state->netprobe);
     state->probelist = get_probelist(&state->probe, &state->netprobe);
     tcpip_init();
@@ -1704,7 +1732,19 @@ static bool handle_stateaction(APPSTATE *state, enum nk_collapse_states tab_stat
       state->monitor_cmds = bmp_get_monitor_cmds();
     state->set_probe_options = true;  /* probe changed, make sure options are set */
     bmp_progress_reset(0);
-    SETSTATE(*state, STATE_IDLE);
+    if (printlist) {
+      if (state->netprobe == 0) {
+        log_addstring("^1No probes found.\n");
+      } else {
+        log_addstring("Probes found:\n");
+        for (int idx = 0; idx < state->netprobe; idx++) {
+          char msg[128];
+          sprintf(msg, "  %d USB probe at %s\n", idx + 1, state->probelist[idx]);
+          log_addstring(msg);
+        }
+      }
+    }
+    SETSTATE(*state,STATE_IDLE);
     waitidle = false;
     break;
 
@@ -1722,9 +1762,7 @@ static bool handle_stateaction(APPSTATE *state, enum nk_collapse_states tab_stat
     break;
 
   case STATE_SAVE:
-    tab_states[TAB_OPTIONS] = NK_MINIMIZED;
-    tab_states[TAB_SERIALIZATION] = NK_MINIMIZED;
-    tab_states[TAB_STATUS] = NK_MAXIMIZED;
+    close_tabs(tab_states);
     if (access(state->TargetFile, 0) == 0) {
       /* save settings in config file */
       strlcpy(state->ParamFile, state->TargetFile, sizearray(state->ParamFile));
@@ -1839,14 +1877,30 @@ static bool handle_stateaction(APPSTATE *state, enum nk_collapse_states tab_stat
 
   case STATE_CLEARFLASH:
     if (!state->skip_download && state->fullerase) {
-      unsigned flashsize = UINT_MAX;
-      target_partid(state);
-      target_flashsize(state, &flashsize);
-      const char *tgtdriver = target_is_lpc(state->mcufamily);
-      if (tgtdriver != NULL)
-        bmp_runscript("memremap", tgtdriver, NULL, NULL, 0);
-      result = bmp_fullerase(flashsize);
-      SETSTATE(*state, result ? STATE_DOWNLOAD : STATE_IDLE);
+      bool ok = true;
+      if (state->isrunning_download == THRD_IDLE) {
+        if (state->partid == 0)
+          target_partid(state);
+        const char *tgtdriver = target_is_lpc(state->mcufamily);
+        if (tgtdriver != NULL)
+          bmp_runscript("memremap", tgtdriver, NULL, NULL, 0);
+        /* create a thread to do the full erase, so that this loop continues
+           with updating the message log, while the erase is in progress */
+        state->isrunning_download = THRD_RUNNING;
+        if (thrd_create(&state->thrd_download, erase_thread, state) != thrd_success) {
+          ok = false;
+          state->isrunning_download = THRD_IDLE;
+        }
+      } else if (state->isrunning_download == THRD_COMPLETED || state->isrunning_download == THRD_ABORT) {
+        if (state->isrunning_download == THRD_ABORT)
+          log_addstring("^1Aborted\n");
+        int retcode;
+        thrd_join(state->thrd_download, &retcode);
+        ok = (retcode > 0 && state->isrunning_download == THRD_COMPLETED);
+        state->isrunning_download = THRD_IDLE;
+      }
+      if (state->isrunning_download == THRD_IDLE)
+        SETSTATE(*state, ok ? STATE_DOWNLOAD : STATE_IDLE);
     } else {
       SETSTATE(*state, STATE_DOWNLOAD);
     }
@@ -2036,25 +2090,36 @@ static bool handle_stateaction(APPSTATE *state, enum nk_collapse_states tab_stat
     break;
 
   case STATE_FULLERASE:
-    bmp_progress_reset(0);
-    pointer_setstyle(CURSOR_WAIT);
-    if (bmp_connect(state->probe, (state->probe == state->netprobe) ? state->IPaddr : NULL)
+    if (state->isrunning_download != THRD_RUNNING
+        && bmp_connect(state->probe, (state->probe == state->netprobe) ? state->IPaddr : NULL)
         && probe_set_options(state)
         && bmp_attach(false, state->mcufamily, sizearray(state->mcufamily), NULL, 0))
     {
-      if (state->partid == 0 || !state->is_attached) {
-        state->is_attached = true;
-        target_partid(state);
+      if (state->isrunning_download == THRD_IDLE) {
+        if (state->partid == 0 || !state->is_attached) {
+          state->is_attached = true;
+          target_partid(state);
+        }
+        const char *tgtdriver = target_is_lpc(state->mcufamily);
+        if (tgtdriver != NULL)
+          bmp_runscript("memremap", tgtdriver, NULL, NULL, 0);
+        /* create a thread to do the full erase, so that this loop continues
+           with updating the message log, while the erase is in progress */
+        state->isrunning_download = THRD_RUNNING;
+        if (thrd_create(&state->thrd_download, erase_thread, state) != thrd_success)
+          state->isrunning_download = THRD_IDLE;
+      } else if (state->isrunning_download == THRD_COMPLETED || state->isrunning_download == THRD_ABORT) {
+        if (state->isrunning_download == THRD_ABORT)
+          log_addstring("^1Aborted\n");
+        int retcode;
+        thrd_join(state->thrd_download, &retcode);
+        state->isrunning_download = THRD_IDLE;
       }
-      unsigned flashsize = UINT_MAX;
-      target_flashsize(state, &flashsize);
-      const char *tgtdriver = target_is_lpc(state->mcufamily);
-      if (tgtdriver != NULL)
-        bmp_runscript("memremap", tgtdriver, NULL, NULL, 0);
-      bmp_fullerase(flashsize); //??? do this in a thread, for better user interface response
+      if (state->isrunning_download == THRD_IDLE)
+        SETSTATE(*state, STATE_IDLE);
+    } else {
+      SETSTATE(*state, STATE_IDLE);
     }
-    pointer_setstyle(CURSOR_NORMAL);
-    SETSTATE(*state, STATE_IDLE);
     waitidle = false;
     break;
 
@@ -2197,10 +2262,9 @@ int main(int argc, char *argv[])
         return EXIT_FAILURE;
       }
     } else {
-      if (access(argv[idx], 0) == 0) {
-        strlcpy(appstate.TargetFile, argv[idx], sizearray(appstate.TargetFile));
+      strlcpy(appstate.TargetFile, argv[idx], sizearray(appstate.TargetFile));
+      if (access(argv[idx], 0) == 0)
         appstate.load_status = 1;
-      }
     }
   }
   if (strlen(appstate.TargetFile) == 0) {
@@ -2358,27 +2422,33 @@ int main(int argc, char *argv[])
         toolmenu_active = tools_popup(ctx, &rc_toolbutton);
         switch (toolmenu_active) {
         case TOOL_RESCAN:
+          close_tabs(tab_states);
           SETSTATE(appstate, STATE_INIT);
           toolmenu_active = TOOL_CLOSE;
           break;
         case TOOL_VERIFY:
+          close_tabs(tab_states);
           appstate.skip_download = true;
           SETSTATE(appstate, STATE_SAVE);  /* start the pseudo-download sequence */
           toolmenu_active = TOOL_CLOSE;
           break;
         case TOOL_OPTIONERASE:
+          close_tabs(tab_states);
           SETSTATE(appstate, STATE_ERASE_OPTBYTES);
           toolmenu_active = TOOL_CLOSE;
           break;
         case TOOL_FULLERASE:
+          close_tabs(tab_states);
           SETSTATE(appstate, STATE_FULLERASE);
           toolmenu_active = TOOL_CLOSE;
           break;
         case TOOL_BLANKCHECK:
+          close_tabs(tab_states);
           SETSTATE(appstate, STATE_BLANKCHECK);
           toolmenu_active = TOOL_CLOSE;
           break;
         case TOOL_DUMPFLASH:
+          close_tabs(tab_states);
           SETSTATE(appstate, STATE_DUMPFLASH);
           toolmenu_active = TOOL_CLOSE;
           break;

@@ -118,11 +118,12 @@ static void usage(const char *invalid_option)
     printf("BMSerial - Serial Monitor/Terminal.\n\n");
   printf("Usage: bmserial [options]\n\n"
          "Options:\n"
-         "-f=value  Font size to use (value must be 8 or larger).\n"
-         "-h        This help.\n"
-         "-p=port   Open the specified port (if available).\n"
-         "-v        Show version information.\n");
-  //??? command line options to select the port & frame format
+         "-f=value      Font size to use (value must be 8 or larger).\n"
+         "-h            This help.\n"
+         "-p=port       Open the specified port (if available).\n"
+         "-t=filename   Load 'presets' file."
+         "-v            Show version information.\n");
+  //??? command line options to select the baud & frame format
 }
 
 static void version(void)
@@ -440,6 +441,8 @@ typedef struct tagAPPSTATE {
   int append_eol;               /**< append CR, LF or CR+LF */
   FILTER filter_root;           /**< highlight filters */
   FILTER filter_edit;           /**< the filter being edited */
+  char ConfigFile[_MAX_PATH];   /**< INI file with (global) configuration */
+  char PresetFile[_MAX_PATH];   /**< INI file with configuration presets */
   char ScriptFile[_MAX_PATH];   /**< path of the script file */
   time_t scriptfiletime;        /**< "modified" timestamp of the loaded file */
   char *script;                 /**< script loaded in memory */
@@ -474,118 +477,142 @@ static bool get_configfile(char *filename, size_t maxsize, const char *basename)
   return true;
 }
 
-static bool save_settings(const char *filename, const APPSTATE *state,
+/** set_extension() adds a default extension to the filename, if no extension
+ *  was set. The `extension` parameter must not include a leading dot.
+ */
+static void set_extension(char *path, size_t size, const char *extension)
+{
+  char *ptr = strrchr(path, '.');
+  if (ptr == NULL || strpbrk(ptr, "\\/") != NULL) {
+    strncat(path, ".", size);
+    strncat(path, extension, size);
+  }
+}
+
+static bool save_settings(const APPSTATE *state,
                           const enum nk_collapse_states tab_states[],
                           const SPLITTERBAR *splitter_hor)
 {
-  assert(filename != NULL);
   assert(state != NULL);
-  assert(tab_states != NULL);
-  assert(splitter_hor != NULL);
 
-  if (strlen(filename) == 0)
+  if (strlen(state->ConfigFile) == 0)
     return false;
 
-  if (state->portlist != NULL && state->curport < state->numports)
-    ini_puts("Port", "port", state->portlist[state->curport], filename);
-  ini_putl("Port", "baudrate", state->baudrate, filename);
-  ini_putl("Port", "databits", state->databits, filename);
-  ini_putl("Port", "stopbits", state->stopbits, filename);
-  ini_putl("Port", "parity", state->parity, filename);
-  ini_putl("Port", "flowcontrol", state->flowctrl, filename);
-
-  ini_putl("Port", "localecho", state->localecho, filename);
-  ini_putl("Port", "eol", state->append_eol, filename);
-
-  ini_putl("View", "mode", state->view, filename);
-  ini_putl("View", "wordwrap", state->wordwrap, filename);
-  ini_putl("View", "scrolltolast", state->scrolltolast, filename);
-  ini_putl("View", "bytesperline", state->bytesperline_val, filename);
-  ini_putl("View", "timestamp", state->recv_timestamp, filename);
-  ini_putl("View", "linemimit", state->linelimit_val, filename);
-
-  ini_putf("Settings", "splitter", splitter_hor->ratio, filename);
-  for (int idx = 0; idx < TAB_COUNT; idx++) {
-    char key[40];
-    sprintf(key, "view%d", idx);
-    ini_putl("Settings", key, tab_states[idx], filename);
+  const char *settingsfile = state->ConfigFile;
+  if (strlen(state->PresetFile) > 0) {
+    /* store the name of the preset file in the main config, and most port
+       settings to the "preset" file */
+    ini_puts("Settings", "preset", state->PresetFile, state->ConfigFile);
+    settingsfile = state->PresetFile;
   }
 
-  ini_puts("Filters", NULL, NULL, filename);
+  if (state->portlist!=NULL && state->curport<state->numports)
+    ini_puts("Port", "port", state->portlist[state->curport], settingsfile);
+  ini_putl("Port", "baudrate", state->baudrate, settingsfile);
+  ini_putl("Port", "databits", state->databits, settingsfile);
+  ini_putl("Port", "stopbits", state->stopbits, settingsfile);
+  ini_putl("Port", "parity", state->parity, settingsfile);
+  ini_putl("Port", "flowcontrol", state->flowctrl, settingsfile);
+
+  ini_putl("Port", "localecho", state->localecho, settingsfile);
+  ini_putl("Port", "eol", state->append_eol, settingsfile);
+
+  ini_putl("View", "mode", state->view, settingsfile);
+  ini_putl("View", "wordwrap", state->wordwrap, settingsfile);
+  ini_putl("View", "scrolltolast", state->scrolltolast, settingsfile);
+  ini_putl("View", "bytesperline", state->bytesperline_val, settingsfile);
+  ini_putl("View", "timestamp", state->recv_timestamp, settingsfile);
+  ini_putl("View", "linemimit", state->linelimit_val, settingsfile);
+
+  if (splitter_hor)
+    ini_putf("Settings","splitter",splitter_hor->ratio,state->ConfigFile);
+  if (tab_states) {
+    for (int idx = 0; idx < TAB_COUNT; idx++) {
+      char key[40];
+      sprintf(key, "view%d", idx);
+      ini_putl("Settings", key, tab_states[idx], state->ConfigFile);
+    }
+  }
+
+  ini_puts("Filters", NULL, NULL, settingsfile);
   int idx = 0;
   for (FILTER *flt = state->filter_root.next; flt != NULL; flt = flt->next) {
     char key[40], data[sizeof(flt->text)+20];
     sprintf(key, "flt%d", idx++);
     sprintf(data, "%d,#%02x%02x%02x,%s", flt->enabled,
             flt->colour.r, flt->colour.g, flt->colour.b, flt->text);
-    ini_puts("Filters", key, data, filename);
+    ini_puts("Filters", key, data, settingsfile);
   }
 
-  ini_puts("Script", "file", state->ScriptFile, filename);
+  ini_puts("Script", "file", state->ScriptFile, settingsfile);
 
-  return access(filename, 0) == 0;
+  return access(state->ConfigFile, 0) == 0 && access(settingsfile, 0) == 0;
 }
 
-static bool load_settings(const char *filename, APPSTATE *state,
+static bool load_settings(APPSTATE *state,
                           enum nk_collapse_states tab_states[],
                           SPLITTERBAR *splitter_hor)
 {
-  assert(filename != NULL);
   assert(state != NULL);
-  assert(tab_states != NULL);
-  assert(splitter_hor != NULL);
+
+  const char *settingsfile = (strlen(state->PresetFile) > 0) ? state->PresetFile : state->ConfigFile;
 
   if (state->portlist != NULL && state->numports > 0) {
     char portname[128];
-    ini_gets("Port", "port", "", portname, sizearray(portname), filename);
+    ini_gets("Port", "port", "", portname, sizearray(portname), settingsfile);
     int idx;
     for (idx = 0; idx < state->numports && stricmp(state->portlist[idx], portname) != 0; idx++)
       {}
     if (idx < state->numports)
       state->curport = idx;
   }
-  state->baudrate = ini_getl("Port", "baudrate", 9600, filename);
-  state->databits = (int)ini_getl("Port", "databits", 8, filename);
-  state->stopbits = (int)ini_getl("Port", "stopbits", 1, filename);
-  state->parity = (int)ini_getl("Port", "parity", 0, filename);
-  state->flowctrl = (int)ini_getl("Port", "flowcontrol", FLOWCTRL_NONE, filename);
+  state->baudrate = ini_getl("Port", "baudrate", 9600, settingsfile);
+  state->databits = (int)ini_getl("Port", "databits", 8, settingsfile);
+  state->stopbits = (int)ini_getl("Port", "stopbits", 1, settingsfile);
+  state->parity = (int)ini_getl("Port", "parity", 0, settingsfile);
+  state->flowctrl = (int)ini_getl("Port", "flowcontrol", FLOWCTRL_NONE, settingsfile);
 
-  state->localecho = (nk_bool)ini_getl("Port", "localecho", nk_true, filename);
-  state->append_eol = (int)ini_putl("Port", "eol", EOL_CRLF, filename);
+  state->localecho = (nk_bool)ini_getl("Port", "localecho", nk_true, settingsfile);
+  state->append_eol = (int)ini_putl("Port", "eol", EOL_CRLF, settingsfile);
 
-  state->view = (int)ini_getl("View", "mode", VIEW_TEXT, filename);
-  state->wordwrap = (nk_bool)ini_getl("View", "wordwrap", nk_false, filename);
-  state->scrolltolast = (nk_bool)ini_getl("View", "scrolltolast", nk_true, filename);
-  state->bytesperline_val = ini_getl("View", "bytesperline", 8, filename);
+  state->view = (int)ini_getl("View", "mode", VIEW_TEXT, settingsfile);
+  state->wordwrap = (nk_bool)ini_getl("View", "wordwrap", nk_false, settingsfile);
+  state->scrolltolast = (nk_bool)ini_getl("View", "scrolltolast", nk_true, settingsfile);
+  state->bytesperline_val = ini_getl("View", "bytesperline", 8, settingsfile);
   if (state->bytesperline_val <= 0)
     state->bytesperline_val = 8;
   sprintf(state->bytesperline, "%d", state->bytesperline_val);
-  state->recv_timestamp = (int)ini_getl("View", "timestamp", TIMESTAMP_NONE, filename);
-  state->linelimit_val = ini_getl("View", "linelimit", 0, filename);
+  state->recv_timestamp = (int)ini_getl("View", "timestamp", TIMESTAMP_NONE, settingsfile);
+  state->linelimit_val = ini_getl("View", "linelimit", 0, settingsfile);
   if (state->linelimit_val <= 0)
     state->linelimit[0] = '\0';
   else
     sprintf(state->linelimit, "%d", state->linelimit_val);
 
-  splitter_hor->ratio = ini_getf("Settings", "splitter", 0.0, filename);
-  if (splitter_hor->ratio < 0.05f || splitter_hor->ratio > 0.95f)
-    splitter_hor->ratio = 0.70f;
-
-  for (int idx = 0; idx < TAB_COUNT; idx++) {
-    char key[40], valstr[100];
-    int opened, result;
-    tab_states[idx] = (idx == TAB_PORTCONFIG || idx == TAB_DISPLAYOPTIONS) ? NK_MAXIMIZED : NK_MINIMIZED;
-    sprintf(key, "view%d", idx);
-    ini_gets("Settings", key, "", valstr, sizearray(valstr), filename);
-    result = sscanf(valstr, "%d", &opened);
-    if (result >= 1)
-      tab_states[idx] = opened;
+  if (splitter_hor) {
+    splitter_hor->ratio = ini_getf("Settings", "splitter", 0.0, state->ConfigFile);
+    if (splitter_hor->ratio < 0.05f || splitter_hor->ratio > 0.95f)
+      splitter_hor->ratio = 0.70f;
   }
 
+  if (tab_states) {
+    for (int idx = 0; idx < TAB_COUNT; idx++) {
+      char key[40], valstr[100];
+      int opened, result;
+      tab_states[idx] = (idx == TAB_PORTCONFIG || idx == TAB_DISPLAYOPTIONS) ? NK_MAXIMIZED : NK_MINIMIZED;
+      sprintf(key, "view%d", idx);
+      ini_gets("Settings", key, "", valstr, sizearray(valstr), state->ConfigFile);
+      result = sscanf(valstr, "%d", &opened);
+      if (result >= 1)
+        tab_states[idx] = opened;
+    }
+  }
+
+  filter_clear(&state->filter_root);
   for (int idx = 0;; idx++) {
     char key[40], data[sizeof(state->filter_root.text)+20];
     sprintf(key, "flt%d", idx);
-    ini_gets("Filters", key, "", data, sizearray(data), filename);
+    ini_gets("Filters", key, "", data, sizearray(data), settingsfile);
     if (strlen(data) == 0)
       break;
     int enabled = nk_true;
@@ -595,7 +622,7 @@ static bool load_settings(const char *filename, APPSTATE *state,
       filter_add(&state->filter_root, flttext, nk_rgb(r, g, b), enabled);
   }
 
-  ini_gets("Script", "file", "", state->ScriptFile, sizearray(state->ScriptFile), filename);
+  ini_gets("Script", "file", "", state->ScriptFile, sizearray(state->ScriptFile), settingsfile);
 
   return true;
 }
@@ -1516,14 +1543,47 @@ static void panel_portconfig(struct nk_context *ctx, APPSTATE *state,
 # define VALUE_WIDTH (panel_width - LABEL_WIDTH - (2 * SPACING + 18))
 
   if (nk_tree_state_push(ctx, NK_TREE_TAB, "Configuration", &tab_states[TAB_PORTCONFIG], NULL)) {
-    int result, curidx;
-    struct nk_rect bounds;
+
+    nk_layout_row_begin(ctx, NK_STATIC, ROW_HEIGHT, 3);
+    nk_layout_row_push(ctx, LABEL_WIDTH);
+    nk_label(ctx, "Preset", NK_TEXT_ALIGN_LEFT | NK_TEXT_ALIGN_MIDDLE);
+    nk_layout_row_push(ctx, VALUE_WIDTH - BROWSEBTN_WIDTH - SPACING);
+    char path[_MAX_PATH];
+    strlcpy(path, state->PresetFile, sizearray(path));
+    bool patherror = (strlen(path) > 0 && access(path, 0) != 0);
+    if (patherror)
+      nk_style_push_color(ctx, &ctx->style.edit.text_normal, COLOUR_FG_RED);
+    const char *tiptext = strlen(path) > 0 ? path : "Load presets";
+    int result = editctrl_tooltip(ctx, NK_EDIT_FIELD|NK_EDIT_SIG_ENTER,
+                                  path, sizearray(path), nk_filter_ascii, tiptext);
+    if ((result & (NK_EDIT_COMMITED | NK_EDIT_DEACTIVATED)) != 0 && strcmp(path, state->PresetFile) != 0) {
+      save_settings(state, NULL, NULL);
+      strlcpy(state->PresetFile, path, sizearray(state->PresetFile));
+      set_extension(state->PresetFile, sizearray(state->PresetFile), "cfg");
+      load_settings(state, NULL, NULL);
+    }
+    if (patherror)
+      nk_style_pop_color(ctx);
+    nk_layout_row_push(ctx, BROWSEBTN_WIDTH);
+    if (button_symbol_tooltip(ctx, NK_SYMBOL_TRIPLE_DOT, NK_KEY_NONE, true, "Browse for Preset file")) {
+      osdialog_filters *filters = osdialog_filters_parse("Configuration files:cfg;All files:*");
+      char *fname = osdialog_file(OSDIALOG_SAVE, "Select Configuration", NULL, state->PresetFile, filters);
+      osdialog_filters_free(filters);
+      if (fname != NULL) {
+        save_settings(state, NULL, NULL);
+        strlcpy(state->PresetFile, fname, sizearray(state->PresetFile));
+        set_extension(state->PresetFile, sizearray(state->PresetFile), "cfg");
+        free(fname);
+        load_settings(state, NULL, NULL);
+      }
+    }
+    nk_layout_row_end(ctx);
 
     nk_layout_row_begin(ctx, NK_STATIC, ROW_HEIGHT, 2);
     nk_layout_row_push(ctx, LABEL_WIDTH);
     nk_label(ctx, "Port", NK_TEXT_ALIGN_LEFT | NK_TEXT_ALIGN_MIDDLE);
     nk_layout_row_push(ctx, VALUE_WIDTH);
-    bounds = nk_widget_bounds(ctx);
+    struct nk_rect bounds = nk_widget_bounds(ctx);
     const char **portlist = (state->portlist != NULL) ? (const char**)state->portlist : empty_portlist;
     int numports = (state->portlist != NULL) ? state->numports : 1;
     result = nk_combo(ctx, portlist, numports, state->curport,
@@ -1539,7 +1599,7 @@ static void panel_portconfig(struct nk_context *ctx, APPSTATE *state,
     nk_label(ctx, "Baudrate", NK_TEXT_ALIGN_LEFT | NK_TEXT_ALIGN_MIDDLE);
     nk_layout_row_push(ctx, VALUE_WIDTH);
     bounds = nk_widget_bounds(ctx);
-    curidx = value_listindex(state->baudrate, baud_strings, sizearray(baud_strings));
+    int curidx = value_listindex(state->baudrate, baud_strings, sizearray(baud_strings));
     result = nk_combo(ctx, baud_strings, sizearray(baud_strings), curidx,
                       (int)COMBOROW_CY, nk_vec2(bounds.w, 4.5*ROW_HEIGHT));
     nk_layout_row_end(ctx);
@@ -2041,7 +2101,7 @@ static void panel_script(struct nk_context *ctx, APPSTATE *state,
     if (patherror)
       nk_style_pop_color(ctx);
     nk_layout_row_push(ctx, BROWSEBTN_WIDTH);
-    if (nk_button_symbol(ctx, NK_SYMBOL_TRIPLE_DOT)) {
+    if (button_symbol_tooltip(ctx, NK_SYMBOL_TRIPLE_DOT, NK_KEY_NONE, true, "Browse for Script file")) {
       osdialog_filters *filters = osdialog_filters_parse("Tcl scripts:tcl;All files:*");
       char *fname = osdialog_file(OSDIALOG_OPEN, "Select Tcl script", NULL, state->ScriptFile, filters);
       osdialog_filters_free(filters);
@@ -2085,9 +2145,7 @@ static void button_bar(struct nk_context *ctx, APPSTATE *state)
       char path[_MAX_PATH];
       strlcpy(path, fname, sizearray(path));
       free(fname);
-      const char *ext;
-      if ((ext = strrchr(path, '.')) == NULL || strchr(ext, DIRSEP_CHAR) != NULL)
-        strlcat(path, ".txt", sizearray(path)); /* default extension .txt */
+      set_extension(path, sizearray(path), "txt");
       save_data(path, state);
     }
   }
@@ -2151,28 +2209,28 @@ int main(int argc, char *argv[])
 # endif
 
   collect_portlist(&appstate);
-  char txtConfigFile[_MAX_PATH];
-  get_configfile(txtConfigFile, sizearray(txtConfigFile), "bmserial.ini");
+
+  get_configfile(appstate.ConfigFile, sizearray(appstate.ConfigFile), "bmserial.ini");
   enum nk_collapse_states tab_states[TAB_COUNT];
   SPLITTERBAR splitter_hor;
-  load_settings(txtConfigFile, &appstate, tab_states, &splitter_hor);
+  load_settings(&appstate, tab_states, &splitter_hor);
   /* read saved recent commands */
   for (int idx = 1; ; idx++) {
     char key[32];
     snprintf(key, sizearray(key), "cmd%d", idx);
-    ini_gets("Commands", key, "", appstate.console_edit, sizearray(appstate.console_edit), txtConfigFile);
+    ini_gets("Commands", key, "", appstate.console_edit, sizearray(appstate.console_edit), appstate.ConfigFile);
     if (strlen(appstate.console_edit) == 0)
       break;
     console_history_add(&appstate.consoleedit_root, appstate.console_edit, true);
   }
   /* other configuration */
-  opt_fontsize = ini_getf("Settings", "fontsize", FONT_HEIGHT, txtConfigFile);
+  opt_fontsize = ini_getf("Settings", "fontsize", FONT_HEIGHT, appstate.ConfigFile);
   char opt_fontstd[64] = "", opt_fontmono[64] = "";
-  ini_gets("Settings", "fontstd", "", opt_fontstd, sizearray(opt_fontstd), txtConfigFile);
-  ini_gets("Settings", "fontmono", "", opt_fontmono, sizearray(opt_fontmono), txtConfigFile);
+  ini_gets("Settings", "fontstd", "", opt_fontstd, sizearray(opt_fontstd), appstate.ConfigFile);
+  ini_gets("Settings", "fontmono", "", opt_fontmono, sizearray(opt_fontmono), appstate.ConfigFile);
   char valstr[128];
   int canvas_width, canvas_height;
-  ini_gets("Settings", "size", "", valstr, sizearray(valstr), txtConfigFile);
+  ini_gets("Settings", "size", "", valstr, sizearray(valstr), appstate.ConfigFile);
   if (sscanf(valstr, "%d %d", &canvas_width, &canvas_height) != 2 || canvas_width < 100 || canvas_height < 50) {
     canvas_width = WINDOW_WIDTH;
     canvas_height = WINDOW_HEIGHT;
@@ -2218,6 +2276,13 @@ int main(int argc, char *argv[])
           if (stricmp(appstate.portlist[i], ptr) == 0)
             appstate.curport = i;
         }
+        break;
+      case 't':
+        ptr = &argv[idx][2];
+        if (*ptr == '=' || *ptr == ':')
+          ptr++;
+        strlcpy(appstate.PresetFile, ptr, sizearray(appstate.PresetFile));
+        load_settings(&appstate, NULL, NULL);
         break;
       case 'v':
         version();
@@ -2323,20 +2388,20 @@ int main(int argc, char *argv[])
 
     nk_end(ctx);
 
-    /* Draw */
+    /* draw */
     guidriver_render(COLOUR_BG0_S);
   }
 
-  save_settings(txtConfigFile, &appstate, tab_states, &splitter_hor);
+  save_settings(&appstate, tab_states, &splitter_hor);
   sprintf(valstr, "%d %d", canvas_width, canvas_height);
-  ini_puts("Settings", "size", valstr, txtConfigFile);
+  ini_puts("Settings", "size", valstr, appstate.ConfigFile);
   /* save history of commands */
-  ini_puts("Commands", NULL, NULL, txtConfigFile);  /* erase section first */
+  ini_puts("Commands", NULL, NULL, appstate.ConfigFile);  /* erase section first */
   int idx = 1;
   for (appstate.consoleedit_next = appstate.consoleedit_root.next; appstate.consoleedit_next != NULL; appstate.consoleedit_next = appstate.consoleedit_next->next) {
     char key[32];
     snprintf(key, sizearray(key), "cmd%d", idx);
-    ini_puts("Commands", key, appstate.consoleedit_next->text, txtConfigFile);
+    ini_puts("Commands", key, appstate.consoleedit_next->text, appstate.ConfigFile);
     if (idx++ > 50)
       break;  /* limit the number of memorized commands */
   }

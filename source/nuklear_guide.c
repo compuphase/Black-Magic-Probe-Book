@@ -158,7 +158,7 @@ static float guide_widget(struct nk_context *ctx, const char *id, float fontsize
   nk_style_push_color(ctx, &ctx->style.window.fixed_background.data.color, COLOUR_BG0);
   if (nk_group_begin(ctx, id, NK_WINDOW_BORDER)) {
     struct nk_rect rcline = nk_layout_widget_bounds(ctx); /* get the line width and y-start (to calculate page height) */
-    float pagewidth = rcline.w - 2*NK_SPACING;
+    float pagewidth = rcline.w - 3*NK_SPACING;
     pagetop = rcline.y;
     unsigned table_columns[MAX_COLUMNS];
     int table_column_count = 0;
@@ -280,17 +280,21 @@ static float guide_widget(struct nk_context *ctx, const char *id, float fontsize
             textwidth = font->width(font->userdata, font->height, utf8, cutpoint);
           } else {
             /* search wrap-point */
+            unsigned endpos = start;
+            for (unsigned fmtidx = 0; fmtidx < content->fmtcodes && endpos == start; fmtidx++)
+              if ((fmtcode[fmtidx].type == QFMT_LINEBREAK && fmtcode[fmtidx].pos > start) || fmtcode[fmtidx].type == QFMT_SENTINEL)
+                endpos = fmtcode[fmtidx].pos;
             unsigned stop = start;
             for ( ;; ) {
-              while (utf8[stop] != ' ' && utf8[stop] != '\0')
+              while (stop != endpos && utf8[stop] != ' ' && utf8[stop] != '\0')
                 stop++;
-              float width = font->width(font->userdata, font->height, utf8 + start, stop - start);
+              float width=font->width(font->userdata,font->height,utf8+start,stop-start);
               if (width >= textwidth)
                 break;          /* width exceeds margins, use previous cut-point */
               cutpoint = stop;
-              if (utf8[stop] == '\0')
-                break;
-              if (utf8[stop]==' ')
+              if (stop == endpos || utf8[stop] == '\0')
+                break;          /* line-break or end-of-paragraph reached */
+              if (utf8[stop] == ' ')
                 stop++;
             }
             if (cutpoint == start)
@@ -303,7 +307,7 @@ static float guide_widget(struct nk_context *ctx, const char *id, float fontsize
           nk_layout_row_end(ctx);
           if (linkTopic != QG_INVALID_LINK && links != NULL)
             qg_link_set(links, rcline.x, rcline.y, rcline.x + rcline.w, rcline.y + rcline.h, linkTopic);
-          if (pagebottom<rcline.y+rcline.h)
+          if (pagebottom < rcline.y + rcline.h)
             pagebottom = rcline.y + rcline.h;
           start = cutpoint;
           if (utf8[start] == ' ')
@@ -313,12 +317,13 @@ static float guide_widget(struct nk_context *ctx, const char *id, float fontsize
 
       content = (const QG_LINE_RECORD*)((const unsigned char*)content + content->size);
     }
+
     nk_group_end(ctx);
   }
   if (cur_fonttype != FONT_STD)
     guidriver_setfont(ctx, FONT_STD);
   nk_style_pop_color(ctx);
-  return pagebottom - pagetop;
+  return pagebottom - pagetop + 3*NK_SPACING;
 }
 
 bool nk_guide(struct nk_context *ctx, struct nk_rect *viewport, float fontsize,
@@ -366,11 +371,11 @@ bool nk_guide(struct nk_context *ctx, struct nk_rect *viewport, float fontsize,
     nk_layout_row_end(ctx);
 
     /* handle ArrowUp/Down & PageUp/Down keys */
-    if (pageheight > widgetbounds.h - NK_SPACING) {
+    if (pageheight > widgetbounds.h) {
       nk_uint xscroll, yscroll;
       nk_group_get_scroll(ctx, "guide_widget", &xscroll, &yscroll);
       nk_uint new_y = yscroll;
-      float scrolldim = pageheight - widgetbounds.h - NK_SPACING;
+      float scrolldim = pageheight - widgetbounds.h;
       if (nk_input_is_key_pressed(&ctx->input, NK_KEY_DOWN))
         new_y = (nk_uint)((yscroll + fontsize < scrolldim) ? yscroll + fontsize : scrolldim);
       else if (nk_input_is_key_pressed(&ctx->input, NK_KEY_UP))
