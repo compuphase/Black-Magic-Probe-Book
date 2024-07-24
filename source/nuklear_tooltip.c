@@ -22,6 +22,7 @@
 # include <mmsystem.h>
 #elif defined __linux__
 # include <sys/time.h>
+# include <time.h>
 #endif
 #include <stdbool.h>
 #include <string.h>
@@ -43,9 +44,9 @@ unsigned long timestamp(void)
     }
     return timeGetTime();
 # else
-    struct timeval tv;
-    gettimeofday(&tv, NULL);
-    return 1000 * tv.tv_sec + tv.tv_usec / 1000;
+    struct timespec tv;
+    clock_gettime(CLOCK_MONOTONIC, &tv);
+    return 1000 * tv.tv_sec + tv.tv_nsec / 1000000L;
 # endif
 }
 

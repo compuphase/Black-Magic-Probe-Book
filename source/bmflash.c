@@ -1299,19 +1299,27 @@ static bool probe_set_options(APPSTATE *state)
         bmp_callback(BMPERR_MONITORCMD, "Setting connect-with-reset option failed");
         ok = false;
       }
-    }
-    strcpy(cmd, "tpwr ");
-    strlcat(cmd, state->tpwr ? "enable" : "disable", sizearray(cmd));
-    if (bmp_monitor(cmd)) {
-      /* give the micro-controller a bit of time to start up, after power-up */
-#     if defined _WIN32
-        Sleep(100);
-#     else
-        usleep(100 * 1000);
-#     endif
     } else {
-      bmp_callback(BMPERR_MONITORCMD, "Power to target failed");
-      ok = false;
+      bmp_callback(BMPERR_MONITORCMD, "Probe does not support 'Reset Target during connect' option");
+      state->connect_srst = false;
+    }
+    if (bmp_expand_monitor_cmd(cmd, sizearray(cmd), "tpwr", state->monitor_cmds)) {
+      strlcat(cmd, " ", sizearray(cmd));
+      strlcat(cmd, state->tpwr ? "enable" : "disable", sizearray(cmd));
+      if (bmp_monitor(cmd)) {
+        /* give the micro-controller a bit of time to start up, after power-up */
+#       if defined _WIN32
+          Sleep(100);
+#       else
+          usleep(100 * 1000);
+#       endif
+      } else {
+        bmp_callback(BMPERR_MONITORCMD, "Power to target failed");
+        ok = false;
+      }
+    } else {
+      bmp_callback(BMPERR_MONITORCMD, "Probe does not support 'Power Target' option");
+      state->tpwr = false;
     }
     state->set_probe_options = false;
   }
@@ -1975,7 +1983,7 @@ static bool handle_stateaction(APPSTATE *state, enum nk_collapse_states tab_stat
       SETSTATE(*state, STATE_IDLE);
     if (state->download_success && state->print_time) {
       char msg[100];
-      clock_t tstamp_stop = clock();
+      unsigned long tstamp_stop = timestamp();
       sprintf(msg, "Completed in %.1f seconds\n", (tstamp_stop - state->tstamp_start) / 1000.0);
       log_addstring(msg);
     }

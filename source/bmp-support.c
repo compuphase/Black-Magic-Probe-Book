@@ -778,7 +778,8 @@ bool bmp_has_command(const char *name, const char *list)
   return false;
 }
 
-/** bmp_expand_monitor_cmd() finds the complete command from a prefix.
+/** bmp_expand_monitor_cmd() finds the complete command from a prefix. Only the
+ *  sub-commands of the "monitor" command are taken into account.
  *
  *  \param buffer   [out] Will contain the complete command. This parameter may
  *                  be set to NULL (in which case the complete command is not
@@ -1018,7 +1019,8 @@ bool bmp_verify(void)
     char cmd[100];
     sprintf(cmd, "qCRC:%lx,%lx", saddr, ssize);
     gdbrsp_xmit(cmd, -1);
-    size_t rcvd = gdbrsp_recv(cmd, sizearray(cmd), 3000);
+    int timeout = (ssize + 0xffff) / 0x10000;
+    size_t rcvd = gdbrsp_recv(cmd, sizearray(cmd), timeout * 1000);
     cmd[rcvd] = '\0';
     unsigned crc_tgt = (rcvd >= 2 && cmd[0] == 'C') ? strtoul(cmd + 1, NULL, 16) : 0;
     if (crc_tgt != crc_src) {

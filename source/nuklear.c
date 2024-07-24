@@ -18785,6 +18785,7 @@ nk_draw_symbol(struct nk_command_buffer *out, enum nk_symbol_type type,
         case NK_SYMBOL_TRIANGLE_RIGHT:       heading = NK_RIGHT;    break;
         case NK_SYMBOL_TRIANGLE_DOWN_SMALL:  heading = NK_DOWN;     break;
         case NK_SYMBOL_TRIANGLE_RIGHT_SMALL: heading = NK_RIGHT;    break;
+        default: break; /* to avoid 'enumeration value not used' warnings */
         }
         if (type == NK_SYMBOL_TRIANGLE_DOWN_SMALL || type == NK_SYMBOL_TRIANGLE_RIGHT_SMALL) {
             float sz = NK_MIN(content.w, content.h);

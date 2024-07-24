@@ -41,6 +41,7 @@ SOFTWARE.
 #else
 # if defined __linux__
 #   include <bsd/string.h>
+#   include <strings.h>
 # endif
 # define stricmp(s1, s2)  strcasecmp((s1), (s2))
 #endif
