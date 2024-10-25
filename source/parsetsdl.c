@@ -487,7 +487,7 @@ static CTF_TYPE *type_lookup(CTF_TYPE *root, const char *name)
   assert(name != NULL);
   CTF_TYPE *item;
   for (item = root->next; item != NULL; item = item->next)
-    if (item->name != NULL && strcmp(item->name, name) == 0)
+    if (strcmp(item->name, name) == 0)
       return item;
   return NULL;
 }

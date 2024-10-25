@@ -109,12 +109,12 @@
 
 #define FONT_HEIGHT     14              /* default font size */
 #define WINDOW_WIDTH    (35 * opt_fontsize)
-#define WINDOW_HEIGHT   (30 * opt_fontsize)
+#define WINDOW_HEIGHT   (31 * opt_fontsize)
 #define ROW_HEIGHT      (2 * opt_fontsize)
 #define COMBOROW_CY     (0.9 * opt_fontsize)
 #define BROWSEBTN_WIDTH (1.5 * opt_fontsize)
 #define SPACING         2.0f
-#define LOGVIEW_HEIGHT  (24 * opt_fontsize + SPACING)
+#define LOGVIEW_HEIGHT  (25 * opt_fontsize + SPACING)
 
 static float opt_fontsize = FONT_HEIGHT;
 
@@ -910,8 +910,9 @@ typedef struct tagAPPSTATE {
   int TargetFileType;           /**< ELF, HEX, BIN */
   char DownloadAddress[32];     /**< address in Flash memory where the target file is downloaded to */
   char SerialFile[_MAX_PATH];   /**< optional file for serialization settings */
-  char ScriptFile[_MAX_PATH];   /**< path to post-process script */
-  nk_bool ScriptOnFailures;     /**< whether to execute the post-process script on failed uploads too */
+  char TclPreProc[_MAX_PATH];   /**< path to pre-process script */
+  char TclPostProc[_MAX_PATH];  /**< path to post-process script */
+  nk_bool PostProcOnFail;       /**< whether to execute the post-process script on failed uploads too */
   struct tcl tcl;               /**< Tcl context */
   char *tcl_script;             /**< Tcl script (loaded from file) */
   thrd_t thrd_download;         /**< thread id for downloading/erasing firmware */
@@ -925,6 +926,7 @@ typedef struct tagAPPSTATE {
 enum {
   TAB_OPTIONS,
   TAB_SERIALIZATION,
+  TAB_SCRIPTS,
   TAB_STATUS,
   /* --- */
   TAB_COUNT
@@ -955,6 +957,7 @@ enum {
   STATE_ATTACH,
   STATE_PRE_DOWNLOAD,
   STATE_PATCH_FILE,
+  STATE_PREPROCESS,
   STATE_CLEARFLASH,
   STATE_DOWNLOAD,
   STATE_OPTIONBYTES,
@@ -972,13 +975,102 @@ enum {
              (app).curstate = (state); \
         } while (0)
 
-static int tcl_cmd_exec(struct tcl *tcl, const struct tcl_value *args, const struct tcl_value *user)
+static bool target_partid(APPSTATE *state);
+static bool target_flashsize(APPSTATE *state, unsigned *size);
+
+static int tcl_cmd_firmware(struct tcl *tcl, const struct tcl_value *args, const struct tcl_value *user)
 {
   (void)user;
-  struct tcl_value *cmd = tcl_list_item(args, 1);
-  int retcode = system(tcl_data(cmd));
-  tcl_free(cmd);
-  return tcl_result(tcl, (retcode < 0), tcl_value("", 0));
+
+  /* get the address (shared for read and write subcommands) */
+  size_t addr = 0;
+  struct tcl_value *subcmd = tcl_list_item(args, 1);
+  if (strcmp(tcl_data(subcmd), "read") == 0 || strcmp(tcl_data(subcmd), "write") == 0) {
+    int nargs = tcl_list_length(args);
+    if (nargs < 4) {
+      tcl_free(subcmd);
+      return tcl_error_result(tcl, TCL_ERROR_ARGUMENT, NULL);
+    }
+    struct tcl_value *v_addr = tcl_list_item(args, 2);
+    addr = (size_t)tcl_number(v_addr);
+    tcl_free(v_addr);
+  }
+
+  int r = 0;
+  if (strcmp(tcl_data(subcmd), "read") == 0) {
+    /* firmware read address count */
+    /* get the count of bytes */
+    struct tcl_value *v_count = tcl_list_item(args, 3);
+    size_t count = (size_t)tcl_number(v_count);
+    tcl_free(v_count);
+    unsigned char *target = filesection_get_address(addr, count);
+    if (target != NULL)
+      r = tcl_result(tcl, 0, tcl_value((char*)target, count));
+    else
+      r = tcl_error_result(tcl, TCL_ERROR_ARGUMENT, NULL);
+  } else if (strcmp(tcl_data(subcmd), "write") == 0) {
+    struct tcl_value *v_data = tcl_list_item(args, 3);
+    size_t count = tcl_length(v_data);
+    unsigned char *target = filesection_get_address(addr, count);
+    if (target != NULL) {
+      memcpy(target, tcl_data(v_data), count);
+      r = tcl_numeric_result(tcl, count);
+    } else {
+      r = tcl_error_result(tcl, TCL_ERROR_ARGUMENT, NULL);
+    }
+    tcl_free(v_data);
+  } else if (strcmp(tcl_data(subcmd), "size") == 0 || strcmp(tcl_data(subcmd), "length") == 0) {
+    unsigned long head = 0, tail = 0;
+    unsigned long addr, size;
+    int type;
+    if (filesection_getdata(0, &addr, NULL, &size, &type) && type != SECTIONTYPE_DATA) {
+      head = addr;
+      tail = addr + size;
+    }
+    for (int idx = 1; filesection_getdata(0, &addr, NULL, &size, &type); idx++) {
+      if (type != SECTIONTYPE_DATA) {
+        if (head > addr)
+          head = addr;
+        if (tail < addr + size)
+          tail = addr + size;
+      }
+    }
+    r = tcl_numeric_result(tcl, tail - head);
+  } else {
+    r = tcl_error_result(tcl, TCL_ERROR_SUBCMD, tcl_data(subcmd));
+  }
+  tcl_free(subcmd);
+  return r;
+}
+
+static int tcl_cmd_target(struct tcl *tcl, const struct tcl_value *args, const struct tcl_value *user)
+{
+  (void)user;
+  APPSTATE *state = (APPSTATE*)tcl->user;
+  assert(state != NULL);
+
+  int r = 0;
+  struct tcl_value *subcmd = tcl_list_item(args, 1);
+  if (strcmp(tcl_data(subcmd), "driver") == 0) {
+    r = tcl_result(tcl, 0, tcl_value(state->mcufamily, -1));
+  } else if (strcmp(tcl_data(subcmd), "partid") == 0) {
+    if (state->partid == 0)
+      target_partid(state);
+    r = tcl_numeric_result(tcl, state->partid);
+  } else if (strcmp(tcl_data(subcmd), "flash") == 0) {
+    if (state->partid == 0)
+      target_partid(state);
+    unsigned flashsize;
+    target_flashsize(state, &flashsize);
+    r = tcl_numeric_result(tcl, flashsize);
+  } else if (strcmp(tcl_data(subcmd), "sram") == 0) {
+    if (state->partid == 0)
+      target_partid(state);
+    const MCUINFO *info = mcuinfo_data(state->mcufamily, state->partid);
+    r = tcl_numeric_result(tcl, (info != NULL) ? info->sram : 0);
+  }
+  tcl_free(subcmd);
+  return r;
 }
 
 static int tcl_cmd_syscmd(struct tcl *tcl, const struct tcl_value *args, const struct tcl_value *user)
@@ -992,14 +1084,30 @@ static int tcl_cmd_syscmd(struct tcl *tcl, const struct tcl_value *args, const s
 
 static int tcl_cmd_puts(struct tcl *tcl, const struct tcl_value *args, const struct tcl_value *user)
 {
-  char msg[512] = "";
+  bool no_eol = (tcl_list_find(user, "-nonewline") >= 0);
   struct tcl_value *text = tcl_list_item(args, tcl_list_length(args) - 1);
-  strlcpy(msg, tcl_data(text), sizearray(msg));
-  if (tcl_list_find(user, "-nonewline") < 0)
-    strlcat(msg, "\n", sizearray(msg));
+  int r = 0;
+  if (tcl_list_length(args) == 3) {
+    struct tcl_value *fd = tcl_list_item(args, 1);
+    FILE *fp = (FILE*)(intptr_t)tcl_number(fd);
+    if (fileno(fp) < 0) {
+      r = tcl_error_result(tcl, TCL_ERROR_FILEIO, NULL);
+    } else {
+      fprintf(fp, "%s", tcl_data(text));
+      if (!no_eol)
+        fprintf(fp, "\n");
+    }
+    if (fd)
+      tcl_free(fd);
+  } else {
+    char msg[512];
+    strlcpy(msg, tcl_data(text), sizearray(msg));
+    if (!no_eol)
+      strlcat(msg, "\n", sizearray(msg));
+    log_addstring(msg);
+  }
   tcl_free(text);
-  log_addstring(msg);
-  return tcl_result(tcl, 0, tcl_value("", 0));
+  return (r == 0) ? tcl_empty_result(tcl) : r;
 }
 
 static int tcl_cmd_wait(struct tcl *tcl, const struct tcl_value *args, const struct tcl_value *user)
@@ -1082,10 +1190,12 @@ static int tcl_thread(void *arg)
   return result == 0;
 }
 
-static bool tcl_preparescript(APPSTATE *state)
+static bool tcl_preparescript(APPSTATE *state, int type)
 {
   /* load the script file */
-  FILE *fp = fopen(state->ScriptFile,"rt");
+  assert(type == 1 || type == 2);
+  const char *filename = (type == 1) ? state->TclPreProc : state->TclPostProc;
+  FILE *fp = fopen(filename, "rt");
   if (fp == NULL) {
     log_addstring("^1Tcl script file not found.\n");
     return false;
@@ -1123,12 +1233,9 @@ static bool tcl_preparescript(APPSTATE *state)
     tcl_var(&state->tcl, "ident", tcl_value("", 0));
   }
   tcl_var(&state->tcl, "sysreply", tcl_value("", 0));
-  tcl_var(&state->tcl, "status", state->download_success ? tcl_value("1", 1) : tcl_value("0", 1));
+  tcl_var(&state->tcl, "status", type == 2 && state->download_success ? tcl_value("1", 1) : tcl_value("0", 1));
   return true;
 }
-
-static bool target_partid(APPSTATE *state);
-static bool target_flashsize(APPSTATE *state, unsigned *size);
 
 static int download_thread(void *arg)
 {
@@ -1176,6 +1283,14 @@ static char *getpath(char *path, size_t pathlength, const char *basename, const 
   return path;
 }
 
+static const char *getbasename(const char *path)
+{
+  char *basename = strrchr(path, DIRSEP_CHAR);
+  if (basename != NULL)
+    return basename + 1;
+  return path;
+}
+
 static bool load_targetparams(const char *filename, APPSTATE *state)
 {
   assert(filename != NULL);
@@ -1189,8 +1304,9 @@ static bool load_targetparams(const char *filename, APPSTATE *state)
     state->fullerase = nk_false;
     state->crp_level = 0;
     state->DownloadAddress[0] = '\0';
-    state->ScriptFile[0] = '\0';
-    state->ScriptOnFailures = nk_false;
+    state->TclPreProc[0] = '\0';
+    state->TclPostProc[0] = '\0';
+    state->PostProcOnFail = nk_false;
     state->serialize = 0;
     state->Section[0] = '\0';
     state->Address[0] = '\0';
@@ -1207,8 +1323,9 @@ static bool load_targetparams(const char *filename, APPSTATE *state)
   state->fullerase = (nk_bool)ini_getl("Flash", "full-erase", 0, filename);
   state->crp_level = (int)ini_getl("Flash", "crp-level", 0, filename);
   ini_gets("Flash", "download-address", "", state->DownloadAddress, sizearray(state->DownloadAddress), filename);
-  ini_gets("Flash", "postprocess", "", state->ScriptFile, sizearray(state->ScriptFile), filename);
-  state->ScriptOnFailures = (nk_bool)ini_getl("Flash", "postprocess-failures", 0, filename);
+  ini_gets("Flash", "preprocess", "", state->TclPreProc, sizearray(state->TclPreProc), filename);
+  ini_gets("Flash", "postprocess", "", state->TclPostProc, sizearray(state->TclPostProc), filename);
+  state->PostProcOnFail = (nk_bool)ini_getl("Flash", "postprocess-failures", 0, filename);
 
   ini_gets("Serialize", "file", "", state->SerialFile, sizearray(state->SerialFile), filename);
   char serialfile[_MAX_PATH];
@@ -1266,8 +1383,9 @@ static bool save_targetparams(const char *filename, const APPSTATE *state)
   ini_putl("Flash", "full-erase", state->fullerase, filename);
   ini_putl("Flash", "crp-level", state->crp_level, filename);
   ini_puts("Flash", "download-address", state->DownloadAddress, filename);
-  ini_puts("Flash", "postprocess", state->ScriptFile, filename);
-  ini_putl("Flash", "postprocess-failures", state->ScriptOnFailures, filename);
+  ini_puts("Flash", "preprocess", state->TclPreProc, filename);
+  ini_puts("Flash", "postprocess", state->TclPostProc, filename);
+  ini_putl("Flash", "postprocess-failures", state->PostProcOnFail, filename);
 
   ini_puts("Serialize", "file", state->SerialFile, filename);
   char serialfile[_MAX_PATH];
@@ -1457,6 +1575,14 @@ static void check_crp_level(APPSTATE *state)
   }
 }
 
+static void close_tabs(enum nk_collapse_states tab_states[TAB_COUNT], int activetab)
+{
+  tab_states[TAB_OPTIONS] = (activetab == TAB_OPTIONS) ? NK_MAXIMIZED : NK_MINIMIZED;
+  tab_states[TAB_SERIALIZATION] = (activetab == TAB_SERIALIZATION) ? NK_MAXIMIZED : NK_MINIMIZED;
+  tab_states[TAB_SCRIPTS] = (activetab == TAB_SCRIPTS) ? NK_MAXIMIZED : NK_MINIMIZED;
+  tab_states[TAB_STATUS] = (activetab == TAB_STATUS) ? NK_MAXIMIZED : NK_MINIMIZED;
+}
+
 static bool panel_target(struct nk_context *ctx, APPSTATE *state)
 {
   /* edit/selection field for the target (ELF) file (plus browse button) */
@@ -1525,7 +1651,7 @@ static void panel_options(struct nk_context *ctx, APPSTATE *state,
   assert(state != NULL);
   assert(tab_states != NULL);
 
-  #define COMPACT_ROW   (ROW_HEIGHT * 0.8)
+# define COMPACT_ROW    (ROW_HEIGHT * 0.8)
   nk_bool toggled;
   if (nk_tree_state_push(ctx, NK_TREE_TAB, "Options", &tab_states[TAB_OPTIONS], &toggled)) {
     assert(state->probelist != NULL);
@@ -1607,31 +1733,10 @@ static void panel_options(struct nk_context *ctx, APPSTATE *state,
     checkbox_tooltip(ctx, "Show Download Time", &state->print_time, NK_TEXT_LEFT,
                      "Print after each download, how many seconds it took");
 
-    nk_layout_row(ctx, NK_DYNAMIC, ROW_HEIGHT, 3, nk_ratio(3, 0.45, 0.497, 0.053));
-    nk_label(ctx, "Post-processing script (Tcl)", NK_TEXT_ALIGN_LEFT | NK_TEXT_ALIGN_MIDDLE);
-    bool error = editctrl_cond_color(ctx, strlen(state->ScriptFile) > 0 && access(state->ScriptFile, 0) != 0, COLOUR_BG_DARKRED);
-    editctrl_tooltip(ctx, NK_EDIT_FIELD,
-                     state->ScriptFile, sizearray(state->ScriptFile),
-                     nk_filter_ascii, "Tcl script to run after a successful download");
-    editctrl_reset_color(ctx, error);
-    if (button_symbol_tooltip(ctx, NK_SYMBOL_TRIPLE_DOT, NK_KEY_NONE, nk_true, "Browse...")) {
-      nk_input_clear_mousebuttons(ctx);
-      osdialog_filters *filters = osdialog_filters_parse("Tcl scripts:tcl;All files:*");
-      char *fname = osdialog_file(OSDIALOG_OPEN, "Select Tcl script", NULL, state->ScriptFile, filters);
-      osdialog_filters_free(filters);
-      if (fname != NULL) {
-        strlcpy(state->ScriptFile, fname, sizearray(state->ScriptFile));
-        free(fname);
-      }
-    }
-    nk_layout_row(ctx, NK_DYNAMIC, COMPACT_ROW, 2, nk_ratio(2, 0.45, 0.55));
-    nk_spacing(ctx, 1);
-    checkbox_tooltip(ctx, "Post-process on failed downloads", &state->ScriptOnFailures, NK_TEXT_LEFT,
-                     "Also run the post-process script after a failed download");
-
     nk_tree_state_pop(ctx);
 
     tab_states[TAB_SERIALIZATION] = NK_MINIMIZED;
+    tab_states[TAB_SCRIPTS] = NK_MINIMIZED;
     tab_states[TAB_STATUS] = NK_MINIMIZED;
   } else if (toggled) {
     tab_states[TAB_STATUS] = NK_MAXIMIZED;
@@ -1706,17 +1811,74 @@ static void panel_serialize(struct nk_context *ctx, APPSTATE *state,
     nk_tree_state_pop(ctx);
 
     tab_states[TAB_OPTIONS] = NK_MINIMIZED;
+    tab_states[TAB_SCRIPTS] = NK_MINIMIZED;
     tab_states[TAB_STATUS] = NK_MINIMIZED;
   } else if (toggled) {
     tab_states[TAB_STATUS] = NK_MAXIMIZED;
   }
 }
 
-static void close_tabs(enum nk_collapse_states tab_states[TAB_COUNT])
+static void panel_scripts(struct nk_context *ctx, APPSTATE *state,
+                          enum nk_collapse_states tab_states[TAB_COUNT])
 {
-  tab_states[TAB_OPTIONS] = NK_MINIMIZED;
-  tab_states[TAB_SERIALIZATION] = NK_MINIMIZED;
-  tab_states[TAB_STATUS] = NK_MAXIMIZED;
+  assert(ctx != NULL);
+  assert(state != NULL);
+  assert(tab_states != NULL);
+
+# define COMPACT_ROW    (ROW_HEIGHT * 0.8)
+  nk_bool toggled;
+  if (nk_tree_state_push(ctx, NK_TREE_TAB, "Scripts", &tab_states[TAB_SCRIPTS], &toggled)) {
+    nk_layout_row_dynamic(ctx, COMPACT_ROW, 1);
+    nk_label(ctx, "Optional Tcl scripts that run before or after the firmware download.", NK_TEXT_LEFT);
+
+    nk_layout_row(ctx, NK_DYNAMIC, ROW_HEIGHT, 3, nk_ratio(3, 0.35, 0.597, 0.053));
+    nk_label(ctx, "Pre-processing script", NK_TEXT_ALIGN_LEFT | NK_TEXT_ALIGN_MIDDLE);
+    bool error = editctrl_cond_color(ctx, strlen(state->TclPreProc) > 0 && access(state->TclPreProc, 0) != 0, COLOUR_BG_DARKRED);
+    editctrl_tooltip(ctx, NK_EDIT_FIELD,
+                     state->TclPreProc, sizearray(state->TclPreProc),
+                     nk_filter_ascii, "Tcl script to run before a download");
+    editctrl_reset_color(ctx, error);
+    if (button_symbol_tooltip(ctx, NK_SYMBOL_TRIPLE_DOT, NK_KEY_NONE, nk_true, "Browse...")) {
+      nk_input_clear_mousebuttons(ctx);
+      osdialog_filters *filters = osdialog_filters_parse("Tcl scripts:tcl;All files:*");
+      char *fname = osdialog_file(OSDIALOG_OPEN, "Select Tcl script", NULL, state->TclPreProc, filters);
+      osdialog_filters_free(filters);
+      if (fname != NULL) {
+        strlcpy(state->TclPreProc, fname, sizearray(state->TclPreProc));
+        free(fname);
+      }
+    }
+
+    nk_layout_row(ctx, NK_DYNAMIC, ROW_HEIGHT, 3, nk_ratio(3, 0.35, 0.597, 0.053));
+    nk_label(ctx, "Post-processing script", NK_TEXT_ALIGN_LEFT | NK_TEXT_ALIGN_MIDDLE);
+    error = editctrl_cond_color(ctx, strlen(state->TclPostProc) > 0 && access(state->TclPostProc, 0) != 0, COLOUR_BG_DARKRED);
+    editctrl_tooltip(ctx, NK_EDIT_FIELD,
+                     state->TclPostProc, sizearray(state->TclPostProc),
+                     nk_filter_ascii, "Tcl script to run after a successful download");
+    editctrl_reset_color(ctx, error);
+    if (button_symbol_tooltip(ctx, NK_SYMBOL_TRIPLE_DOT, NK_KEY_NONE, nk_true, "Browse...")) {
+      nk_input_clear_mousebuttons(ctx);
+      osdialog_filters *filters = osdialog_filters_parse("Tcl scripts:tcl;All files:*");
+      char *fname = osdialog_file(OSDIALOG_OPEN, "Select Tcl script", NULL, state->TclPostProc, filters);
+      osdialog_filters_free(filters);
+      if (fname != NULL) {
+        strlcpy(state->TclPostProc, fname, sizearray(state->TclPostProc));
+        free(fname);
+      }
+    }
+    nk_layout_row(ctx, NK_DYNAMIC, COMPACT_ROW, 2, nk_ratio(2, 0.35, 0.65));
+    nk_spacing(ctx, 1);
+    checkbox_tooltip(ctx, "Post-process on failed downloads", &state->PostProcOnFail, NK_TEXT_LEFT,
+                     "Also run the post-process script after a failed download");
+
+    nk_tree_state_pop(ctx);
+
+    tab_states[TAB_OPTIONS] = NK_MINIMIZED;
+    tab_states[TAB_SERIALIZATION] = NK_MINIMIZED;
+    tab_states[TAB_STATUS] = NK_MINIMIZED;
+  } else if (toggled) {
+    tab_states[TAB_STATUS] = NK_MAXIMIZED;
+  }
 }
 
 static bool handle_stateaction(APPSTATE *state, enum nk_collapse_states tab_states[TAB_COUNT])
@@ -1770,7 +1932,7 @@ static bool handle_stateaction(APPSTATE *state, enum nk_collapse_states tab_stat
     break;
 
   case STATE_SAVE:
-    close_tabs(tab_states);
+    close_tabs(tab_states, TAB_STATUS);
     if (access(state->TargetFile, 0) == 0) {
       /* save settings in config file */
       strlcpy(state->ParamFile, state->TargetFile, sizearray(state->ParamFile));
@@ -1865,7 +2027,6 @@ static bool handle_stateaction(APPSTATE *state, enum nk_collapse_states tab_stat
         unsigned char data[50];
         int datasize = (int)strtol(state->SerialSize, NULL, 10);
         serialize_fmtoutput(data, datasize, serial_get(state->Serial), state->SerialFmt);
-        //??? enhancement: run a script, because the serial number may include a check digit
         if (state->serialize == SER_ADDRESS)
           result = serialize_address(state->TargetFile, state->Section, strtoul(state->Address,NULL,16), data, datasize);
         else if (state->serialize == SER_MATCH)
@@ -1876,11 +2037,48 @@ static bool handle_stateaction(APPSTATE *state, enum nk_collapse_states tab_stat
           log_addstring(msg);
         }
       }
-      SETSTATE(*state, result ? STATE_CLEARFLASH : STATE_IDLE);
+      SETSTATE(*state, result ? STATE_PREPROCESS : STATE_IDLE);
     } else {
-      SETSTATE(*state, STATE_CLEARFLASH);
+      SETSTATE(*state, STATE_PREPROCESS);
     }
     waitidle = false;
+    break;
+
+  case STATE_PREPROCESS:
+    if (strlen(state->TclPreProc) > 0) {
+      if (state->isrunning_tcl == THRD_IDLE) {
+        const char *basename = getbasename(state->TclPreProc);
+        if (tcl_preparescript(state, 1)) {
+          char msg[280];
+          sprintf(msg, "^4Running: %s\n", basename);
+          log_addstring(msg);
+          gdbrsp_clear();
+          /* start a thread to run the script (it is resumed in the main loop) */
+          state->isrunning_tcl = THRD_RUNNING;
+          if (thrd_create(&state->thrd_tcl, tcl_thread, state) != thrd_success)
+            state->isrunning_tcl = THRD_IDLE;
+        } else {
+          char msg[280];
+          sprintf(msg, "^1Failed running: %s\n", basename);
+          log_addstring(msg);
+          gdbrsp_clear();
+        }
+      } else if (state->isrunning_tcl == THRD_COMPLETED || state->isrunning_tcl == THRD_ABORT) {
+        if (state->isrunning_tcl == THRD_ABORT)
+          log_addstring("^1Aborted\n");
+        thrd_join(state->thrd_tcl, &state->isrunning_tcl);
+        state->isrunning_tcl = THRD_IDLE;
+      } else if (state->isrunning_tcl == THRD_RUNNING) {
+        rspreply_poll();
+      }
+      if (state->isrunning_tcl == THRD_IDLE) {
+        SETSTATE(*state, STATE_CLEARFLASH);
+        waitidle = false;
+      }
+    } else {
+      SETSTATE(*state, STATE_CLEARFLASH);
+      waitidle = false;
+    }
     break;
 
   case STATE_CLEARFLASH:
@@ -1977,7 +2175,7 @@ static bool handle_stateaction(APPSTATE *state, enum nk_collapse_states tab_stat
     state->download_success = bmp_verify();
     if (state->download_success)
       SETSTATE(*state, STATE_FINISH);
-    else if (strlen(state->ScriptFile) > 0 && state->ScriptOnFailures)
+    else if (strlen(state->TclPostProc) > 0 && state->PostProcOnFail)
       SETSTATE(*state, STATE_POSTPROCESS);
     else
       SETSTATE(*state, STATE_IDLE);
@@ -2016,16 +2214,12 @@ static bool handle_stateaction(APPSTATE *state, enum nk_collapse_states tab_stat
 
   case STATE_POSTPROCESS:
     /* optionally perform a post-processing step */
-    if (strlen(state->ScriptFile) > 0) {
+    if (strlen(state->TclPostProc) > 0) {
       if (state->isrunning_tcl == THRD_IDLE) {
-        char *basename = strrchr(state->ScriptFile, DIRSEP_CHAR);
-        if (basename != NULL)
-          basename += 1;
-        else
-          basename = state->ScriptFile;
-        if (tcl_preparescript(state)) {
+        const char *basename = getbasename(state->TclPostProc);
+        if (tcl_preparescript(state, 2)) {
           char msg[280];
-          sprintf(msg, "Running: %s\n", basename);
+          sprintf(msg, "^4Running: %s\n", basename);
           log_addstring(msg);
           gdbrsp_clear();
           /* start a thread to run the script (it is resumed in the main loop) */
@@ -2039,7 +2233,8 @@ static bool handle_stateaction(APPSTATE *state, enum nk_collapse_states tab_stat
           gdbrsp_clear();
         }
       } else if (state->isrunning_tcl == THRD_COMPLETED || state->isrunning_tcl == THRD_ABORT) {
-        log_addstring(state->isrunning_tcl == THRD_COMPLETED ? "^2Done\n" : "^1Aborted\n");
+        if (state->isrunning_tcl == THRD_ABORT)
+          log_addstring("^1Aborted\n");
         thrd_join(state->thrd_tcl, &state->isrunning_tcl);
         state->isrunning_tcl = THRD_IDLE;
       } else if (state->isrunning_tcl == THRD_RUNNING) {
@@ -2171,7 +2366,7 @@ static bool handle_stateaction(APPSTATE *state, enum nk_collapse_states tab_stat
         free(fname);
         const char *ext;
         if ((ext = strrchr(path, '.')) == NULL || strchr(ext, DIRSEP_CHAR) != NULL)
-          strlcat(path, ".bin", sizearray(path)); /* default extension .csv */
+          strlcat(path, ".bin", sizearray(path)); /* default extension .bin */
         if (state->partid == 0 || !state->is_attached) {
           state->is_attached = true;
           target_partid(state);
@@ -2288,9 +2483,10 @@ int main(int argc, char *argv[])
     strlcat(appstate.ParamFile, ".bmcfg", sizearray(appstate.ParamFile));
 
   tcl_init(&appstate.tcl, &appstate);
-  tcl_register(&appstate.tcl, "exec", tcl_cmd_exec, 0, 1, 1, NULL);
+  tcl_register(&appstate.tcl, "firmware", tcl_cmd_firmware, 1, 0, 2, NULL);
   tcl_register(&appstate.tcl, "puts", tcl_cmd_puts, 0, 1, 2, tcl_value("-nonewline", -1));
   tcl_register(&appstate.tcl, "syscmd", tcl_cmd_syscmd, 0, 1, 1, NULL);
+  tcl_register(&appstate.tcl, "target", tcl_cmd_target, 1, 0, 0, NULL);
   tcl_register(&appstate.tcl, "wait", tcl_cmd_wait, 0, 1, 3, NULL);
   rspreply_init();
 
@@ -2301,9 +2497,7 @@ int main(int argc, char *argv[])
   nuklear_style(ctx);
 
   enum nk_collapse_states tab_states[TAB_COUNT];
-  tab_states[TAB_OPTIONS] = NK_MINIMIZED;
-  tab_states[TAB_SERIALIZATION] = NK_MINIMIZED;
-  tab_states[TAB_STATUS] = NK_MAXIMIZED;
+  close_tabs(tab_states, TAB_STATUS);
 
   bool help_active = false;
   int toolmenu_active = TOOL_CLOSE;
@@ -2337,9 +2531,10 @@ int main(int argc, char *argv[])
       if (nk_group_begin(ctx, "SubPanel", 0)) {
         panel_options(ctx, &appstate, tab_states);
         panel_serialize(ctx, &appstate, tab_states);
+        panel_scripts(ctx, &appstate, tab_states);
 
         if (nk_tree_state_push(ctx, NK_TREE_TAB, "Status", &tab_states[TAB_STATUS], NULL)) {
-          nk_layout_row_dynamic(ctx, logview_height - 3.4 * ROW_HEIGHT - 8 *SPACING, 1);
+          nk_layout_row_dynamic(ctx, logview_height - 4.4 * ROW_HEIGHT - 8 *SPACING, 1);
           log_widget(ctx, "status", logtext, opt_fontsize, &loglines);
 
           nk_layout_row_dynamic(ctx, ROW_HEIGHT*0.4, 1);
@@ -2352,6 +2547,7 @@ int main(int argc, char *argv[])
 
           tab_states[TAB_OPTIONS] = NK_MINIMIZED;
           tab_states[TAB_SERIALIZATION] = NK_MINIMIZED;
+          tab_states[TAB_SCRIPTS] = NK_MINIMIZED;
         }
 
         nk_group_end(ctx);
@@ -2430,33 +2626,33 @@ int main(int argc, char *argv[])
         toolmenu_active = tools_popup(ctx, &rc_toolbutton);
         switch (toolmenu_active) {
         case TOOL_RESCAN:
-          close_tabs(tab_states);
+          close_tabs(tab_states, TAB_STATUS);
           SETSTATE(appstate, STATE_INIT);
           toolmenu_active = TOOL_CLOSE;
           break;
         case TOOL_VERIFY:
-          close_tabs(tab_states);
+          close_tabs(tab_states, TAB_STATUS);
           appstate.skip_download = true;
           SETSTATE(appstate, STATE_SAVE);  /* start the pseudo-download sequence */
           toolmenu_active = TOOL_CLOSE;
           break;
         case TOOL_OPTIONERASE:
-          close_tabs(tab_states);
+          close_tabs(tab_states, TAB_STATUS);
           SETSTATE(appstate, STATE_ERASE_OPTBYTES);
           toolmenu_active = TOOL_CLOSE;
           break;
         case TOOL_FULLERASE:
-          close_tabs(tab_states);
+          close_tabs(tab_states, TAB_STATUS);
           SETSTATE(appstate, STATE_FULLERASE);
           toolmenu_active = TOOL_CLOSE;
           break;
         case TOOL_BLANKCHECK:
-          close_tabs(tab_states);
+          close_tabs(tab_states, TAB_STATUS);
           SETSTATE(appstate, STATE_BLANKCHECK);
           toolmenu_active = TOOL_CLOSE;
           break;
         case TOOL_DUMPFLASH:
-          close_tabs(tab_states);
+          close_tabs(tab_states, TAB_STATUS);
           SETSTATE(appstate, STATE_DUMPFLASH);
           toolmenu_active = TOOL_CLOSE;
           break;

@@ -1061,7 +1061,7 @@ static BOOL __stdcall USBK_Enumerate(KLST_HANDLE DeviceList, KLST_DEVINFO *Devic
   (void)DeviceList;
   assert(DeviceInfo != NULL);
   assert(Context != NULL);
-  if (DeviceInfo->DevicePath != NULL && stricmp(DeviceInfo->DevicePath, (TCHAR*)Context) == 0) {
+  if (stricmp(DeviceInfo->DevicePath, (TCHAR*)Context) == 0) {
     usbk_Device = DeviceInfo;
     return FALSE; /* no need to look further */
   }

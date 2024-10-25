@@ -1192,7 +1192,7 @@ static bool console_autocomplete(char *text, size_t textsize, const DWARF_SYMBOL
                     if (len == 0 || strnicmp(word, entry->d_name, len) == 0) {
 #                     if defined __MINGW32__ || defined __MINGW64__
                         /* neither file attributes nor file type are returned by
-                           MingW implementation of readdir() */
+                           MinGW implementation of readdir() */
                         #define IS_DIR(e) 0
 #                     elif defined _WIN32
                         #define IS_DIR(e) (((e)->d_attr & _A_SUBDIR) != 0)
@@ -8692,7 +8692,7 @@ static void handle_stateaction(APPSTATE *state, const enum nk_collapse_states ta
           /* stream names overrule configured channel names */
           const CTF_STREAM *stream;
           for (int idx = 0; (stream = stream_by_seqnr(idx)) != NULL; idx++)
-            if (stream->name != NULL && strlen(stream->name) > 0)
+            if (strlen(stream->name) > 0)
               channel_setname(idx, stream->name);
           /* set the values for filtering severity level and streams */
           ctf_set_filter(state->ctf.streammask, state->ctf.severity);

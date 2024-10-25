@@ -673,26 +673,34 @@ static bool tcl_set_recv(APPSTATE *state, const unsigned char *data, size_t size
   return true;
 }
 
-static int tcl_cmd_exec(struct tcl *tcl, const struct tcl_value *args, const struct tcl_value *user)
-{
-  struct tcl_value *cmd = tcl_list_item(args, 1);
-  int retcode = system(tcl_data(cmd));
-  tcl_free(cmd);
-  return tcl_result(tcl, (retcode < 0), tcl_value("", 0));
-}
-
 static int tcl_cmd_puts(struct tcl *tcl, const struct tcl_value *args, const struct tcl_value *user)
 {
   APPSTATE *state = (APPSTATE*)tcl->user;
   assert(state != NULL);
-  char msg[512] = "";
+  bool no_eol = (tcl_list_find(user, "-nonewline") >= 0);
   struct tcl_value *text = tcl_list_item(args, tcl_list_length(args) - 1);
-  strlcpy(msg, tcl_data(text), sizearray(msg));
-  if (tcl_list_find(user, "-nonewline") < 0)
-    strlcat(msg, "\n", sizearray(msg));
+  int r = 0;
+  if (tcl_list_length(args) == 3) {
+    struct tcl_value *fd = tcl_list_item(args, 1);
+    FILE *fp = (FILE*)(intptr_t)tcl_number(fd);
+    if (fileno(fp) < 0) {
+      r = tcl_error_result(tcl, TCL_ERROR_FILEIO, NULL);
+    } else {
+      fprintf(fp, "%s", tcl_data(text));
+      if (!no_eol)
+        fprintf(fp, "\n");
+    }
+    if (fd)
+      tcl_free(fd);
+  } else {
+    char msg[512];
+    strlcpy(msg, tcl_data(text), sizearray(msg));
+    if (!no_eol)
+      strlcat(msg, "\n", sizearray(msg));
+    tcl_add_message(state, msg, strlen(msg), false);
+  }
   tcl_free(text);
-  tcl_add_message(state, msg, strlen(msg), false);
-  return tcl_result(tcl, 0, tcl_value("", 0));
+  return (r == 0) ? tcl_empty_result(tcl) : r;
 }
 
 static int tcl_cmd_wait(struct tcl *tcl, const struct tcl_value *args, const struct tcl_value *user)
@@ -2295,7 +2303,6 @@ int main(int argc, char *argv[])
   }
 
   tcl_init(&appstate.tcl, &appstate);
-  tcl_register(&appstate.tcl, "exec", tcl_cmd_exec, 0, 1, 1, NULL);
   tcl_register(&appstate.tcl, "puts", tcl_cmd_puts, 0, 1, 2, tcl_value("-nonewline", -1));
   tcl_register(&appstate.tcl, "serial", tcl_cmd_serial, 1, 0, 1, NULL);
   tcl_register(&appstate.tcl, "wait", tcl_cmd_wait, 0, 1, 3, NULL);

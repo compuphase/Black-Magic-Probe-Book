@@ -1184,7 +1184,7 @@ static void handle_stateaction(APPSTATE *state)
         /* stream names overrule configured channel names */
         const CTF_STREAM *stream;
         for (int seqnr = 0; (stream = stream_by_seqnr(seqnr)) != NULL; seqnr++) {
-          if (stream->name != NULL && strlen(stream->name) > 0) {
+          if (strlen(stream->name) > 0) {
             int chan = stream->stream_id;
             assert(chan >= 0 && chan < NUM_CHANNELS);
             channel_set(chan, true, stream->name, default_channel_colour(chan));

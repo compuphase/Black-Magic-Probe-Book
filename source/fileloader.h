@@ -51,6 +51,7 @@ bool filesection_loadall(const char *filename);
 bool filesection_getdata(unsigned index, unsigned long *address, unsigned char **buffer, unsigned long *size, int *type);
 int  filesection_filetype(void);
 void filesection_relocate(unsigned long offset);
+unsigned char *filesection_get_address(unsigned long address, size_t size);
 
 int  filesection_patch_vecttable(const char *driver, unsigned int *checksum);
 int  filesection_get_crp(void);

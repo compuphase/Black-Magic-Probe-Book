@@ -50,6 +50,11 @@ SOFTWARE.
 # include <alloc/fortify.h>
 #endif
 
+#if defined __GNUC__
+# pragma GCC diagnostic ignored "-Wpointer-to-int-cast"
+# pragma GCC diagnostic ignored "-Wint-to-pointer-cast"
+#endif
+
 #define MAX_VAR_LENGTH  256
 
 struct tcl_value {
@@ -66,6 +71,8 @@ enum { FNORMAL, FERROR, FRETURN, FBREAK, FCONT, FEXIT };
 #define LEX_QUOTE   0x01  /* inside a double-quote section */
 #define LEX_VAR     0x02  /* special mode for parsing variable names */
 #define LEX_NO_CMT  0x04  /* don't allow comment here (so comment is allowed when this is not set) */
+#define LEX_SKIPERR 0x08  /* continue parsing despit errors */
+#define LEX_SUBST   0x10  /* "subst" command mode -> quotes are not special */
 
 /* special character classification */
 #define CTYPE_OPERATOR  0x01
@@ -122,7 +129,7 @@ static void init_ctype(void) {
 #define tcl_is_operator(c)  ((ctype_table[(unsigned char)(c)] & CTYPE_OPERATOR) != 0)
 #define tcl_is_space(c)     ((ctype_table[(unsigned char)(c)] & CTYPE_SPACE) != 0)
 #define tcl_is_end(c)       ((ctype_table[(unsigned char)(c)] & CTYPE_TERM) != 0)
-#define tcl_is_special(c,quote) \
+#define tcl_is_special(c, quote) \
         ((ctype_table[(unsigned char)(c)] & CTYPE_SPECIAL) != 0 ||  \
          (!quote && (ctype_table[(unsigned char)(c)] & CTYPE_Q_SPECIAL) != 0))
 #define tcl_isalpha(c)      ((ctype_table[(unsigned char)(c)] & CTYPE_ALPHA) != 0)
@@ -175,12 +182,14 @@ static int tcl_next(const char *string, size_t length, const char **from, const 
     return (r == TFIELD && quote) ? TPART : r;
   }
 
-  if (*string == '[' || (!quote && *string == '{')) {
+  if ((*flags & (LEX_SUBST | LEX_VAR)) == LEX_SUBST && (*string == '{' || *string == '}' || *string == '"')) {
+    i = 1;
+  } else if (*string == '[' || (*string == '{' && !quote)) {
     /* Interleaving pairs are not welcome, but it simplifies the code */
     char open = *string;
     char close = (open == '[' ? ']' : '}');
     for (i = 1, depth = 1; i < length && depth != 0; i++) {
-      if (string[i] == '\\' && i+1 < length && (string[i+1] == open || string[i+1] == close)) {
+      if (string[i] == '\\' && i+1 < length && (string[i+1] == open || string[i+1] == close || string[i+1] == '\\')) {
         i++;  /* escaped brace/bracket, skip both '\' and the character that follows it */
       } else if (string[i] == open) {
         depth++;
@@ -195,7 +204,7 @@ static int tcl_next(const char *string, size_t length, const char **from, const 
     if (quote) {
       return TPART;
     }
-    if (length < 2 || (!tcl_is_space(string[1]) && !tcl_is_end(string[1]))) {
+    if (length < 1 || (length > 1 && (!tcl_is_space(string[1]) && !tcl_is_end(string[1])))) {
       return TERROR;
     }
     *from = *to = string + 1;
@@ -252,20 +261,21 @@ struct tcl_parser {
   unsigned flags;
   int token;
 };
-static struct tcl_parser init_tcl_parser(const char *start, const char *end, int token) {
+static struct tcl_parser init_tcl_parser(const char *start, const char *end, int token, unsigned flags) {
   struct tcl_parser p;
   memset(&p, 0, sizeof(p));
   p.start = start;
   p.end = end;
   p.token = token;
+  p.flags = flags;
   return p;
 }
-#define tcl_each(s, len, skiperr)                                              \
-  for (struct tcl_parser p = init_tcl_parser((s), (s) + (len), TERROR);        \
-       p.start < p.end &&                                                      \
-       (((p.token = tcl_next(p.start, p.end - p.start, &p.from, &p.to,         \
-                             &p.flags)) != TERROR) ||                          \
-        (skiperr));                                                            \
+#define tcl_each(s, len, flag)                                                  \
+  for (struct tcl_parser p = init_tcl_parser((s), (s) + (len), TERROR, (flag)); \
+       p.start < p.end &&                                                       \
+       (((p.token = tcl_next(p.start, p.end - p.start, &p.from, &p.to,          \
+                             &p.flags)) != TERROR) ||                           \
+        (p.flags & LEX_SKIPERR) != 0);                                          \
        p.start = p.to)
 
 /* -------------------------------------------------------------------------- */
@@ -423,16 +433,42 @@ bool tcl_list_append(struct tcl_value *list, struct tcl_value *tail) {
   assert(tail);
   bool separator = (tcl_length(list) > 0);
   size_t extrasz = separator ? 1 : 0;
-  bool quote = false;
+  /* when "tail" contains white space or special characters, it must be quoted
+     (so that it is appended to the list as a single item); when "tail" contains
+     unbalanced braces, these must be escaped (and as it is convoluted to detect
+     exactly which of a sequence of braces is unbalanced, we escape all braces
+     in case "unbalance" is detected). */
+  bool quote = false;     /* to check whether brace-quoting is needed */
+  bool escape = false;    /* to check whether escaping (of braces) is needed */
   if (tcl_length(tail) > 0) {
+    int brace_count = 0;  /* to keep to count of braces that may need escaping */
+    int nesting = 0;      /* to detect unbalance */
     const char *p = tcl_data(tail);
-    for (size_t i = 0; i < tcl_length(tail) && !quote; i++) {
-      if (tcl_is_space(p[i]) || tcl_is_special(p[i], false)) {
+    size_t len = tcl_length(tail);
+    while (len > 0) {
+      if (tcl_is_space(*p) || tcl_is_special(*p, false)) {
         quote = true;
       }
+      if (*p == '{') {
+        nesting++;
+        brace_count += 1;
+      } else if (*p == '}') {
+        if (nesting == 0) {
+          escape = true;  /* closing brace without opening brace */
+        } else {
+          nesting--;
+        }
+        brace_count += 1;
+      }
+      len--;
+      p++;
+    }
+    if (nesting > 0) {
+      escape = true;    /* opening brace without closing brace */
+      extrasz += brace_count;
     }
   } else {
-    quote = true; /* quote, to create an empty element */
+    quote = true;       /* quote, to create an empty element */
   }
   if (quote) {
     extrasz += 2;
@@ -456,20 +492,29 @@ bool tcl_list_append(struct tcl_value *list, struct tcl_value *tail) {
   }
   char *tgt = (char*)tcl_data(list) + tcl_length(list);
   if (separator) {
-    memcpy(tgt, " ", 1);
-    tgt += 1;
+    *tgt++ = ' ';
   }
   if (quote) {
-    memcpy(tgt, "{", 1);
-    tgt += 1;
+    *tgt++ = '{';
   }
   if (tcl_length(tail) > 0) {
-    memcpy(tgt, tcl_data(tail), tcl_length(tail));
-    tgt += tcl_length(tail);
+    if (escape) {
+      const char *p = tcl_data(tail);
+      size_t len = tcl_length(tail);
+      while (len > 0) {
+        if (*p == '{' || *p == '}') {
+          *tgt++ = '\\';
+        }
+        *tgt++ = *p++;
+        len--;
+      }
+    } else {
+      memcpy(tgt, tcl_data(tail), tcl_length(tail));
+      tgt += tcl_length(tail);
+    }
   }
   if (quote) {
-    memcpy(tgt, "}", 1);
-    tgt += 1;
+    *tgt++ = '}';
   }
   *tgt = '\0';
   list->length = tcl_length(list) + tcl_length(tail) + extrasz;
@@ -479,28 +524,7 @@ bool tcl_list_append(struct tcl_value *list, struct tcl_value *tail) {
 
 /* -------------------------------------------------------------------------- */
 
-enum {
-  TCLERR_NONE,        /**< no known error, or no error was flagged */
-  TCLERR_GENERAL,     /**< unspecified error */
-  TCLERR_MEMORY,      /**< memory allocation error */
-  TCLERR_SYNTAX,      /**< general syntax error */
-  TCLERR_BRACES,      /**< unbalanced curly braces */
-  TCLERR_EXPR,        /**< error in expression */
-  TCLERR_CMDUNKNOWN,  /**< unknown command */
-  TCLERR_CMDARGCOUNT, /**< wrong argument count on command */
-  TCLERR_SUBCMD,      /**< unsupported subcommand */
-  TCLERR_VARUNKNOWN,  /**< unknown variable name */
-  TCLERR_NAMEINVALID, /**< invalid symbol name */
-  TCLERR_NAMEEXISTS,  /**< symbol name already exists */
-  TCLERR_ARGUMENT,    /**< incorrect (or missing) argument to a command */
-  TCLERR_DEFAULTVAL,  /**< incorrect default value on parameter */
-  TCLERR_SCOPE,       /**< scope error (e.g. command is allowed in local scope only) */
-  TCLERR_FILEIO,      /**< operation on file failed (e.g. file not found) */
-  TCLERR_USER,        /**< error set with the "error" command */
-};
-
 static char *tcl_int2string(char *buffer, size_t bufsz, int radix, tcl_int value);
-static int tcl_error_result(struct tcl *tcl, int code, const char *info);
 static int tcl_var_index(const char *name, size_t *baselength);
 
 struct tcl_cmd {
@@ -643,7 +667,7 @@ static struct tcl_var *tcl_findvar(struct tcl_env *env, const char *name) {
   struct tcl_var *var;
   size_t namesz;
   tcl_var_index(name, &namesz);
-  for (var = env->vars; var != NULL; var = var->next) {
+  for (var = env->vars; var; var = var->next) {
     const char *varptr = tcl_data(var->name);
     size_t varsz;
     tcl_var_index(tcl_data(var->name), &varsz);
@@ -662,7 +686,7 @@ struct tcl_value *tcl_var(struct tcl *tcl, const char *name, struct tcl_value *v
   if (!var) {
     if (!value) {
       /* value being read before being set */
-      tcl_error_result(tcl, TCLERR_VARUNKNOWN, name);
+      tcl_error_result(tcl, TCL_ERROR_VARUNKNOWN, name);
       return NULL;
     }
     /* create new variable */
@@ -682,7 +706,7 @@ struct tcl_value *tcl_var(struct tcl *tcl, const char *name, struct tcl_value *v
       var->value = newlist;
       var->elements = newsize;
     } else {
-      tcl_error_result(tcl, TCLERR_MEMORY, NULL);
+      tcl_error_result(tcl, TCL_ERROR_MEMORY, NULL);
       idx = 0;  /* sets/returns wrong index, but avoid accessing out of range index */
     }
   }
@@ -719,39 +743,26 @@ static void tcl_var_free(struct tcl_env *env, struct tcl_var *var) {
   _free(var);
 }
 
-int tcl_result(struct tcl *tcl, int flow, struct tcl_value *result) {
-  assert(tcl && tcl->result);
-  tcl_free(tcl->result);
-  tcl->result = result;
-  return flow;
-}
-
-static int tcl_numeric_result(struct tcl *tcl, int flow, tcl_int result) {
-  char buf[64] = "";
-  const char *ptr = tcl_int2string(buf, sizeof(buf), 10, result);
-  return tcl_result(tcl, flow, tcl_value(ptr, -1));
-}
-
-static int tcl_error_result(struct tcl *tcl, int code, const char *info) {
+void tcl_raise_error(struct tcl *tcl, int code, const char *info) {
   static const char _errorInfo[] = "errorInfo";
   static const char *errmsg[] = {
-    /* TCLERR_NONE */       "(none)",
-    /* TCLERR_GENERAL */    "unspecified error",
-    /* TCLERR_MEMORY */     "memory allocation failure",
-    /* TCLERR_SYNTAX */     "general syntax error",
-    /* TCLERR_BRACES */     "unbalanced curly braces",
-    /* TCLERR_EXPR */       "invalid expression",
-    /* TCLERR_CMDUNKNOWN */ "unknown command",
-    /* TCLERR_CMDARGCOUNT */"wrong argument count on command",
-    /* TCLERR_SUBCMD */     "unknown command option",
-    /* TCLERR_VARUNKNOWN */ "unknown variable name",
-    /* TCLERR_NAMEINVALID */"invalid symbol name (variable or command)",
-    /* TCLERR_NAMEEXISTS */ "duplicate symbol name (symbol already defined)",
-    /* TCLERR_ARGUMENT */   "incorrect (or missing) argument to a command",
-    /* TCLERR_DEFAULTARG */ "incorrect default value on parameter",
-    /* TCLERR_SCOPE */      "invalid scope (or command not valid at current scope)",
-    /* TCLERR_FILEIO */     "operation on file failed",
-    /* TCLERR_USER */       "user error",
+    /* TCL_ERROR_NONE */       "(none)",
+    /* TCL_ERROR_GENERAL */    "unspecified error",
+    /* TCL_ERROR_MEMORY */     "memory allocation failure",
+    /* TCL_ERROR_SYNTAX */     "general syntax error",
+    /* TCL_ERROR_BRACES */     "unbalanced curly braces",
+    /* TCL_ERROR_EXPR */       "error in expression",
+    /* TCL_ERROR_CMDUNKNOWN */ "unknown command",
+    /* TCL_ERROR_CMDARGCOUNT */"wrong argument count on command",
+    /* TCL_ERROR_SUBCMD */     "unknown command option",
+    /* TCL_ERROR_VARUNKNOWN */ "unknown variable name",
+    /* TCL_ERROR_NAMEINVALID */"invalid symbol name (variable or command)",
+    /* TCL_ERROR_NAMEEXISTS */ "duplicate symbol name (symbol already defined)",
+    /* TCL_ERROR_ARGUMENT */   "incorrect (or missing) argument to a command",
+    /* TCL_ERROR_DEFAULTARG */ "incorrect default value on parameter",
+    /* TCL_ERROR_SCOPE */      "invalid scope (or command not valid at current scope)",
+    /* TCL_ERROR_FILEIO */     "operation on file failed",
+    /* TCL_ERROR_USER */       "user error",
   };
   assert(tcl);
   assert(code > 0 && code < (sizeof errmsg)/(sizeof errmsg[0]));
@@ -788,10 +799,28 @@ static int tcl_error_result(struct tcl *tcl, int code, const char *info) {
     assert(lclvar);
     lclvar->env = global_env;                     /* ... link to global */
   }
-  return (tcl_result(tcl, FERROR, tcl_value("", 0)));
 }
 
-static int tcl_empty_result(struct tcl *tcl) {
+int tcl_result(struct tcl *tcl, int flow, struct tcl_value *result) {
+  assert(tcl && tcl->result);
+  tcl_free(tcl->result);
+  tcl->result = result;
+  return flow;
+}
+
+int tcl_numeric_result(struct tcl *tcl, tcl_int result) {
+  char buf[64] = "";
+  const char *ptr = tcl_int2string(buf, sizeof(buf), 10, result);
+  return tcl_result(tcl, FNORMAL, tcl_value(ptr, -1));
+}
+
+int tcl_error_result(struct tcl *tcl, int code, const char *info) {
+  assert(tcl && tcl->result);
+  tcl_raise_error(tcl, code, info);
+  return tcl_result(tcl, FERROR, tcl_value("", 0));
+}
+
+int tcl_empty_result(struct tcl *tcl) {
   assert(tcl && tcl->result);
   if (tcl_length(tcl->result) > 0) {
     tcl_result(tcl, FNORMAL, tcl_value("", 0)); /* skip setting empty result if
@@ -814,12 +843,12 @@ static int tcl_subst(struct tcl *tcl, const char *string, size_t len) {
   switch (string[0]) {
   case '{':
     if (len < 2 || *(string + len - 1) != '}') {
-      return tcl_error_result(tcl, TCLERR_BRACES, NULL);
+      return tcl_error_result(tcl, TCL_ERROR_BRACES, NULL);
     }
     return tcl_result(tcl, FNORMAL, tcl_value(string + 1, len - 2));
   case '$': {
     if (len >= MAX_VAR_LENGTH) {
-      return tcl_error_result(tcl, TCLERR_NAMEINVALID, string + 1);
+      return tcl_error_result(tcl, TCL_ERROR_NAMEINVALID, string + 1);
     }
     string += 1; len -= 1;      /* skip '$' */
     if (*string == '$') {
@@ -875,7 +904,7 @@ static int tcl_subst(struct tcl *tcl, const char *string, size_t len) {
     }
     const struct tcl_value *v = tcl_var(tcl, tcl_data(name), NULL);
     tcl_free(name);
-    return v ? tcl_result(tcl, FNORMAL, tcl_dup(v)) : tcl_error_result(tcl, TCLERR_VARUNKNOWN, NULL);
+    return v ? tcl_result(tcl, FNORMAL, tcl_dup(v)) : tcl_error_result(tcl, TCL_ERROR_VARUNKNOWN, NULL);
   }
   case '[': {
     struct tcl_value *expr = tcl_value(string + 1, len - 2);
@@ -885,7 +914,7 @@ static int tcl_subst(struct tcl *tcl, const char *string, size_t len) {
   }
   case '\\': {
     if (len <= 1) {
-      return tcl_error_result(tcl, TCLERR_SYNTAX, NULL);
+      return tcl_error_result(tcl, TCL_ERROR_SYNTAX, NULL);
     }
     char buf[] = "*";
     switch (*(string + 1)) {
@@ -918,7 +947,7 @@ static int tcl_subst(struct tcl *tcl, const char *string, size_t len) {
 
 static struct tcl_cmd *tcl_lookup_cmd(struct tcl *tcl, struct tcl_value *name) {
   assert(name);
-  for (struct tcl_cmd *cmd = tcl->cmds; cmd != NULL; cmd = cmd->next) {
+  for (struct tcl_cmd *cmd = tcl->cmds; cmd; cmd = cmd->next) {
     if (strcmp(tcl_data(name), tcl_data(cmd->name)) == 0) {
       return cmd;
     }
@@ -980,7 +1009,7 @@ static int tcl_exec_cmd(struct tcl *tcl, const struct tcl_value *list) {
     if (cmd->minargs <= numargs && numargs <= cmd->maxargs)
       r = cmd->fn(tcl, arglist ? arglist : list, has_optlist ? optlist : cmd->user);
     else
-      r = tcl_error_result(tcl, TCLERR_CMDARGCOUNT, tcl_data(cmdname));
+      r = tcl_error_result(tcl, TCL_ERROR_CMDARGCOUNT, tcl_data(cmdname));
     if (optlist) {
       tcl_free(optlist);
     }
@@ -988,7 +1017,7 @@ static int tcl_exec_cmd(struct tcl *tcl, const struct tcl_value *list) {
       tcl_free(arglist);
     }
   } else {
-    r = tcl_error_result(tcl, TCLERR_CMDUNKNOWN, tcl_data(cmdname));
+    r = tcl_error_result(tcl, TCL_ERROR_CMDUNKNOWN, tcl_data(cmdname));
   }
   tcl_free(cmdname);
   return r;
@@ -1019,7 +1048,7 @@ int tcl_eval(struct tcl *tcl, const char *string, size_t length) {
   struct tcl_value *cur = NULL;
   int result = tcl_empty_result(tcl);  /* preset to empty result */
   bool markposition = true;
-  tcl_each(string, length, 1) {
+  tcl_each(string, length, LEX_SKIPERR) {
     if (markposition) {
       struct tcl_errinfo *info = &tcl->env->errinfo;
       if (p.from >= info->codebase && p.from < info->codebase + info->codesize) {
@@ -1029,7 +1058,7 @@ int tcl_eval(struct tcl *tcl, const char *string, size_t length) {
     }
     switch (p.token) {
     case TERROR:
-      result = tcl_error_result(tcl, TCLERR_SYNTAX, NULL);
+      result = tcl_error_result(tcl, TCL_ERROR_SYNTAX, NULL);
       break;
     case TFIELD:
       result = tcl_subst(tcl, p.from, p.to - p.from);
@@ -1084,7 +1113,8 @@ int tcl_eval(struct tcl *tcl, const char *string, size_t length) {
 
 /* -------------------------------------------------------------------------- */
 
-static int tcl_expression(struct tcl *tcl, const char *expression, tcl_int *result); /* forward declaration */
+struct exprval; /* forward declaration */
+static int tcl_expression(struct tcl *tcl, const char *expression, struct exprval *result); /* forward declaration */
 
 struct tcl_cmd *tcl_register(struct tcl *tcl, const char *name, tcl_cmd_fn_t fn,
                              short subcmds, short minargs, short maxargs,
@@ -1112,7 +1142,7 @@ static int tcl_cmd_set(struct tcl *tcl, const struct tcl_value *args, const stru
   struct tcl_value *val = tcl_list_item(args, 2);
   val = tcl_var(tcl, tcl_data(name), val);
   tcl_free(name);
-  return val ? tcl_result(tcl, FNORMAL, tcl_dup(val)) : tcl_error_result(tcl, TCLERR_ARGUMENT, NULL);
+  return val ? tcl_result(tcl, FNORMAL, tcl_dup(val)) : tcl_error_result(tcl, TCL_ERROR_ARGUMENT, NULL);
 }
 
 static int tcl_cmd_unset(struct tcl *tcl, const struct tcl_value *args, const struct tcl_value *user) {
@@ -1137,19 +1167,19 @@ static int tcl_cmd_unset(struct tcl *tcl, const struct tcl_value *args, const st
 static int tcl_cmd_global(struct tcl *tcl, const struct tcl_value *args, const struct tcl_value *user) {
   (void)user;
   if (!tcl->env->parent) {
-    return tcl_error_result(tcl, TCLERR_SCOPE, NULL);
+    return tcl_error_result(tcl, TCL_ERROR_SCOPE, NULL);
   }
   int r = FNORMAL;
   int n = tcl_list_length(args);
   for (int i = 1; i < n && r == FNORMAL; i++) {
     struct tcl_value *name = tcl_list_item(args, i);
     assert(name);
-    if (tcl_findvar(tcl->env, tcl_data(name)) != NULL) {
+    if (tcl_findvar(tcl->env, tcl_data(name))) {
       /* name exists locally, cannot create an alias with the same name */
-      r = tcl_error_result(tcl, TCLERR_NAMEEXISTS, tcl_data(name));
+      r = tcl_error_result(tcl, TCL_ERROR_NAMEEXISTS, tcl_data(name));
     } else {
       struct tcl_env *global_env = tcl_env_scope(tcl, 0);
-      if (tcl_findvar(global_env, tcl_data(name)) == NULL) {
+      if (!tcl_findvar(global_env, tcl_data(name))) {
         /* name not known as a global, create it first */
         struct tcl_env *save_env = tcl->env;
         tcl->env = global_env;
@@ -1194,7 +1224,7 @@ static int tcl_cmd_upvar(struct tcl *tcl, const struct tcl_value *args, const st
   }
   tcl_free(v);
   if (level < 0 || level > tcl_cur_scope(tcl)) {
-    return tcl_error_result(tcl, TCLERR_SCOPE, NULL);
+    return tcl_error_result(tcl, TCL_ERROR_SCOPE, NULL);
   }
   struct tcl_env *ref_env = tcl_env_scope(tcl, level);
   assert(ref_env);
@@ -1204,12 +1234,12 @@ static int tcl_cmd_upvar(struct tcl *tcl, const struct tcl_value *args, const st
     assert(name);
     struct tcl_value *alias = tcl_list_item(args, i + 1);
     assert(alias);
-    if (tcl_findvar(tcl->env, tcl_data(alias)) != NULL) {
+    if (tcl_findvar(tcl->env, tcl_data(alias))) {
       /* name for the alias already exists (as a local variable) */
-      r = tcl_error_result(tcl, TCLERR_NAMEEXISTS, tcl_data(alias));
-    } else if (tcl_findvar(ref_env, tcl_data(name)) == NULL) {
+      r = tcl_error_result(tcl, TCL_ERROR_NAMEEXISTS, tcl_data(alias));
+    } else if (!tcl_findvar(ref_env, tcl_data(name))) {
       /* reference variable does not exist (at the indicated scope) */
-      r = tcl_error_result(tcl, TCLERR_VARUNKNOWN, tcl_data(name));
+      r = tcl_error_result(tcl, TCL_ERROR_VARUNKNOWN, tcl_data(name));
     } else {
       /* make local, find it back, mark it as an alias for a global */
       tcl_var(tcl, tcl_data(alias), tcl_value("", 0));  /* make local */
@@ -1224,16 +1254,69 @@ static int tcl_cmd_upvar(struct tcl *tcl, const struct tcl_value *args, const st
     i += 2;
   }
   if (i < numargs) {
-    r = tcl_error_result(tcl, TCLERR_CMDARGCOUNT, "upvar"); /* there must be at least 2 arguments */
+    r = tcl_error_result(tcl, TCL_ERROR_CMDARGCOUNT, "upvar"); /* there must be at least 2 arguments */
   }
   return r;
 }
 
 static int tcl_cmd_subst(struct tcl *tcl, const struct tcl_value *args, const struct tcl_value *user) {
   (void)user;
-  struct tcl_value *s = tcl_list_item(args, 1);
-  int r = tcl_subst(tcl, tcl_data(s), tcl_length(s));
-  tcl_free(s);
+  struct tcl_value *arg = tcl_list_item(args, 1);
+  const char *string = tcl_data(arg);
+  size_t length = tcl_length(arg);
+  struct tcl_value *list = tcl_list_new();
+  struct tcl_value *cur = NULL;
+  int r = tcl_empty_result(tcl);  /* preset to empty result */
+  tcl_each(string, length, LEX_SKIPERR | LEX_SUBST) {
+    switch (p.token) {
+    case TERROR:
+      r = tcl_error_result(tcl, TCL_ERROR_SYNTAX, NULL);
+      break;
+    case TFIELD:
+      r = tcl_subst(tcl, p.from, p.to - p.from);
+      if (cur) {
+        tcl_append(cur, tcl_dup(tcl->result));
+      } else {
+        cur = tcl_dup(tcl->result);
+      }
+      if (tcl_length(list) > 0) {
+        tcl_append(list, tcl_value(" ", 1));
+      }
+      tcl_append(list, cur);
+      cur = NULL;
+      break;
+    case TPART: {
+      struct tcl_value *part;
+      if (p.to - p.from == 1 && (*p.from == '{' || *p.from == '}' || *p.from == '"')) {
+        part = tcl_value(p.from, 1);
+      } else {
+        r = tcl_subst(tcl, p.from, p.to - p.from);
+        part = tcl_dup(tcl->result);
+      }
+      if (cur) {
+        tcl_append(cur, part);
+      } else {
+        cur = part;
+      }
+      break;
+    }
+    case TEXECPOINT:
+      tcl_append(list, tcl_value("\n", 1)); /* mark execution point */
+      break;
+    case TDONE:
+      break;
+    }
+    if (r != FNORMAL) {
+      break;  /* error information already set */
+    }
+  }
+  tcl_free(arg);
+  if (cur) {
+    tcl_free(cur);
+  }
+  if (r == FNORMAL) {
+    tcl_result(tcl, r, list);
+  }
   return r;
 }
 
@@ -1300,7 +1383,7 @@ static int tcl_cmd_scan(struct tcl *tcl, const struct tcl_value *args, const str
   }
   tcl_free(string);
   tcl_free(format);
-  return tcl_numeric_result(tcl, FNORMAL, match);
+  return tcl_numeric_result(tcl, match);
 }
 
 static int tcl_cmd_format(struct tcl *tcl, const struct tcl_value *args, const struct tcl_value *user) {
@@ -1308,7 +1391,7 @@ static int tcl_cmd_format(struct tcl *tcl, const struct tcl_value *args, const s
   size_t bufsize = 256;
   char *buffer = _malloc(bufsize);
   if (!buffer) {
-    return tcl_error_result(tcl, TCLERR_MEMORY, NULL);
+    return tcl_error_result(tcl, TCL_ERROR_MEMORY, NULL);
   }
   struct tcl_value *format = tcl_list_item(args, 1);
   assert(format);
@@ -1451,7 +1534,7 @@ static int tcl_cmd_append(struct tcl *tcl, const struct tcl_value *args, const s
     tcl_var(tcl, tcl_data(name), tcl_dup(val));
   }
   tcl_free(name);
-  return val ? tcl_result(tcl, FNORMAL, val) : tcl_error_result(tcl, TCLERR_VARUNKNOWN, NULL);
+  return val ? tcl_result(tcl, FNORMAL, val) : tcl_error_result(tcl, TCL_ERROR_VARUNKNOWN, NULL);
 }
 
 #define SUBCMD(v, s)  (strcmp(tcl_data(v), (s)) == 0)
@@ -1515,7 +1598,7 @@ static int tcl_cmd_string(struct tcl *tcl, const struct tcl_value *args, const s
   struct tcl_value *subcmd = tcl_list_item(args, 1);
   struct tcl_value *arg1 = tcl_list_item(args, 2);
   if (SUBCMD(subcmd, "length")) {
-    r = tcl_numeric_result(tcl, FNORMAL, tcl_length(arg1));
+    r = tcl_numeric_result(tcl, tcl_length(arg1));
   } else if (SUBCMD(subcmd, "tolower") || SUBCMD(subcmd, "toupper")) {
     bool lcase = SUBCMD(subcmd, "tolower");
     const struct tcl_value *tgt = tcl_dup(arg1);
@@ -1551,19 +1634,19 @@ static int tcl_cmd_string(struct tcl *tcl, const struct tcl_value *args, const s
     if (nargs < 4) {  /* need at least "string subcommand arg arg" */
       tcl_free(subcmd);
       tcl_free(arg1);
-      return tcl_error_result(tcl, TCLERR_ARGUMENT, NULL);
+      return tcl_error_result(tcl, TCL_ERROR_ARGUMENT, NULL);
     }
     struct tcl_value *arg2 = tcl_list_item(args, 3);
     if (SUBCMD(subcmd, "compare")) {
       int match = (tcl_list_find(user, "-nocase") >= 0)
                     ? stricmp(tcl_data(arg1), tcl_data(arg2))
                     : strcmp(tcl_data(arg1), tcl_data(arg2));
-      r = tcl_numeric_result(tcl, FNORMAL, match);
+      r = tcl_numeric_result(tcl, match);
     } else if (SUBCMD(subcmd, "equal")) {
       int match = (tcl_list_find(user, "-nocase") >= 0)
                     ? stricmp(tcl_data(arg1), tcl_data(arg2))
                     : strcmp(tcl_data(arg1), tcl_data(arg2));
-      r = tcl_numeric_result(tcl, FNORMAL, match == 0);
+      r = tcl_numeric_result(tcl, match == 0);
     } else if (SUBCMD(subcmd, "first") || SUBCMD(subcmd, "last")) {
       int pos = 0;
       if (nargs >= 5) {
@@ -1591,16 +1674,16 @@ static int tcl_cmd_string(struct tcl *tcl, const struct tcl_value *args, const s
           p--;
         }
       }
-      r = tcl_numeric_result(tcl, FNORMAL, (p && p >= haystack) ? (p - haystack) : -1);
+      r = tcl_numeric_result(tcl, (p && p >= haystack) ? (p - haystack) : -1);
     } else if (SUBCMD(subcmd, "index")) {
       int pos = tcl_number(arg2);
       if (pos >= (int)tcl_length(arg1)) {
-        r = tcl_error_result(tcl, TCLERR_ARGUMENT, NULL);
+        r = tcl_error_result(tcl, TCL_ERROR_ARGUMENT, NULL);
       } else {
         r = tcl_result(tcl, FNORMAL, tcl_value(tcl_data(arg1) + pos, 1));
       }
     } else if (SUBCMD(subcmd, "match")) {
-      r = tcl_numeric_result(tcl, FNORMAL, tcl_fnmatch(tcl_data(arg1), tcl_data(arg2)) == true);
+      r = tcl_numeric_result(tcl, tcl_fnmatch(tcl_data(arg1), tcl_data(arg2)) == true);
     } else if (SUBCMD(subcmd, "range")) {
       int first = tcl_number(arg2);
       if (first < 0) {
@@ -1614,8 +1697,11 @@ static int tcl_cmd_string(struct tcl *tcl, const struct tcl_value *args, const s
         }
         tcl_free(arg3);
       }
-      if (last > (int)tcl_length(arg1)) {
-        last = tcl_length(arg1);
+      if (last >= (int)tcl_length(arg1)) {
+        last = tcl_length(arg1) - 1;
+      }
+      if (last < first) {
+        last = first;
       }
       r = tcl_result(tcl, FNORMAL, tcl_value(tcl_data(arg1) + first, last - first + 1));
     } else if (SUBCMD(subcmd, "replace")) {
@@ -1623,7 +1709,7 @@ static int tcl_cmd_string(struct tcl *tcl, const struct tcl_value *args, const s
         tcl_free(subcmd);
         tcl_free(arg1);
         tcl_free(arg2);
-        return tcl_error_result(tcl, TCLERR_ARGUMENT, NULL);
+        return tcl_error_result(tcl, TCL_ERROR_ARGUMENT, NULL);
       }
       size_t len = tcl_length(arg1);
       int idx1 = tcl_number(arg2);
@@ -1641,7 +1727,7 @@ static int tcl_cmd_string(struct tcl *tcl, const struct tcl_value *args, const s
       tcl_free(arg3);
       r = tcl_result(tcl, FNORMAL, modified);
     } else {
-      r = tcl_error_result(tcl, TCLERR_SUBCMD, tcl_data(subcmd));
+      r = tcl_error_result(tcl, TCL_ERROR_SUBCMD, tcl_data(subcmd));
     }
     if (arg2) {
       tcl_free(arg2);
@@ -1650,7 +1736,7 @@ static int tcl_cmd_string(struct tcl *tcl, const struct tcl_value *args, const s
   tcl_free(subcmd);
   tcl_free(arg1);
   if (r == FERROR) {
-    r = tcl_error_result(tcl, TCLERR_ARGUMENT, NULL); /* generic argument error */
+    r = tcl_error_result(tcl, TCL_ERROR_ARGUMENT, NULL); /* generic argument error */
   }
   return r;
 }
@@ -1663,17 +1749,17 @@ static int tcl_cmd_info(struct tcl *tcl, const struct tcl_value *args, const str
   if (SUBCMD(subcmd, "exists")) {
     if (nargs >= 3) {
       struct tcl_value *name = tcl_list_item(args, 2);
-      r = tcl_numeric_result(tcl, FNORMAL, (tcl_findvar(tcl->env, tcl_data(name)) != NULL));
+      r = tcl_numeric_result(tcl, (tcl_findvar(tcl->env, tcl_data(name)) != NULL));
       tcl_free(name);
     }
   } else if (SUBCMD(subcmd, "tclversion")) {
     r = tcl_result(tcl, FNORMAL, tcl_value(SVNREV_STR, -1));
   } else {
-    r = tcl_error_result(tcl, TCLERR_SUBCMD, tcl_data(subcmd));
+    r = tcl_error_result(tcl, TCL_ERROR_SUBCMD, tcl_data(subcmd));
   }
   tcl_free(subcmd);
   if (r == FERROR) {
-    r = tcl_error_result(tcl, TCLERR_ARGUMENT, NULL); /* generic argument error */
+    r = tcl_error_result(tcl, TCL_ERROR_ARGUMENT, NULL); /* generic argument error */
   }
   return r;
 }
@@ -1697,12 +1783,12 @@ static int tcl_cmd_array(struct tcl *tcl, const struct tcl_value *args, const st
         }
       }
     }
-    r = tcl_numeric_result(tcl, FNORMAL, count);
+    r = tcl_numeric_result(tcl, count);
   } else if (SUBCMD(subcmd, "slice")) {
     if (nargs < 4) {  /* need at least "array slice var blob" */
       tcl_free(subcmd);
       tcl_free(name);
-      return tcl_error_result(tcl, TCLERR_ARGUMENT, NULL);
+      return tcl_error_result(tcl, TCL_ERROR_ARGUMENT, NULL);
     }
     struct tcl_value *blob = tcl_list_item(args, 3);
     const unsigned char *bptr = (const unsigned char*)tcl_data(blob);
@@ -1753,7 +1839,7 @@ static int tcl_cmd_array(struct tcl *tcl, const struct tcl_value *args, const st
           var->value = newlist;
           var->elements = numelements;
         } else {
-          tcl_error_result(tcl, TCLERR_MEMORY, NULL);
+          tcl_error_result(tcl, TCL_ERROR_MEMORY, NULL);
           count = 0;
           break;
         }
@@ -1766,12 +1852,13 @@ static int tcl_cmd_array(struct tcl *tcl, const struct tcl_value *args, const st
       blen = (blen > (size_t)step) ? blen - step : 0;
     }
     tcl_free(blob);
-    r = tcl_numeric_result(tcl, (count > 0) ? FNORMAL : FERROR, count);
+    tcl_numeric_result(tcl, count);
+    r = (count > 0) ? FNORMAL : FERROR;
   } else if (SUBCMD(subcmd, "split")) {
-    if (nargs < 4) {  /* need at least "array slice var string" */
+    if (nargs < 4) {  /* need at least "array split var string" */
       tcl_free(subcmd);
       tcl_free(name);
-      return tcl_error_result(tcl, TCLERR_ARGUMENT, NULL);
+      return tcl_error_result(tcl, TCL_ERROR_ARGUMENT, NULL);
     }
     char varname[MAX_VAR_LENGTH];
     struct tcl_value *v_string = tcl_list_item(args, 3);
@@ -1799,14 +1886,15 @@ static int tcl_cmd_array(struct tcl *tcl, const struct tcl_value *args, const st
     if (v_sep) {
       tcl_free(v_sep);
     }
-    r = tcl_numeric_result(tcl, (index > 0) ? FNORMAL : FERROR, index);
+    tcl_numeric_result(tcl, index);
+    r = (index > 0) ? FNORMAL : FERROR;
   } else {
-    r = tcl_error_result(tcl, TCLERR_SUBCMD, tcl_data(subcmd));
+    r = tcl_error_result(tcl, TCL_ERROR_SUBCMD, tcl_data(subcmd));
   }
   tcl_free(subcmd);
   tcl_free(name);
   if (r == FERROR) {
-    r = tcl_error_result(tcl, TCLERR_ARGUMENT, NULL); /* generic argument error */
+    r = tcl_error_result(tcl, TCL_ERROR_ARGUMENT, NULL); /* generic argument error */
   }
   return r;
 }
@@ -1923,7 +2011,7 @@ static int tcl_cmd_llength(struct tcl *tcl, const struct tcl_value *args, const 
   struct tcl_value *list = tcl_list_item(args, 1);
   int n = tcl_list_length(list);
   tcl_free(list);
-  return tcl_numeric_result(tcl, FNORMAL, n);
+  return tcl_numeric_result(tcl, n);
 }
 
 static int tcl_cmd_lindex(struct tcl *tcl, const struct tcl_value *args, const struct tcl_value *user) {
@@ -1937,7 +2025,7 @@ static int tcl_cmd_lindex(struct tcl *tcl, const struct tcl_value *args, const s
   if (index < n) {
     r = tcl_result(tcl, FNORMAL, tcl_list_item(list, index));
   } else {
-    r = tcl_error_result(tcl, TCLERR_ARGUMENT, NULL);
+    r = tcl_error_result(tcl, TCL_ERROR_ARGUMENT, NULL);
   }
   tcl_free(list);
   return r;
@@ -1957,7 +2045,7 @@ static int tcl_cmd_lsearch(struct tcl *tcl, const struct tcl_value *args, const 
   }
   tcl_free(list);
   tcl_free(pattern);
-  return tcl_numeric_result(tcl, FNORMAL, result);
+  return tcl_numeric_result(tcl, result);
 }
 
 static int tcl_cmd_lsort(struct tcl *tcl, const struct tcl_value *args, const struct tcl_value *user) {
@@ -1986,7 +2074,7 @@ static int tcl_cmd_lsort(struct tcl *tcl, const struct tcl_value *args, const st
         }
       }
     }
-    return tcl_error_result(tcl, TCLERR_MEMORY, NULL);
+    return tcl_error_result(tcl, TCL_ERROR_MEMORY, NULL);
   }
   /* sort the array
      insertion sort, source: Programming Pearls, Jon Bentley, chapter 12 */
@@ -2135,6 +2223,38 @@ static bool binary_fmt(const char **source, unsigned *width, unsigned *count, bo
   return true;
 }
 
+static void binary_swapbytes(unsigned char *data, size_t width) {
+  unsigned low = 0;
+  unsigned high = width - 1;
+  while (low < high) {
+    unsigned char t = data[low];
+    data[low] = data[high];
+    data[high] = t;
+    low++;
+    high--;
+  }
+}
+
+static bool binary_checkformat(struct tcl_value *fmt, int numvars, size_t *datasize) {
+  size_t dsize = 0;
+  const char *ftmp = tcl_data(fmt);
+  for (int i = 0; i < numvars; i++) {
+    unsigned width, count;
+    bool sign_extend, is_bigendian;
+    if (!binary_fmt(&ftmp, &width, &count, &sign_extend, &is_bigendian)) {
+      return false;
+    }
+    if (count > (unsigned)numvars) {
+      count = numvars;
+    }
+    dsize += width * count;
+  }
+  if (datasize) {
+    *datasize = dsize;
+  }
+  return true;
+}
+
 static int tcl_cmd_binary(struct tcl *tcl, const struct tcl_value *args, const struct tcl_value *user) {
   (void)user;
   int r = FERROR;
@@ -2147,35 +2267,26 @@ static int tcl_cmd_binary(struct tcl *tcl, const struct tcl_value *args, const s
   }
   if (nargs < reqargs) {
     tcl_free(subcmd);
-    return tcl_error_result(tcl, TCLERR_ARGUMENT, NULL);
+    return tcl_error_result(tcl, TCL_ERROR_ARGUMENT, NULL);
   }
 
   struct tcl_value *fmt = tcl_list_item(args, fmtidx);
-  const char *fmtraw = tcl_data(fmt);
   int numvars = nargs - (fmtidx + 1); /* first argument is behind the format string */
   if (SUBCMD(subcmd, "format")) {
     /* syntax "binary format fmt arg ..." */
     /* get data size */
     size_t datalen = 0;
-    const char *ftmp = fmtraw;
-    for (int i = 0; i < numvars; i++) {
-      unsigned width, count;
-      bool sign_extend, is_bigendian;
-      if (!binary_fmt(&ftmp, &width, &count, &sign_extend, &is_bigendian)) {
-        tcl_free(subcmd);
-        tcl_free(fmt);
-        return tcl_error_result(tcl, TCLERR_ARGUMENT, NULL);
-      }
-      if (count > (unsigned)numvars) {
-        count = numvars;
-      }
-      datalen+=width*count;
+    if (!binary_checkformat(fmt, numvars, &datalen)) {
+      tcl_free(subcmd);
+      tcl_free(fmt);
+      return tcl_error_result(tcl, TCL_ERROR_ARGUMENT, NULL);
     }
-    char *rawdata = _malloc(datalen);
-    if (rawdata != NULL) {
+    unsigned char *rawdata = _malloc(datalen);
+    if (rawdata) {
       int dataidx = 0;
       unsigned width, count = 0;
       bool sign_extend, is_bigendian;
+      const char *fmtraw = tcl_data(fmt);
       for (int varidx = 0; varidx < numvars; varidx++) {
         if (count == 0) {
           binary_fmt(&fmtraw, &width, &count, &sign_extend, &is_bigendian);
@@ -2185,54 +2296,47 @@ static int tcl_cmd_binary(struct tcl *tcl, const struct tcl_value *args, const s
         tcl_free(argvalue);
         memcpy(rawdata + dataidx, &val, width);
         if (is_bigendian) {
-          unsigned low = 0;
-          unsigned high = width - 1;
-          while (low < high) {
-            unsigned char t = rawdata[dataidx + low];
-            rawdata[dataidx + low] = rawdata[dataidx + high];
-            rawdata[dataidx + high] = t;
-            low++;
-            high--;
-          }
+          binary_swapbytes(rawdata + dataidx, width);
         }
         dataidx += width;
         count--;
       }
-      r = tcl_result(tcl, FNORMAL, tcl_value(rawdata, datalen));
+      r = tcl_result(tcl, FNORMAL, tcl_value((char*)rawdata, datalen));
       _free(rawdata);
     } else {
-      r = tcl_error_result(tcl, TCLERR_MEMORY, NULL);
+      r = tcl_error_result(tcl, TCL_ERROR_MEMORY, NULL);
     }
   } else if (SUBCMD(subcmd, "scan")) {
     /* syntax "binary scan data fmt var ..." */
+    if (!binary_checkformat(fmt, numvars, NULL)) {
+      tcl_free(subcmd);
+      tcl_free(fmt);
+      return tcl_error_result(tcl, TCL_ERROR_ARGUMENT, NULL);
+    }
     struct tcl_value *data = tcl_list_item(args, 2);
     size_t datalen = tcl_length(data);
-    char *rawdata = _malloc(datalen);  /* make a copy of the data */
-    if (rawdata == NULL) {
+    unsigned char *rawdata = _malloc(datalen);  /* make a copy of the data */
+    if (!rawdata) {
       tcl_free(subcmd);
       tcl_free(fmt);
       tcl_free(data);
-      return tcl_error_result(tcl, TCLERR_MEMORY, NULL);
+      return tcl_error_result(tcl, TCL_ERROR_MEMORY, NULL);
     }
     memcpy(rawdata, tcl_data(data), datalen);
     tcl_free(data);
     int dataidx = 0;
     int cvtcount = 0;
+    const char *fmtraw = tcl_data(fmt);
     for (int varidx = 0; varidx < numvars; varidx++) {
       /* get variable name */
       char varname[128];
       struct tcl_value *var = tcl_list_item(args, varidx + fmtidx + 1);
       strlcpy(varname, tcl_data(var), sizeof varname);
       tcl_free(var);
-      /* get field format */
+      /* get field format (validity was already checked) */
       unsigned width, count;
       bool sign_extend, is_bigendian;
-      if (!binary_fmt(&fmtraw, &width, &count, &sign_extend, &is_bigendian)) {
-        tcl_free(subcmd);
-        tcl_free(fmt);
-        _free(rawdata);
-        return tcl_error_result(tcl, TCLERR_ARGUMENT, NULL);
-      }
+      binary_fmt(&fmtraw, &width, &count, &sign_extend, &is_bigendian);
       /* get & format the data */
       struct tcl_value *value = NULL;
       assert(count > 0);
@@ -2240,15 +2344,7 @@ static int tcl_cmd_binary(struct tcl *tcl, const struct tcl_value *args, const s
       for (unsigned c = 0; c < count && dataidx + width <= datalen; c++) {
         if (is_bigendian) {
           /* convert Big Endian to Little Endian before moving to numeric value */
-          unsigned low = 0;
-          unsigned high = width - 1;
-          while (low < high) {
-            unsigned char t = rawdata[dataidx + low];
-            rawdata[dataidx + low] = rawdata[dataidx + high];
-            rawdata[dataidx + high] = t;
-            low++;
-            high--;
-          }
+          binary_swapbytes(rawdata + dataidx, width);
         }
         tcl_int val = 0;
         /* for sign extension, look at the sign bit of the last byte (now that the
@@ -2279,9 +2375,9 @@ static int tcl_cmd_binary(struct tcl *tcl, const struct tcl_value *args, const s
       }
     }
     _free(rawdata);
-    r = tcl_numeric_result(tcl, FNORMAL, cvtcount);
+    r = tcl_numeric_result(tcl, cvtcount);
   } else {
-    r = tcl_error_result(tcl, TCLERR_SUBCMD, tcl_data(subcmd));
+    r = tcl_error_result(tcl, TCL_ERROR_SUBCMD, tcl_data(subcmd));
   }
   tcl_free(subcmd);
   tcl_free(fmt);
@@ -2303,7 +2399,7 @@ static int tcl_cmd_clock(struct tcl *tcl, const struct tcl_value *args, const st
   } else if (SUBCMD(subcmd, "format")) {
     int argcount = tcl_list_length(args);
     if (argcount < 3) {
-      r = tcl_error_result(tcl, TCLERR_ARGUMENT, NULL);
+      r = tcl_error_result(tcl, TCL_ERROR_ARGUMENT, NULL);
     } else {
       struct tcl_value *v_tstamp = tcl_list_item(args, 2);
       time_t tstamp = (time_t)tcl_number(v_tstamp);
@@ -2319,7 +2415,7 @@ static int tcl_cmd_clock(struct tcl *tcl, const struct tcl_value *args, const st
       }
     }
   } else {
-    r = tcl_error_result(tcl, TCLERR_SUBCMD, tcl_data(subcmd));
+    r = tcl_error_result(tcl, TCL_ERROR_SUBCMD, tcl_data(subcmd));
   }
   tcl_free(subcmd);
   return r;
@@ -2344,7 +2440,7 @@ static int tcl_cmd_source(struct tcl *tcl, const struct tcl_value *args, const s
   FILE *fp = fopen(p, "rt");
   if (!fp) {
     tcl_free(path);
-    return tcl_error_result(tcl, TCLERR_FILEIO, tcl_data(path));
+    return tcl_error_result(tcl, TCL_ERROR_FILEIO, tcl_data(path));
   }
   tcl_free(path);
   /* get length of the file */
@@ -2354,7 +2450,7 @@ static int tcl_cmd_source(struct tcl *tcl, const struct tcl_value *args, const s
   /* allocate memory and read the file */
   char *script = _malloc(fsize + 1);
   if (!script) {
-    return tcl_error_result(tcl, TCLERR_MEMORY, "source");
+    return tcl_error_result(tcl, TCL_ERROR_MEMORY, "source");
   }
   memset(script, 0, fsize + 1);
   fread(script, 1, fsize, fp);
@@ -2369,7 +2465,17 @@ static int tcl_cmd_source(struct tcl *tcl, const struct tcl_value *args, const s
 }
 #endif
 
-#if !defined TCL_DISABLE_PUTS && !defined TCL_DISABLE_FILEIO
+#if !defined TCL_DISABLE_FILEIO
+# if defined _WIN32 || defined _WIN64
+#   include <io.h>
+# else
+#   define _S_IFDIR       S_IFDIR
+#   define _S_IFREG       S_IFREG
+#   include <unistd.h>
+#   include <fcntl.h>
+# endif
+# include <sys/stat.h>
+
 static FILE *tcl_stdhandle(const struct tcl_value *arg) {
   assert(arg);
   FILE *result = NULL;
@@ -2382,25 +2488,13 @@ static FILE *tcl_stdhandle(const struct tcl_value *arg) {
   }
   return result;
 }
-#endif
-
-#if !defined TCL_DISABLE_FILEIO
-# if defined _WIN32 || defined _WIN64
-#   include <io.h>
-# else
-#   define _S_IFDIR       S_IFDIR
-#   define _S_IFREG       S_IFREG
-#   include <unistd.h>
-#   include <fcntl.h>
-# endif
-# include <sys/stat.h>
 
 static int tcl_cmd_open(struct tcl *tcl, const struct tcl_value *args, const struct tcl_value *user) {
   (void)user;
   struct tcl_value *path = tcl_list_item(args, 1);
   if (tcl_stdhandle(path)) {
     /* make it an error to open a standard handle */
-    int r = tcl_error_result(tcl, TCLERR_FILEIO, tcl_data(path));
+    int r = tcl_error_result(tcl, TCL_ERROR_FILEIO, tcl_data(path));
     tcl_free(path);
     return r;
   }
@@ -2419,9 +2513,9 @@ static int tcl_cmd_open(struct tcl *tcl, const struct tcl_value *args, const str
   FILE *fp = fopen(p, mode ? tcl_data(mode) : "rt");
   int r = FNORMAL;
   if (fp) {
-    r = tcl_numeric_result(tcl, FNORMAL, (tcl_int)fp);
+    r = tcl_numeric_result(tcl, (tcl_int)fp);
   } else {
-    r = tcl_error_result(tcl, TCLERR_FILEIO, tcl_data(path));
+    r = tcl_error_result(tcl, TCL_ERROR_FILEIO, tcl_data(path));
   }
   tcl_free(path);
   if (mode) {
@@ -2435,7 +2529,7 @@ static int tcl_cmd_close(struct tcl *tcl, const struct tcl_value *args, const st
   struct tcl_value *fd = tcl_list_item(args, 1);
   int r = tcl_stdhandle(fd) ? EOF : fclose((FILE*)tcl_number(fd)); /* make it an error to close a standard handle */
   tcl_free(fd);
-  return (r == 0) ? tcl_empty_result(tcl) : tcl_error_result(tcl, TCLERR_FILEIO, "close");
+  return (r == 0) ? tcl_empty_result(tcl) : tcl_error_result(tcl, TCL_ERROR_FILEIO, "close");
 }
 
 static int tcl_cmd_flush(struct tcl *tcl, const struct tcl_value *args, const struct tcl_value *user) {
@@ -2444,7 +2538,7 @@ static int tcl_cmd_flush(struct tcl *tcl, const struct tcl_value *args, const st
   FILE *fp = tcl_stdhandle(fd) ? tcl_stdhandle(fd) : (FILE*)tcl_number(fd);
   tcl_free(fd);
   int r = fflush(fp);
-  return (r == 0) ? tcl_empty_result(tcl) : tcl_error_result(tcl, TCLERR_FILEIO, "flush");
+  return (r == 0) ? tcl_empty_result(tcl) : tcl_error_result(tcl, TCL_ERROR_FILEIO, "flush");
 }
 
 static int tcl_cmd_seek(struct tcl *tcl, const struct tcl_value *args, const struct tcl_value *user) {
@@ -2474,7 +2568,7 @@ static int tcl_cmd_tell(struct tcl *tcl, const struct tcl_value *args, const str
   FILE *fp = tcl_stdhandle(fd) ? tcl_stdhandle(fd) : (FILE*)tcl_number(fd);
   tcl_free(fd);
   long r = ftell(fp);
-  return tcl_numeric_result(tcl, FNORMAL, r);
+  return tcl_numeric_result(tcl, r);
 }
 
 static int tcl_cmd_eof(struct tcl *tcl, const struct tcl_value *args, const struct tcl_value *user) {
@@ -2483,7 +2577,7 @@ static int tcl_cmd_eof(struct tcl *tcl, const struct tcl_value *args, const stru
   FILE *fp = tcl_stdhandle(fd) ? tcl_stdhandle(fd) : (FILE*)tcl_number(fd);
   tcl_free(fd);
   int r = feof(fp);
-  return tcl_numeric_result(tcl, FNORMAL, r);
+  return tcl_numeric_result(tcl, r);
 }
 
 static int tcl_cmd_read(struct tcl *tcl, const struct tcl_value *args, const struct tcl_value *user) {
@@ -2497,7 +2591,7 @@ static int tcl_cmd_read(struct tcl *tcl, const struct tcl_value *args, const str
   FILE *fp = tcl_stdhandle(fd) ? tcl_stdhandle(fd) : (FILE*)tcl_number(fd);
   tcl_free(fd);
   if (fileno(fp) < 0) {
-    return tcl_error_result(tcl, TCLERR_FILEIO, "read");
+    return tcl_error_result(tcl, TCL_ERROR_FILEIO, "read");
   }
   /* check how many bytes to read (especially if no "bytecount" argument was given) */
   long pos = ftell(fp);
@@ -2508,11 +2602,11 @@ static int tcl_cmd_read(struct tcl *tcl, const struct tcl_value *args, const str
     bytecount = remaining;
   }
   if (bytecount <= 0) {
-    return tcl_error_result(tcl, TCLERR_FILEIO, "negative bytecount argument");
+    return tcl_error_result(tcl, TCL_ERROR_FILEIO, "negative bytecount argument");
   }
   char *buffer = _malloc(bytecount);
-  if (buffer == NULL) {
-    return tcl_error_result(tcl, TCLERR_MEMORY, NULL);
+  if (!buffer) {
+    return tcl_error_result(tcl, TCL_ERROR_MEMORY, NULL);
   }
   size_t count = fread(buffer, 1, bytecount, fp);
   assert(count <= (unsigned)bytecount); /* can be smaller when \r\n is translated to \n */
@@ -2530,11 +2624,11 @@ static int tcl_cmd_gets(struct tcl *tcl, const struct tcl_value *args, const str
   FILE *fp = tcl_stdhandle(fd) ? tcl_stdhandle(fd) : (FILE*)tcl_number(fd);
   tcl_free(fd);
   if (fileno(fp) < 0) {
-    return tcl_error_result(tcl, TCLERR_FILEIO, "gets");
+    return tcl_error_result(tcl, TCL_ERROR_FILEIO, "gets");
   }
   char buffer[1024];
   const char *p = fgets(buffer, sizeof(buffer), fp);
-  if (p == NULL) {
+  if (!p) {
     return tcl_empty_result(tcl);
   }
   char *newline = strchr(buffer, '\n');
@@ -2580,10 +2674,10 @@ static int tcl_cmd_file(struct tcl *tcl, const struct tcl_value *args, const str
     }
     r = tcl_result(tcl, FNORMAL, tcl_value(p, len));
   } else if (SUBCMD(subcmd, "exists")) {
-    r = tcl_numeric_result(tcl, FNORMAL, (access(pname, 0) == 0));
+    r = tcl_numeric_result(tcl, (access(pname, 0) == 0));
   } else if (SUBCMD(subcmd, "extension")) {
     const char *p = strrchr(pname, '.');
-    if (p && strchr(p, DIRSEP) == NULL) {
+    if (p && !strchr(p, DIRSEP)) {
       r = tcl_result(tcl, FNORMAL, tcl_value(p, -1));
     } else {
       r = tcl_empty_result(tcl);
@@ -2591,14 +2685,14 @@ static int tcl_cmd_file(struct tcl *tcl, const struct tcl_value *args, const str
   } else if (SUBCMD(subcmd, "isdirectory")) {
     struct stat st;
     int i = stat(pname, &st);
-    r = tcl_numeric_result(tcl, FNORMAL, (i == 0) ? (st.st_mode & _S_IFDIR) != 0 : 0);
+    r = tcl_numeric_result(tcl, (i == 0) ? (st.st_mode & _S_IFDIR) != 0 : 0);
   } else if (SUBCMD(subcmd, "isfile")) {
     struct stat st;
     int i = stat(pname, &st);
-    r = tcl_numeric_result(tcl, FNORMAL, (i == 0) ? (st.st_mode & _S_IFREG) != 0 : 0);
+    r = tcl_numeric_result(tcl, (i == 0) ? (st.st_mode & _S_IFREG) != 0 : 0);
   } else if (SUBCMD(subcmd, "rootname")) {
     const char *p = strrchr(pname, '.');
-    if (p && strchr(p, DIRSEP) == NULL) {
+    if (p && !strchr(p, DIRSEP)) {
       r = tcl_result(tcl, FNORMAL, tcl_value(pname, p - pname));
     } else {
       r = tcl_result(tcl, FNORMAL, tcl_value(pname, -1));
@@ -2606,13 +2700,13 @@ static int tcl_cmd_file(struct tcl *tcl, const struct tcl_value *args, const str
   } else if (SUBCMD(subcmd, "size")) {
     struct stat st;
     int i = stat(pname, &st);
-    r = tcl_numeric_result(tcl, FNORMAL, (i == 0) ? st.st_size : 0);
+    r = tcl_numeric_result(tcl, (i == 0) ? st.st_size : 0);
   } else if (SUBCMD(subcmd, "tail")) {
     const char *p = strrchr(pname, DIRSEP);
     p = p ? p + 1 : pname;
     r = tcl_result(tcl, FNORMAL, tcl_value(p, -1));
   } else {
-    r = tcl_error_result(tcl, TCLERR_SUBCMD, tcl_data(subcmd));
+    r = tcl_error_result(tcl, TCL_ERROR_SUBCMD, tcl_data(subcmd));
   }
   tcl_free(subcmd);
   tcl_free(path);
@@ -2621,36 +2715,98 @@ static int tcl_cmd_file(struct tcl *tcl, const struct tcl_value *args, const str
 }
 #endif /* TCL_DISABLE_FILEIO */
 
-#if !defined TCL_DISABLE_PUTS && !defined TCL_DISABLE_FILEIO
+#if !defined TCL_DISABLE_PUTS
 static int tcl_cmd_puts(struct tcl *tcl, const struct tcl_value *args, const struct tcl_value *user) {
   bool no_eol = (tcl_list_find(user, "-nonewline") >= 0);
-  struct tcl_value *fd = NULL;
-  struct tcl_value *text = NULL;
+  int argcount = tcl_list_length(args);
+  struct tcl_value *text = tcl_list_item(args, argcount - 1);
   int r = FNORMAL;
-  if (tcl_list_length(args) == 3) {
-    fd = tcl_list_item(args, 1);
-    text = tcl_list_item(args, 2);
-    FILE *fp = tcl_stdhandle(fd) ? tcl_stdhandle(fd) : (FILE*)tcl_number(fd);
-    if (fileno(fp) < 0) {
-      r = tcl_error_result(tcl, TCLERR_FILEIO, NULL);
-    } else {
-      fprintf(fp, "%s", tcl_data(text));
-      if (!no_eol) {
-        fprintf(fp, "\n");
+  if (argcount == 3) {
+#   if !defined TCL_DISABLE_FILEIO
+      struct tcl_value *fd = tcl_list_item(args, 1);
+      FILE *fp = tcl_stdhandle(fd) ? tcl_stdhandle(fd) : (FILE*)tcl_number(fd);
+      if (fileno(fp) < 0) {
+        r = tcl_error_result(tcl, TCL_ERROR_FILEIO, NULL);
+      } else {
+        fprintf(fp, "%s", tcl_data(text));
+        if (!no_eol) {
+          fprintf(fp, "\n");
+        }
       }
-    }
+      tcl_free(fd);
+#   endif
   } else {
-    text = tcl_list_item(args, 1);
     printf("%s", tcl_data(text));
     if (!no_eol) {
       printf("\n");
     }
   }
   tcl_free(text);
-  if (fd) {
-    tcl_free(fd);
-  }
   return (r == FNORMAL) ? tcl_empty_result(tcl) : r;
+}
+#endif
+
+#if !defined TCL_DISABLE_EXEC
+static int tcl_cmd_exec(struct tcl *tcl, const struct tcl_value *args, const struct tcl_value *user) {
+  (void)user;
+  /* calculate size for complete command & argument list */
+  size_t needed = 0;
+  int nargs = tcl_list_length(args);
+  for (int i = 1; i < nargs; i++) {
+    struct tcl_value *v = tcl_list_item(args, i);
+    needed += tcl_length(v) + 1;
+    tcl_free(v);
+  }
+  /* build command line */
+  char *cmd = _malloc(needed);
+  if (!cmd) {
+    return tcl_error_result(tcl, TCL_ERROR_MEMORY, NULL);
+  }
+  size_t pos = 0;
+  for (int i = 1; i < nargs; i++) {
+    struct tcl_value *v = tcl_list_item(args, i);
+    size_t len = tcl_length(v);
+    memcpy(cmd + pos, tcl_data(v), len);
+    cmd[pos + len] = (i + 1 == nargs) ? '\0' : ' ';
+    tcl_free(v);
+    pos += len + 1;
+  }
+  /* prepare the buffer for captured output */
+  size_t bufsize = 256;
+  size_t buflen = 0;
+  char *buf = _malloc(bufsize);
+  if (!buf) {
+    return tcl_error_result(tcl, TCL_ERROR_MEMORY, NULL);
+  }
+  /* execute command */
+  int r = FNORMAL;
+  FILE* fp = _popen(cmd, "r" );
+  if (fp) {
+    /* collect the output */
+    while (!feof(fp)) {
+      size_t n = fread(buf + buflen, 1, bufsize - buflen, fp);
+      assert(n <= bufsize - buflen);
+      buflen += n;
+      if (buflen >= bufsize) {
+        size_t newsize = 2 * bufsize;
+        char *newbuf = _malloc(newsize);
+        if (!newbuf) {
+          break;
+        }
+        memcpy(newbuf, buf, buflen);
+        _free(buf);
+        buf = newbuf;
+        bufsize = newsize;
+      }
+    }
+    _pclose(fp);
+    r = tcl_result(tcl, FNORMAL, tcl_value(buf, buflen));
+  } else {
+    r = tcl_error_result(tcl, TCL_ERROR_FILEIO, cmd);
+  }
+  _free(buf);
+  _free(cmd);
+  return r;
 }
 #endif
 
@@ -2738,9 +2894,9 @@ static int tcl_cmd_proc(struct tcl *tcl, const struct tcl_value *args, const str
     int len = tcl_list_length(param);
     assert(len >= 0);
     if (len == 0 || is_varargs) {
-      r = tcl_error_result(tcl, TCLERR_NAMEINVALID, tcl_data(param)); /* invalid name */
+      r = tcl_error_result(tcl, TCL_ERROR_NAMEINVALID, tcl_data(param)); /* invalid name */
     } else if ((len == 1 && defaultcount > 0) || len > 2) {
-      r = tcl_error_result(tcl, TCLERR_DEFAULTVAL, tcl_data(param));  /* parameters with default values must come behind parameters without defaults */
+      r = tcl_error_result(tcl, TCL_ERROR_DEFAULTVAL, tcl_data(param));  /* parameters with default values must come behind parameters without defaults */
     } else if (len == 2) {
       defaultcount++;
     } else {
@@ -2749,7 +2905,7 @@ static int tcl_cmd_proc(struct tcl *tcl, const struct tcl_value *args, const str
     if (strcmp(tcl_data(param), "args") == 0) {
       is_varargs = true;
       if (len != 1) {
-        r = tcl_error_result(tcl, TCLERR_DEFAULTVAL, tcl_data(param));/* special parameter "args" may not have a default value */
+        r = tcl_error_result(tcl, TCL_ERROR_DEFAULTVAL, tcl_data(param));/* special parameter "args" may not have a default value */
       }
     }
     tcl_free(param);
@@ -2796,7 +2952,7 @@ int tcl_eval_condition(struct tcl *tcl, struct tcl_value *cond) {
   if ((len >= 2 && *data == '[' && *(data + len - 1) == ']')) {
     r = tcl_subst(tcl, data, len);
   } else if (tcl_isnumber(cond)) {
-    r = tcl_numeric_result(tcl, FNORMAL, tcl_number(cond));
+    r = tcl_numeric_result(tcl, tcl_number(cond));
   } else {
     r = tcl_eval(tcl, tcl_data(cond), tcl_length(cond) + 1);
   }
@@ -2821,7 +2977,7 @@ static int tcl_cmd_if(struct tcl *tcl, const struct tcl_value *args, const struc
       tcl_free(branch);   /* error in condition expression, abort */
       break;
     } else if (!branch) {
-      return tcl_error_result(tcl, TCLERR_ARGUMENT, NULL);
+      return tcl_error_result(tcl, TCL_ERROR_ARGUMENT, NULL);
     }
     if (tcl_number(tcl->result)) {
       r = tcl_eval(tcl, tcl_data(branch), tcl_length(branch) + 1);
@@ -2845,7 +3001,7 @@ static int tcl_cmd_if(struct tcl *tcl, const struct tcl_value *args, const struc
           tcl_free(branch);
           break;          /* "else" branch taken, do not take any other branch */
         } else {
-          return tcl_error_result(tcl, TCLERR_ARGUMENT, NULL);
+          return tcl_error_result(tcl, TCL_ERROR_ARGUMENT, NULL);
         }
       } else if (i + 1 < n) {
         /* no explicit keyword, but at least two blocks in the list:
@@ -3042,13 +3198,13 @@ static int tcl_cmd_catch(struct tcl *tcl, const struct tcl_value *args, const st
     tcl_free(name);
   }
   tcl_free(body);
-  return tcl_numeric_result(tcl, FNORMAL, r);
+  return tcl_numeric_result(tcl, r);
 }
 
 static int tcl_cmd_error(struct tcl *tcl, const struct tcl_value *args, const struct tcl_value *user) {
   (void)user;
   struct tcl_value *msg = tcl_list_item(args, 1);
-  tcl_error_result(tcl, TCLERR_USER, tcl_data(msg));
+  tcl_error_result(tcl, TCL_ERROR_USER, tcl_data(msg));
   tcl_free(msg);
   return FERROR;
 }
@@ -3057,8 +3213,10 @@ static int tcl_cmd_error(struct tcl *tcl, const struct tcl_value *args, const st
 
 enum {
   TOK_END_EXPR = 0,
-  TOK_NUMBER = 256,
-  TOK_VARIABLE,
+  TOK_NUMBER = 256, /* literal number */
+  TOK_STRING,       /* literal string (may contain escapes that need to be resolved) */
+  TOK_BSTRING,      /* brace-quoted string */
+  TOK_VARIABLE,     /* variable name plus optional index (for arrays) */
   TOK_OR,           /* || */
   TOK_AND,          /* && */
   TOK_EQ,           /* == */
@@ -3078,20 +3236,73 @@ enum {
   eEXTRA_CHARS,     /* extra characters after expression (missing operator?) */
   eINVALID_CHAR,
   eDIV0,            /* divide by zero */
+  eMEMORY,          /* memory allocation failure */
+};
+
+struct exprval {
+  tcl_int i;        /* literal value (integer) */
+  char *pc;         /* literal string */
 };
 
 struct expr {
   const char *pos;  /* current position in expression */
-  int token;        /* current token */
-  int lexflag;
-  tcl_int lnumber;  /* literal value */
-  int error;
   struct tcl *tcl;  /* for variable lookup */
+  int error;
+  int token;        /* current token */
+  struct exprval val;/* copy of the most recent literal value */
+  bool pushed;      /* push-back of most recently read token */
 };
 
-static tcl_int expr_conditional(struct expr *expr);
-#define lex(e)          ((e)->lexflag ? ((e)->lexflag = 0, (e)->token) : expr_lex(e) )
-#define unlex(e)        ((e)->lexflag = 1)
+static void expr_error(struct expr *expr, int number);
+static struct exprval expr_conditional(struct expr *expr);
+#define lex(e)          ((e)->pushed ? ((e)->pushed = false, (e)->token) : expr_lex(e) )
+#define unlex(e)        ((e)->pushed = true)
+
+static void exprval_clear(struct exprval *value) {
+  assert(value);
+  if (value->pc) {
+    _free(value->pc);
+    value->pc = NULL;
+  }
+}
+
+static struct exprval exprval_set(tcl_int i, const char *pc, int len)
+{
+  struct exprval value;
+  value.i = i;
+  if (pc) {
+    if (len < 0) {
+      len = strlen(pc);
+    }
+    value.pc = _malloc(len + 1);
+    if (value.pc) {
+      memcpy(value.pc, pc, len);
+      value.pc[len] = '\0';
+    }
+  } else {
+    value.pc = NULL;
+  }
+  return value;
+}
+
+static bool exprval_check_num(struct expr *expr, struct exprval *value) {
+  /* checks that value contains a number, and raises an error if not;
+     if there is an error (i.e. value is a string), the string is cleared (and
+     if there is no error, there is nothing to clear) */
+  assert(expr);
+  assert(value);
+  if (value->pc) {
+    exprval_clear(value);
+    expr_error(expr, eNUM_EXPECT);
+    return false;
+  }
+  return true;
+}
+
+static struct exprval exprval_set_num(struct expr *expr, struct exprval *value, tcl_int i) {
+  exprval_check_num(expr, value);
+  return exprval_set(i, NULL, 0);
+}
 
 static void expr_error(struct expr *expr, int number) {
   if (expr->error == eNONE)
@@ -3111,14 +3322,16 @@ static void expr_skip(struct expr *expr, int number) {
 static int expr_lex(struct expr *expr) {
   static const char special[] = "?:|&^~<>=!-+*/%(){}";
 
-  assert(expr && expr->pos);
+  assert(expr);
+  exprval_clear(&expr->val);
+  assert(expr->pos);
   if (*expr->pos == '\0') {
     expr->token = TOK_END_EXPR;
     return expr->token;
   }
 
-  if (strchr(special, *expr->pos) != NULL) {
-    expr->token = (int)*expr->pos;
+  if (strchr(special, *expr->pos)) {
+    expr->token = (int)*expr->pos;  /* preset */
     expr->pos += 1; /* don't skip whitespace yet, first check for multi-character operators */
     switch (expr->token) {
     case '|':
@@ -3169,70 +3382,97 @@ static int expr_lex(struct expr *expr) {
         expr->pos += 1;
       }
       break;
+    case '{': {
+      /* either a brace-quoted string, or the opening brace of a subexpression */
+      const char *from = expr->pos;
+      const char *to = from;
+      while (!tcl_is_special(*to, false) && !tcl_is_operator(*to)) {
+        to += 1;
+      }
+      if (*to == '}') {
+        expr->val = exprval_set(0, from, to - from);
+        expr->token = TOK_BSTRING;
+        expr->pos = to + 1; /* skip '}' */
+      }
+      break;
+    } /* case '{' */
     }
     expr_skip(expr, 0);          /* erase white space */
   } else if (tcl_isdigit(*expr->pos)) {
     char *ptr;
-    expr->token = TOK_NUMBER;
-    expr->lnumber = strtoll(expr->pos, &ptr, 0);
+    expr->val = exprval_set(strtoll(expr->pos, &ptr, 0), NULL, 0);
     expr->pos = ptr;
+    expr->token = TOK_NUMBER;
     if (tcl_isalpha(*expr->pos) || *expr->pos == '.' || *expr->pos == ',')
       expr_error(expr, eINVALID_NUM);
     expr_skip(expr, 0);          /* erase white space */
   } else if (*expr->pos == '$') {
-    char name[MAX_VAR_LENGTH] = "";
-    bool quote = (*(expr->pos + 1) == '{');
-    char close = quote ? '}' : '\0';
+    const char *from = expr->pos;
     expr->pos += 1;   /* skip '$' */
+    char quote = (*expr->pos == '{') ? '}' : '\0';
     if (quote) {
       expr->pos += 1; /* skip '{' */
     }
-    unsigned i = 0;
-    while (i < sizeof(name) - 1 && *expr->pos != close && *expr->pos != '(' && *expr->pos != ')'
-           && (quote || !tcl_is_space(*expr->pos))  && !tcl_is_operator(*expr->pos)
+    while (*expr->pos != quote && *expr->pos != '(' && *expr->pos != ')'
+           && (quote || !(tcl_is_space(*expr->pos) || tcl_is_operator(*expr->pos)))
            && !tcl_is_special(*expr->pos, false)) {
-      name[i++] = *expr->pos++;
+      expr->pos++;
     }
-    name[i] = '\0';
-    if (quote && *expr->pos == close) {
+    if (quote && *expr->pos == quote) {
       expr->pos += 1; /* skip '}' */
     }
     if (*expr->pos == '(') {
-      expr_skip(expr, 1);
-      tcl_int v = expr_conditional(expr);
-      if (lex(expr) != ')')
-        expr_error(expr, ePARENTHESES);
-      strlcat(name, "(", sizeof name);
-      char buf[64];
-      strlcat(name, tcl_int2string(buf, sizeof buf, 10, v), sizeof name);
-      strlcat(name, ")", sizeof name);
+      while (*expr->pos != ')' && !tcl_is_special(*expr->pos, false)) {
+        expr->pos += 1;
+      }
+      if (*expr->pos == ')') {
+        expr->pos += 1;
+      }
     }
-    expr_skip(expr, 0);          /* erase white space */
-    const struct tcl_value *varvalue = tcl_var(expr->tcl, name, NULL);
+    expr->val = exprval_set(0, from, expr->pos - from);
     expr->token = TOK_VARIABLE;
-    expr->lnumber = varvalue ? tcl_number(varvalue) : 0;
+    expr_skip(expr, 0);          /* skip white space */
   } else {
-    expr_error(expr, eINVALID_CHAR);
-    expr->token = TOK_END_EXPR;
+    char quote = (*expr->pos == '"') ? '"' : '\0';
+    if (quote) {
+      expr->pos += 1; /* skip '"' */
+    }
+    const char *from = expr->pos;
+    while (*expr->pos != quote && *expr->pos != '\0'
+           && (quote || !tcl_is_space(*expr->pos))) {
+      if (*expr->pos == '\\' && (*(expr->pos + 1) == '"' || *(expr->pos + 1) == '\\')) {
+        expr->pos += 1; /* skip both \ & " */
+      }
+      expr->pos += 1;
+    }
+    expr->val = exprval_set(0, from, expr->pos - from);
+    expr->token = TOK_STRING;
+    if (quote && *expr->pos == quote) {
+      expr->pos += 1; /* skip closing '"' */
+    }
+    expr_skip(expr, 0);          /* skip white space */
   }
   return expr->token;
 }
 
-static tcl_int expr_primary(struct expr *expr) {
-  tcl_int v = 0;
+static struct exprval expr_primary(struct expr *expr) {
+  struct exprval v;
   int tok_close = 0;
   switch (lex(expr)) {
   case '-':
-    v = -expr_primary(expr);
+    v = expr_primary(expr);
+    v = exprval_set_num(expr, &v, -v.i);
     break;
   case '+':
-    v = -expr_primary(expr);
+    v = expr_primary(expr);
     break;
   case '!':
-    v = !expr_primary(expr);
+    v = expr_primary(expr);
+    v = exprval_set_num(expr, &v, !v.i);
     break;
   case '~':
-    v = ~expr_primary(expr);
+    v = expr_primary(expr);
+    v = exprval_set_num(expr, &v, ~v.i);
     break;
   case '(':
   case '{':
@@ -3241,52 +3481,68 @@ static tcl_int expr_primary(struct expr *expr) {
     if (lex(expr) != tok_close)
       expr_error(expr, ePARENTHESES);
     break;
-  case TOK_VARIABLE:
   case TOK_NUMBER:
-    v = expr->lnumber;
+    v = expr->val;
+    break;
+  case TOK_VARIABLE:
+  case TOK_STRING:
+    tcl_subst(expr->tcl, expr->val.pc, strlen(expr->val.pc));
+    if (tcl_isnumber(expr->tcl->result)) {
+      v = exprval_set(tcl_number(expr->tcl->result), NULL, 0);
+    } else {
+      v = exprval_set(0, tcl_data(expr->tcl->result), tcl_length(expr->tcl->result));
+    }
+    break;
+  case TOK_BSTRING:
+    v = exprval_set(0, expr->val.pc, -1); /* make a copy, because expr->val is reset */
     break;
   default:
     expr_error(expr, eNUM_EXPECT);
+    v = exprval_set(0, NULL, 0);
   }
   return v;
 }
 
-static tcl_int expr_power(struct expr *expr) {
-  tcl_int v1 = expr_primary(expr);
+static struct exprval expr_power(struct expr *expr) {
+  struct exprval v1 = expr_primary(expr);
   while (lex(expr) == TOK_EXP) {
-    tcl_int v2 = expr_power(expr); /* right-to-left associativity */
-    if (v2 < 0) {
-      v1 = 0;
+    struct exprval v2 = expr_power(expr); /* right-to-left associativity */
+    exprval_check_num(expr, &v2);
+    if (v2.i < 0) {
+      v1 = exprval_set_num(expr, &v1, 0);
     } else {
-      tcl_int n = v1;
-      v1 = 1;
-      while (v2--)
-        v1 *= n;
+      tcl_int n = v1.i;
+      tcl_int r = 1;
+      while (v2.i--)
+        r *= n;
+      v1 = exprval_set_num(expr, &v1, r);
     }
   }
   unlex(expr);
   return v1;
 }
 
-static tcl_int expr_product(struct expr *expr) {
-  tcl_int v1 = expr_power(expr);
+static struct exprval expr_product(struct expr *expr) {
+  struct exprval v1 = expr_power(expr);
   int op;
   while ((op = lex(expr)) == '*' || op == '/' || op == '%') {
-    tcl_int v2 = expr_power(expr);
+    struct exprval v2 = expr_power(expr);
+    exprval_check_num(expr, &v2);
     if (op == '*') {
-      v1 *= v2;
+      v1 = exprval_set_num(expr, &v1, v1.i * v2.i);
     } else {
-      if (v2 != 0L) {
-        tcl_int div = v1 / v2;
-        tcl_int rem = v1 % v2;
+      if (v2.i != 0L) {
+        tcl_int div = v1.i / v2.i;
+        tcl_int rem = v1.i % v2.i;
         /* ensure floored division, with positive remainder */
         if (rem < 0) {
           div -= 1;
-          rem += v1;
+          rem += v1.i;
         }
-        v1 = (op == '/') ? div : rem;
+        v1 = exprval_set_num(expr, &v1, (op == '/') ? div : rem);
       } else {
         expr_error(expr, eDIV0);
+        exprval_clear(&v1);
       }
     }
   }
@@ -3294,136 +3550,166 @@ static tcl_int expr_product(struct expr *expr) {
   return v1;
 }
 
-static tcl_int expr_sum(struct expr *expr) {
-  tcl_int v1 = expr_product(expr);
+static struct exprval expr_sum(struct expr *expr) {
+  struct exprval v1 = expr_product(expr);
   int op;
   while ((op = lex(expr)) == '+' || op == '-') {
-    tcl_int v2 = expr_product(expr);
-    if (op == '+')
-      v1 += v2;
-    else
-      v1 -= v2;
+    struct exprval v2 = expr_product(expr);
+    exprval_check_num(expr, &v2);
+    v1 = exprval_set_num(expr, &v1, (op == '+') ? v1.i + v2.i : v1.i - v2.i);
   }
   unlex(expr);
   return v1;
 }
 
-static tcl_int expr_shift(struct expr *expr) {
-  tcl_int v1 = expr_sum(expr);
+static struct exprval expr_shift(struct expr *expr) {
+  struct exprval v1 = expr_sum(expr);
   int op;
   while ((op = lex(expr)) == TOK_SHL || op == TOK_SHR) {
-    tcl_int v2 = expr_sum(expr);
-    if (op == TOK_SHL)
-      v1 = (v1 << v2);
-    else
-      v1 = (v1 >> v2);
+    struct exprval v2 = expr_sum(expr);
+    exprval_check_num(expr, &v2);
+    v1 = exprval_set_num(expr, &v1, (op == TOK_SHL) ? v1.i << v2.i : v1.i >> v2.i);
   }
   unlex(expr);
   return v1;
 }
 
-static tcl_int expr_relational(struct expr *expr) {
-  tcl_int v1 = expr_shift(expr);
+static struct exprval expr_relational(struct expr *expr) {
+  struct exprval v1 = expr_shift(expr);
   int op;
   while ((op = lex(expr)) == '<' || op == '>' || op == TOK_LE || op == TOK_GE) {
-    tcl_int v2 = expr_shift(expr);
+    struct exprval v2 = expr_shift(expr);
+    tcl_int r;
+    if (!v1.pc && !v2.pc) {
+      /* numeric compare */
+      r = v1.i - v2.i;
+    } else {
+      /* string compare */
+      char buf1[64], buf2[64];
+      char *p1 = (v1.pc) ? v1.pc : tcl_int2string(buf1, sizeof(buf1), 10, v1.i);
+      char *p2 = (v2.pc) ? v2.pc : tcl_int2string(buf2, sizeof(buf2), 10, v2.i);
+      r = strcmp(p1, p2);
+    }
     switch (op) {
     case '<':
-      v1 = (v1 < v2);
+      v1 = exprval_set_num(expr, &v1, (r < 0));
       break;
     case '>':
-      v1 = (v1 > v2);
+      v1 = exprval_set_num(expr, &v1, (r > 0));
       break;
     case TOK_LE:
-      v1 = (v1 <= v2);
+      v1 = exprval_set_num(expr, &v1, (r <= 0));
       break;
     case TOK_GE:
-      v1 = (v1 >= v2);
+      v1 = exprval_set_num(expr, &v1, (r >= 0));
       break;
+    }
+    exprval_clear(&v2);
+  }
+  unlex(expr);
+  return v1;
+}
+
+static struct exprval expr_equality(struct expr *expr) {
+  struct exprval v1 = expr_relational(expr);
+  int op;
+  while ((op = lex(expr)) == TOK_EQ || op == TOK_NE) {
+    struct exprval v2 = expr_relational(expr);
+    tcl_int r;
+    if (!v1.pc && !v2.pc) {
+      /* numeric compare */
+      r = v1.i - v2.i;
+    } else {
+      /* string compare */
+      char buf1[64], buf2[64];
+      char *p1 = (v1.pc) ? v1.pc : tcl_int2string(buf1, sizeof(buf1), 10, v1.i);
+      char *p2 = (v2.pc) ? v2.pc : tcl_int2string(buf2, sizeof(buf2), 10, v2.i);
+      r = strcmp(p1, p2);
+      exprval_clear(&v1); /* clear value, because we switch from string to numeric */
+    }
+    v1 = exprval_set_num(expr, &v1, (op == TOK_EQ) ? (r == 0) : (r != 0));
+    exprval_clear(&v2);
+  }
+  unlex(expr);
+  return v1;
+}
+
+static struct exprval expr_binary_and(struct expr *expr) {
+  struct exprval v1 = expr_equality(expr);
+  while (lex(expr) == '&') {
+    struct exprval v2 = expr_equality(expr);
+    exprval_check_num(expr, &v2);
+    v1 = exprval_set_num(expr, &v1, v1.i & v2.i);
+  }
+  unlex(expr);
+  return v1;
+}
+
+static struct exprval expr_binary_xor(struct expr *expr) {
+  struct exprval v1 = expr_binary_and(expr);
+  while (lex(expr) == '^') {
+    struct exprval v2 = expr_binary_and(expr);
+    exprval_check_num(expr, &v2);
+    v1 = exprval_set_num(expr, &v1, v1.i ^ v2.i);
+  }
+  unlex(expr);
+  return v1;
+}
+
+static struct exprval expr_binary_or(struct expr *expr) {
+  struct exprval v1 = expr_binary_xor(expr);
+  while (lex(expr) == '|') {
+    struct exprval v2 = expr_binary_xor(expr);
+    exprval_check_num(expr, &v2);
+    v1 = exprval_set_num(expr, &v1, v1.i | v2.i);
+  }
+  unlex(expr);
+  return v1;
+}
+
+static struct exprval expr_logic_and(struct expr *expr) {
+  struct exprval v1 = expr_binary_or(expr);
+  while (lex(expr) == TOK_AND) {
+    struct exprval v2 = expr_binary_or(expr);
+    exprval_check_num(expr, &v2);
+    v1 = exprval_set_num(expr, &v1, v1.i && v2.i);
+  }
+  unlex(expr);
+  return v1;
+}
+
+static struct exprval expr_logic_or(struct expr *expr) {
+  struct exprval v1 = expr_logic_and(expr);
+  while (lex(expr) == TOK_OR) {
+    struct exprval v2 = expr_logic_and(expr);
+    exprval_check_num(expr, &v2);
+    v1 = exprval_set_num(expr, &v1, v1.i || v2.i);
+  }
+  unlex(expr);
+  return v1;
+}
+
+static struct exprval expr_conditional(struct expr *expr) {
+  struct exprval v1 = expr_logic_or(expr);
+  if (lex(expr) == '?') {
+    exprval_check_num(expr, &v1);
+    struct exprval v2 = expr_conditional(expr);
+    if (lex(expr) != ':')
+      expr_error(expr, eINVALID_CHAR);
+    struct exprval v3 = expr_logic_or(expr);
+    if (v1.i) {
+      v1 = v2;
+      exprval_clear(&v3);
+    } else {
+      v1 = v3;
+      exprval_clear(&v2);
     }
   }
   unlex(expr);
   return v1;
 }
 
-static tcl_int expr_equality(struct expr *expr) {
-  tcl_int v1 = expr_relational(expr);
-  int op;
-  while ((op = lex(expr)) == TOK_EQ || op == TOK_NE) {
-    tcl_int v2 = expr_relational(expr);
-    if (op == TOK_EQ)
-      v1 = (v1 == v2);
-    else
-      v1 = (v1 != v2);
-  }
-  unlex(expr);
-  return v1;
-}
-
-static tcl_int expr_binary_and(struct expr *expr) {
-  tcl_int v1 = expr_equality(expr);
-  while (lex(expr) == '&') {
-    tcl_int v2 = expr_equality(expr);
-    v1 = v1 & v2;
-  }
-  unlex(expr);
-  return v1;
-}
-
-static tcl_int expr_binary_xor(struct expr *expr) {
-  tcl_int v1 = expr_binary_and(expr);
-  while (lex(expr) == '^') {
-    tcl_int v2 = expr_binary_and(expr);
-    v1 = v1 ^ v2;
-  }
-  unlex(expr);
-  return v1;
-}
-
-static tcl_int expr_binary_or(struct expr *expr) {
-  tcl_int v1 = expr_binary_xor(expr);
-  while (lex(expr) == '|') {
-    tcl_int v2 = expr_binary_xor(expr);
-    v1 = v1 | v2;
-  }
-  unlex(expr);
-  return v1;
-}
-
-static tcl_int expr_logic_and(struct expr *expr) {
-  tcl_int v1 = expr_binary_or(expr);
-  while (lex(expr) == TOK_AND) {
-    tcl_int v2 = expr_binary_or(expr);
-    v1 = v1 && v2;
-  }
-  unlex(expr);
-  return v1;
-}
-
-static tcl_int expr_logic_or(struct expr *expr) {
-  tcl_int v1 = expr_logic_and(expr);
-  while (lex(expr) == TOK_OR) {
-    tcl_int v2 = expr_logic_and(expr);
-    v1 = v1 || v2;
-  }
-  unlex(expr);
-  return v1;
-}
-
-static tcl_int expr_conditional(struct expr *expr) {
-  tcl_int v1 = expr_logic_or(expr);
-  if (lex(expr) == '?') {
-    tcl_int v2 = expr_conditional(expr);
-    if (lex(expr) != ':')
-      expr_error(expr, eINVALID_CHAR);
-    tcl_int v3 = expr_logic_or(expr);
-    v1 = v1 ? v2 : v3;
-  }
-  unlex(expr);
-  return v1;
-}
-
-static int tcl_expression(struct tcl *tcl, const char *expression, tcl_int *result) {
+static int tcl_expression(struct tcl *tcl, const char *expression, struct exprval *result) {
   struct expr expr;
   memset(&expr, 0, sizeof(expr));
   expr.pos = expression;
@@ -3431,6 +3717,7 @@ static int tcl_expression(struct tcl *tcl, const char *expression, tcl_int *resu
   expr_skip(&expr, 0);            /* erase leading white space */
   *result = expr_conditional(&expr);
   expr_skip(&expr, 0);            /* erase trailing white space */
+  exprval_clear(&expr.val);
   if (expr.error == eNONE) {
     int op = lex(&expr);
     if (op == ')')
@@ -3516,14 +3803,19 @@ static int tcl_cmd_expr(struct tcl *tcl, const struct tcl_value *args, const str
     }
   }
   /* parse expression */
-  tcl_int result;
+  struct exprval result;
   int err = tcl_expression(tcl, tcl_data(expression), &result);
   if (err == eNONE) {
-    r = tcl_numeric_result(tcl, r, result);
+    if (result.pc) {
+      r = tcl_result(tcl, FNORMAL, tcl_value(result.pc, -1));
+    } else {
+      tcl_numeric_result(tcl, result.i);
+    }
   } else {
-    r = tcl_error_result(tcl, TCLERR_EXPR, tcl_data(expression));
+    r = tcl_error_result(tcl, TCL_ERROR_EXPR, tcl_data(expression));
   }
   tcl_free(expression);
+  exprval_clear(&result);
 
   /* convert result to string & store */
   return r;
@@ -3584,15 +3876,18 @@ void tcl_init(struct tcl *tcl, const void *user) {
     tcl_register(tcl, "close", tcl_cmd_close, 0, 1, 1, NULL);
     tcl_register(tcl, "eof", tcl_cmd_eof, 0, 1, 1, NULL);
     tcl_register(tcl, "file", tcl_cmd_file, 1, 1, 1, NULL);
-    tcl_register(tcl, "file", tcl_cmd_flush, 0, 1, 1, NULL);
+    tcl_register(tcl, "flush", tcl_cmd_flush, 0, 1, 1, NULL);
     tcl_register(tcl, "gets", tcl_cmd_gets, 0, 1, 2, NULL);
     tcl_register(tcl, "open", tcl_cmd_open, 0, 1, 2, NULL);
-    tcl_register(tcl, "puts", tcl_cmd_puts, 0, 1, 2, tcl_value("-nonewline", -1));
     tcl_register(tcl, "read", tcl_cmd_read, 0, 1, 2, tcl_value("-nonewline", -1));
     tcl_register(tcl, "seek", tcl_cmd_seek, 0, 2, 3, NULL);
     tcl_register(tcl, "tell", tcl_cmd_tell, 0, 1, 1, NULL);
-# elif !defined TCL_DISABLE_PUTS
+# endif
+# if !defined TCL_DISABLE_PUTS
     tcl_register(tcl, "puts", tcl_cmd_puts, 0, 1, 2, tcl_value("-nonewline", -1));
+# endif
+# if !defined TCL_DISABLE_EXEC
+    tcl_register(tcl, "exec", tcl_cmd_exec, 0, 1, -1, NULL);
 # endif
 # if !defined TCL_DISABLE_SOURCE
     tcl_register(tcl, "source", tcl_cmd_source, 0, 1, 1, NULL);

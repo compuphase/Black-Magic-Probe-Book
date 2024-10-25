@@ -1,7 +1,7 @@
 # -------------------------------------------------------------
 #
 #       Makefile for Black Magic Probe utilities
-#       o  uses MingW
+#       o  uses MinGW
 #       o  Nuklear GUI with GDI+ back-end
 #
 #       For release version, use NDEBUG=
@@ -10,7 +10,7 @@
 # -------------------------------------------------------------
 
 # Options to set in makefile.cfg
-#  o  CDIR          the root path to where the MingW GCC compiler is installed
+#  o  CDIR          the root path to where the MinGW GCC compiler is installed
 #                   (may be left empty if it is in the PATH)
 -include makefile.cfg
 
@@ -21,6 +21,7 @@
 
 #OBJDIR    := ./obj
 #.path %.o   $(OBJDIR)
+#.path %.res $(OBJDIR)
 #.path %.map $(OBJDIR)
 #.path %.exe ../bin
 

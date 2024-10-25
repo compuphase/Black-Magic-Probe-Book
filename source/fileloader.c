@@ -2,7 +2,7 @@
  * File loading support for binary (executable) files, with support for ELF,
  * Intel HEX and BIN formats.
  *
- * Copyright 2023 CompuPhase
+ * Copyright 2023-2024 CompuPhase
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -40,7 +40,7 @@
 
 typedef struct tagFILESECTION {
   struct tagFILESECTION *next;
-  unsigned long address;  /* address for this section on the target */
+  unsigned long address;  /* address for this section on the target, in (Flash) memory */
   unsigned long size;     /* size of the section (in memory) */
   unsigned char *buffer;  /* the section in memory */
   unsigned long filepos;  /* file position of the section in the file */
@@ -51,6 +51,9 @@ typedef struct tagFILESECTION {
 
 static FILESECTION filesection_root = { NULL };
 
+/** filesection_clearall() frees all memory taken by an ELF/HEX/BIN file
+ *  (deletes all sections).
+ */
 void filesection_clearall(void)
 {
   while (filesection_root.next != NULL) {
@@ -319,6 +322,8 @@ bool hex_isvalid(FILE *fp)
  *  In a HEX file, separate sections are created when there is a gap between
  *  data records, or a "jump" in the base address.
  *
+ *  \param filename   The full filename of the ELF/HEX/BIN file.
+ *
  *  \return true on success, false on failure (file not found, insufficient
  *          memory).
  */
@@ -326,6 +331,7 @@ bool filesection_loadall(const char *filename)
 {
   filesection_clearall();
 
+  assert(filename != NULL);
   FILE *fp = fopen(filename, "rb");
   if (fp == NULL)
     return false;
@@ -364,6 +370,20 @@ bool filesection_loadall(const char *filename)
 
 /** filesection_getdata() returns memory block information on the requested
  *  section.
+ *
+ *  \param index    Sequential index of the section.
+ *  \param address  [out] Set to the memory address where the section starts
+ *                  (the address on the target). This parameter may be `NULL`.
+ *  \param buffer   [out] Set to a pointer to the memory block of the section,
+ *                  as loaded on the workstation. This is a pointer to the file
+ *                  data; it is not a copy. This parameter may be `NULL`.
+ *  \param size     [out] Set to the size of the section. This parameter may be
+ *                  `NULL`.
+ *  \param type     [out] Set to the type of the section; one of the
+ *                  SECTIONTYPE_xxx constants. This parameter may be `NULL`.
+ *
+ *  \return `true` on success, `false` when `index` is out of range (section not
+ *          found).
  */
 bool filesection_getdata(unsigned index, unsigned long *address, unsigned char **buffer, unsigned long *size, int *type)
 {
@@ -428,16 +448,35 @@ static bool match(const char *driver, const char *pattern)
   return true;  /* name matches the pattern (within the pattern length) */
 }
 
+/** filesection_get_address() returns a pointer to a data range that will load
+ *  at the given address. The return value points into the loaded ELF/HEX/BIN
+ *  file.
+ *
+ *  \param address    The address (on the target).
+ *  \param size       The size of the memory block in bytes. The range may not
+ *                    cross a section boundary.
+ *
+ *  \return A pointer to the start of the data range, or `NULL` on failure.
+ */
+unsigned char *filesection_get_address(unsigned long address, size_t size)
+{
+  FILESECTION *sect;
+  for (sect = filesection_root.next; sect != NULL; sect = sect->next)
+    if (sect->address <= address && address + size <= sect->address + sect->size)
+      break;
+  if (sect == NULL)
+    return NULL;
+  return sect->buffer + (address - sect->address);
+}
+
 int filesection_patch_vecttable(const char *driver, unsigned int *checksum)
 {
   assert(checksum!=NULL);
   *checksum=0;
 
   /* find the section at memory address 0 (the vector table) */
-  FILESECTION *sect;
-  for (sect = filesection_root.next; sect != NULL && sect->address != 0; sect = sect->next)
-    {}
-  if (sect == NULL || sect->size < 8*sizeof(uint32_t))
+  unsigned char *data = filesection_get_address(0, 8*sizeof(uint32_t));
+  if (data == NULL)
     return FSERR_NO_VECTTABLE;
 
   int chksum_idx = 0;
@@ -458,7 +497,7 @@ int filesection_patch_vecttable(const char *driver, unsigned int *checksum)
   }
 
   uint32_t vect[8];
-  memcpy(vect, sect->buffer, sizeof vect);
+  memcpy(vect, data, sizeof vect);
 
   uint32_t sum = 0;
   for (int idx = 0; idx < 8; idx++) {
@@ -472,26 +511,15 @@ int filesection_patch_vecttable(const char *driver, unsigned int *checksum)
   if (sum == vect[chksum_idx])
     return FSERR_CHKSUMSET;
   vect[chksum_idx] = sum;
-  memcpy(sect->buffer, vect, sizeof vect);
+  memcpy(data, vect, sizeof vect);
   return FSERR_NONE;
 }
 
-
 #define CRP_ADDRESS 0x000002fc  /* hard-coded address for the CRP magic value */
-static uint32_t *get_crp_pos(void)
-{
-  FILESECTION *sect;
-  for (sect = filesection_root.next; sect != NULL; sect = sect->next)
-    if (sect->address <= CRP_ADDRESS && CRP_ADDRESS + 4 <= sect->address + sect->size)
-      break;
-  if (sect == NULL)
-    return NULL;
-  return (uint32_t*)(sect->buffer + (CRP_ADDRESS - sect->address));
-}
 
 int filesection_get_crp(void)
 {
-  uint32_t *magic_ptr = get_crp_pos();
+  uint32_t *magic_ptr = (uint32_t*)filesection_get_address(CRP_ADDRESS, 4);
   if (magic_ptr == NULL)
     return 0;
   switch (*magic_ptr) {
@@ -515,7 +543,7 @@ int filesection_get_crp(void)
  */
 bool filesection_set_crp(int crp)
 {
-  uint32_t *magic_ptr = get_crp_pos();
+  uint32_t *magic_ptr = (uint32_t*)filesection_get_address(CRP_ADDRESS, 4);
   if (magic_ptr == NULL)
     return false;
   uint32_t magic = 0;

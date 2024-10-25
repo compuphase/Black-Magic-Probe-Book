@@ -1,0 +1,363 @@
+# -------------------------------------------------------------
+#
+#       Makefile for Black Magic Probe utilities
+#       o  uses Opus make & mkmf utility
+#       o  uses Watcom C/C++ (32-bit)
+#
+#       For release version, use NDEBUG=
+#       Do "make depend" to update dependencies in this makefile
+#
+# -------------------------------------------------------------
+
+%include makefile.cfg
+
+
+# -------------------------------------------------------------
+#               Defines
+# -------------------------------------------------------------
+
+%if %defined(NDEBUG)
+    # retail version
+    C_DEBUG=-of+s -dNDEBUG
+    L_DEBUG=d all op symf
+    R_DEBUG=-dNDEBUG
+    FORTYFY_OBJ=
+%else
+    # development version
+    C_DEBUG=-d2 -hd -dFORTIFY
+    L_DEBUG=d dwarf
+    R_DEBUG=
+    FORTYFY_OBJ=fortify.obj
+%endif
+
+# -------------------------------------------------------------
+#               Autosearch paths macro's
+# -------------------------------------------------------------
+
+CCDIR     = $(CDIR)\binnt
+RCDIR     = $(CDIR)\binnt
+LIBDIR    = $(CDIR)\lib
+INCLUDE   = $(PUBLIC)
+ASSERT    = $(PUBLIC)\assert
+ALLOC     = $(PUBLIC)\alloc
+
+OBJDIR    = .\obj
+.PATH.obj = $(OBJDIR)
+.PATH.res = $(OBJDIR)
+.PATH.map = $(OBJDIR)
+
+.PATH.exe = ..\bin
+
+
+# -------------------------------------------------------------
+#               Compilers and their options
+# -------------------------------------------------------------
+
+####### C compiler
+CL        = $(CCDIR)\wcl386
+CC        = $(CCDIR)\wcc386
+CFLAGS    = -wx -e25 -bm $(C_DEBUG) -dNOC_FILE_DIALOG_WIN32 -za99
+
+####### Resource compiler
+RC        = $(RCDIR)\wrc
+RCFLAGS   = -bt=nt -dWIN32 -i=$(INCLUDE) $(R_DEBUG)
+
+####### Linker
+LNK       = $(CCDIR)\wlink
+LFLAGS_W  = $(L_DEBUG) SYS win95 op maxe=25 op q
+LFLAGS_C  = $(L_DEBUG) SYS nt op maxe=25 op q
+
+# -------------------------------------------------------------
+#               Inference rules
+# -------------------------------------------------------------
+
+%.obj : %.c
+    $(CC) -I$(INCLUDE) $(CFLAGS) -fo=$(.TARGET) $(.SOURCE)
+
+%.res : %.rc
+    $(RC) -r $(RCFLAGS) -fo=$(.TARGET) $(.SOURCE)
+
+%.h : %.md
+    $(QGP) -c $(.SOURCE) $(.TARGET)
+
+# -------------------------------------------------------------
+#               Project
+# -------------------------------------------------------------
+
+OBJLIST_BMDEBUG = bmdebug.obj armdisasm.obj bmcommon.obj bmp-scan.obj bmp-script.obj \
+                  decodectf.obj demangle.obj dwarf.obj elf.obj guidriver.obj \
+                  mcu-info.obj memdump.obj minIni.obj nuklear.obj \
+                  nuklear_mousepointer.obj nuklear_splitter.obj nuklear_style.obj \
+                  nuklear_tooltip.obj osdialog.obj parsetsdl.obj pathsearch.obj \
+                  rs232.obj serialmon.obj specialfolder.obj strmatch.obj \
+                  svd-support.obj swotrace.obj tcpip.obj xmltractor.obj \
+                  c11threads_win32.obj nuklear_gdip.obj osdialog_win.obj usb-support.obj
+
+OBJLIST_BMFLASH = bmflash.obj bmcommon.obj bmp-scan.obj bmp-script.obj bmp-support.obj \
+                  cksum.obj crc32.obj elf.obj fileloader.obj gdb-rsp.obj guidriver.obj \
+                  ident.obj mcu-info.obj minIni.obj nuklear.obj nuklear_guide.obj \
+                  nuklear_mousepointer.obj nuklear_style.obj nuklear_tooltip.obj \
+                  osdialog.obj qglib.obj rs232.obj specialfolder.obj tcl.obj tcpip.obj \
+                  xmltractor.obj \
+                  c11threads_win32.obj nuklear_gdip.obj osdialog_win.obj
+
+OBJLIST_BMPROFILE = bmprofile.obj bmcommon.obj bmp-scan.obj bmp-script.obj \
+                    bmp-support.obj crc32.obj decodectf.obj demangle.obj dwarf.obj \
+                    elf.obj fileloader.obj gdb-rsp.obj guidriver.obj mcu-info.obj \
+                    minIni.obj nuklear.obj nuklear_guide.obj nuklear_mousepointer.obj \
+                    nuklear_splitter.obj nuklear_style.obj nuklear_tooltip.obj \
+                    osdialog.obj parsetsdl.obj qglib.obj rs232.obj specialfolder.obj \
+                    strmatch.obj swotrace.obj tcpip.obj xmltractor.obj \
+                    c11threads_win32.obj nuklear_gdip.obj osdialog_win.obj usb-support.obj
+
+OBJLIST_BMSERIAL = bmserial.obj guidriver.obj minIni.obj nuklear.obj nuklear_guide.obj \
+                   nuklear_mousepointer.obj nuklear_splitter.obj nuklear_style.obj \
+                   nuklear_tooltip.obj osdialog.obj qglib.obj rs232.obj specialfolder.obj \
+                   tcl.obj \
+                   nuklear_gdip.obj osdialog_win.obj
+
+OBJLIST_BMTRACE = bmtrace.obj bmcommon.obj bmp-scan.obj bmp-script.obj bmp-support.obj \
+                  crc32.obj decodectf.obj demangle.obj dwarf.obj elf.obj fileloader.obj \
+                  gdb-rsp.obj guidriver.obj mcu-info.obj minIni.obj nuklear.obj \
+                  nuklear_guide.obj nuklear_mousepointer.obj nuklear_msgbox.obj \
+                  nuklear_splitter.obj nuklear_style.obj nuklear_tooltip.obj \
+                  osdialog.obj parsetsdl.obj qglib.obj rs232.obj specialfolder.obj \
+                  strmatch.obj swotrace.obj tcpip.obj xmltractor.obj \
+                  c11threads_win32.obj nuklear_gdip.obj osdialog_win.obj usb-support.obj
+
+OBJLIST_BMSCAN = bmscan.obj bmp-scan.obj bmp-script.obj bmp-support.obj crc32.obj \
+                 elf.obj fileloader.obj gdb-rsp.obj rs232.obj specialfolder.obj \
+                 tcpip.obj xmltractor.obj \
+                 c11threads_win32.obj
+
+OBJLIST_CALLTREE = calltree.obj
+
+OBJLIST_POSTLINK = elf-postlink.obj elf.obj
+
+OBJLIST_TRACEGEN = tracegen.obj parsetsdl.obj
+
+
+project : bmdebug.exe bmflash.exe bmprofile.exe bmscan.exe bmserial.exe \
+          bmtrace.exe calltree.exe elf-postlink.exe tracegen.exe
+
+depend :
+    mkmf -c -dS -s -f makefile.dep $(OBJLIST_BMDEBUG) $(OBJLIST_BMFLASH) \
+         $(OBJLIST_BMPROFILE) $(OBJLIST_BMSCAN) $(OBJLIST_BMSERIAL) \
+         $(OBJLIST_BMTRACE) $(OBJLIST_CALLTREE) $(OBJLIST_POSTLINK) \
+         $(OBJLIST_TRACEGEN)
+
+
+##### C files #####
+
+armdisasm.obj : armdisasm.c
+
+bmcommon.obj : bmcommon.c
+
+bmdebug.obj : bmdebug.c
+
+bmflash.obj : bmflash.c
+
+bmprofile.obj : bmprofile.c
+
+bmscan.obj : bmscan.c
+
+bmserial.obj : bmserial.c
+
+bmtrace.obj : bmtrace.c
+
+bmp-scan.obj : bmp-scan.c
+
+bmp-script.obj : bmp-script.c
+
+bmp-support.obj : bmp-support.c
+
+c11threads_win32.obj : c11threads_win32.c
+
+calltree.obj : calltree.c
+
+cksum.obj : cksum.c
+
+crc32.obj : crc32.c
+
+decodectf.obj : decodectf.c
+
+demangle.obj : demangle.c
+
+dwarf.obj : dwarf.c
+
+elf.obj : elf.c
+
+elf-postlink.obj : elf-postlink.c
+
+fileloader.obj : fileloader.c
+
+gdb-rsp.obj : gdb-rsp.c
+
+guidriver.obj : guidriver.c
+
+ident.obj : ident.c
+
+mcu-info.obj : mcu-info.c
+
+memdump.obj : memdump.c
+
+minIni.obj : minIni.c
+
+osdialog.obj : osdialog.c
+
+osdialog_win.obj : osdialog_win.c
+
+nuklear_guide.obj : nuklear_guide.c
+
+nuklear_mousepointer.obj : nuklear_mousepointer.c
+
+nuklear_msgbox.obj : nuklear_msgbox.c
+
+nuklear_splitter.obj : nuklear_splitter.c
+
+nuklear_style.obj : nuklear_style.c
+
+nuklear_tooltip.obj : nuklear_tooltip.c
+
+parsetsdl.obj : parsetsdl.c
+
+pathsearch.obj : pathsearch.c
+
+qglib.obj : qglib.c
+
+rs232.obj : rs232.c
+
+serialmon.obj : serialmon.c
+
+specialfolder.obj : specialfolder.c
+
+strmatch.obj : strmatch.c
+
+svd-support.obj : svd-support.c
+
+swotrace.obj : swotrace.c
+
+tcl.obj : tcl.c
+
+tcpip.obj : tcpip.c
+
+tracegen.obj : tracegen.c
+
+usb-support.obj : usb-support.c
+
+xmltractor.obj : xmltractor.c
+
+nuklear.obj : nuklear.c
+
+nuklear_gdip.obj : nuklear_gdip.c
+
+fortify.obj : $(ALLOC)\fortify.c
+    $(CC) -I$(INCLUDE) $(CFLAGS) -fo=$(.TARGET) $(.SOURCE)
+
+##### build stamp #####
+
+svnrev.h : $(OBJLIST_BMDEBUG,%.obj=%.c) $(OBJLIST_BMFLASH,%.obj=%.c) \
+           $(OBJLIST_BMPROFILE,%.obj=%.c) $(OBJLIST_BMSCAN,%.obj=%.c) \
+           $(OBJLIST_BMSERIAL,%.obj=%.c) $(OBJLIST_BMTRACE,%.obj=%.c) \
+           $(OBJLIST_CALLTREE,%.obj=%.c) $(OBJLIST_POSTLINK,%.obj=%.c) $(OBJLIST_TRACEGEN,%.obj=%.c)
+    $(SVNREV)\svnrev -f1.5.\# -i $(.NEWSOURCES)
+
+
+##### Resource files #####
+
+bmdebug.res : bmdebug.rc
+
+bmflash.res : bmflash.rc
+
+bmprofile.res : bmprofile.rc
+
+bmtrace.res : bmtrace.rc
+
+bmflash_help.h : bmflash_help.md
+
+bmprofile_help.h : bmprofile_help.md
+
+bmserial_help.h : bmserial_help.md
+
+bmtrace_help.h : bmtrace_help.md
+
+##### Executables #####
+
+bmdebug.exe : $(OBJLIST_BMDEBUG) $(FORTYFY_OBJ) bmdebug.res
+    $(LNK) $(LFLAGS_W) @<<
+    NAME $(.TARGET)
+    FIL $(.SOURCES,M"*.obj",W\,)
+    LIBR winmm.lib,wsock32.lib,shell32.lib,shlwapi.lib,setupapi.lib,lib/gdiplus-w.lib
+    op resource=$(.SOURCES,M"*.res")
+    op m =$(.PATH.map)\$(.TARGET,B)
+    <<
+
+bmflash.exe : $(OBJLIST_BMFLASH) $(FORTYFY_OBJ) bmflash.res
+    $(LNK) $(LFLAGS_W) @<<
+    NAME $(.TARGET)
+    FIL $(.SOURCES,M"*.obj",W\,)
+    LIBR winmm.lib,wsock32.lib,shell32.lib,shlwapi.lib,lib/gdiplus-w.lib
+    op resource=$(.SOURCES,M"*.res")
+    op m =$(.PATH.map)\$(.TARGET,B)
+    <<
+
+bmprofile.exe : $(OBJLIST_BMPROFILE) $(FORTYFY_OBJ) bmprofile.res
+    $(LNK) $(LFLAGS_W) @<<
+    NAME $(.TARGET)
+    FIL $(.SOURCES,M"*.obj",W\,)
+    LIBR winmm.lib,wsock32.lib,shell32.lib,shlwapi.lib,setupapi.lib,lib/gdiplus-w.lib
+    op resource=$(.SOURCES,M"*.res")
+    op m =$(.PATH.map)\$(.TARGET,B)
+    <<
+
+bmserial.exe : $(OBJLIST_BMSERIAL) $(FORTYFY_OBJ) bmserial.res
+    $(LNK) $(LFLAGS_W) @<<
+    NAME $(.TARGET)
+    FIL $(.SOURCES,M"*.obj",W\,)
+    LIBR winmm.lib,shell32.lib,shlwapi.lib,lib/gdiplus-w.lib
+    op resource=$(.SOURCES,M"*.res")
+    op m =$(.PATH.map)\$(.TARGET,B)
+    <<
+
+bmtrace.exe : $(OBJLIST_BMTRACE) $(FORTYFY_OBJ) bmtrace.res
+    $(LNK) $(LFLAGS_W) @<<
+    NAME $(.TARGET)
+    FIL $(.SOURCES,M"*.obj",W\,)
+    LIBR winmm.lib,wsock32.lib,shell32.lib,shlwapi.lib,setupapi.lib,lib/gdiplus-w.lib
+    op resource=$(.SOURCES,M"*.res")
+    op m =$(.PATH.map)\$(.TARGET,B)
+    <<
+
+bmscan.exe : $(OBJLIST_BMSCAN) $(FORTYFY_OBJ)
+    $(LNK) $(LFLAGS_C) @<<
+    NAME $(.TARGET)
+    FIL $(.SOURCES,M"*.obj",W\,)
+    LIBR wsock32.lib
+    op m =$(.PATH.map)\$(.TARGET,B)
+    <<
+
+calltree.exe : $(OBJLIST_CALLTREE) $(FORTYFY_OBJ)
+    $(LNK) $(LFLAGS_C) @<<
+    NAME $(.TARGET)
+    FIL $(.SOURCES,M"*.obj",W\,)
+    op m =$(.PATH.map)\$(.TARGET,B)
+    <<
+
+elf-postlink.exe : $(OBJLIST_POSTLINK) $(FORTYFY_OBJ)
+    $(LNK) $(LFLAGS_C) @<<
+    NAME $(.TARGET)
+    FIL $(.SOURCES,M"*.obj",W\,)
+    op m =$(.PATH.map)\$(.TARGET,B)
+    <<
+
+tracegen.exe : $(OBJLIST_TRACEGEN) $(FORTYFY_OBJ)
+    $(LNK) $(LFLAGS_C) @<<
+    NAME $(.TARGET)
+    FIL $(.SOURCES,M"*.obj",W\,)
+    op m =$(.PATH.map)\$(.TARGET,B)
+    <<
+
+# put generated dependencies at the end, otherwise it does not blend well with
+# inference rules, if an item also has an explicit rule.
+%include makefile.dep
+
